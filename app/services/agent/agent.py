@@ -13,7 +13,6 @@ from langchain_core.language_models.llms import BaseLanguageModel
 from .child import create_child_agent
 from .chat import create_chat_agent
 from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
-from ...types import RequestType
 
 RANCHER_AGENT_PROMPT = """You are a helpful and expert AI assistant integrated directly into the Rancher UI. Your primary goal is to assist users in managing their Kubernetes clusters and resources through the Rancher interface. You are a trusted partner, providing clear, confident, and safe guidance.
 
@@ -70,31 +69,6 @@ The output should always be provided in Markdown format.
 Examples: <suggestion>How do I scale a deployment?</suggestion><suggestion>Check the resource usage for this cluster</suggestion><suggestion>Show me the logs for the failing pod</suggestion>
 """
 
-GENERATE_CHAT_NAME_PROMPT = """Each message is a list of recent agent replies to the user. Your task is to generate a concise summary of these replies, focusing on key points and relevant information. Your response will be used to assign a title to a Chat.
-
-## CORE DIRECTIVES
-
-### Summary Focus
-* Focus on user requests FIRST. The summary should reflect what the user asked for.
-* The summary should capture the essence of requests, not what the agent replied.
-  For example:
-    * The user asked for "How is the weather in Florence?"
-        * Good summary: "Weather in Florence"
-        * Bad summary: "Can't answer weather questions"
-
-### Conciseness
-* The summary MUST BE MAX 40 characters.
-* Summarize the content in a brief manner, highlighting only the most important aspects.
-* Avoid unnecessary details or lengthy explanations.
-
-### Consistency
-* DO NOT include greetings or pleasantries in the summary.
-* DO NOT include tags like <message>, </message> or any other keywords between < and >.
-* DO NOT include question marks or suggestions in the summary.
-* DO NOT include periods at the end of the summary.
-* DO NOT include any special characters like '-', '_', or other symbols that humans usually use.
-"""
-
 @dataclass
 class AgentContext:
     agent: CompiledStateGraph
@@ -102,17 +76,17 @@ class AgentContext:
     client_ctx: any
 
 @asynccontextmanager
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket, request_type: RequestType):
+async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     """
     TODO multiagent support
 
     Context manager that creates and manages agent lifecycle.
     """
-    async with _create_rancher_core_agent(llm=llm, websocket=websocket, request_type=request_type) as agent_ctx:
+    async with _create_rancher_core_agent(llm=llm, websocket=websocket) as agent_ctx:
         yield agent_ctx
 
 @asynccontextmanager
-async def _create_rancher_core_agent(llm: BaseLanguageModel, websocket: WebSocket, request_type: RequestType):
+async def _create_rancher_core_agent(llm: BaseLanguageModel, websocket: WebSocket):
     """
     Creates a Rancher core agent with MCP client connection.
     
@@ -162,7 +136,7 @@ async def _create_rancher_core_agent(llm: BaseLanguageModel, websocket: WebSocke
             tools = [fleet_documentation_retriever, rancher_documentation_retriever] + tools
             
         checkpointer = websocket.app.memory_manager.get_checkpointer()
-        agent = create_child_agent(llm, tools, _get_system_prompt(request_type), checkpointer)
+        agent = create_child_agent(llm, tools, _get_system_prompt(), checkpointer)
 
         yield AgentContext(
             agent=agent,
@@ -187,7 +161,7 @@ def create_rest_api_agent(request: Request):
     """
     return create_chat_agent(request.app.memory_manager.get_checkpointer())
 
-def _get_system_prompt(type: RequestType) -> str:
+def _get_system_prompt() -> str:
     """
     Retrieves the system prompt for the AI agent.
 
@@ -198,12 +172,8 @@ def _get_system_prompt(type: RequestType) -> str:
     Returns:
         str: The system prompt to be used by the AI agent.
     """
-    match type:
-        case RequestType.GENERATE_CHAT_NAME_PROMPT:
-            return GENERATE_CHAT_NAME_PROMPT
-        case RequestType.MESSAGE:
-            prompt = os.environ.get("SYSTEM_PROMPT")
-            if prompt:
-                return prompt
-            
-            return RANCHER_AGENT_PROMPT
+    prompt = os.environ.get("SYSTEM_PROMPT")
+    if prompt:
+        return prompt
+    
+    return RANCHER_AGENT_PROMPT

@@ -14,7 +14,6 @@ from langchain_core.language_models.llms import BaseLanguageModel
 from ..services.auth import get_user_id
 from ..dependencies import get_llm
 from ..services.agent.agent import create_agent
-from ..types import RequestType
 
 router = APIRouter()
 
@@ -57,7 +56,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     
     await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}"}}</chat-metadata>')
 
-    async with create_agent(llm=llm, websocket=websocket, request_type=RequestType.MESSAGE) as ctx:
+    async with create_agent(llm=llm, websocket=websocket) as ctx:
         agent = ctx.agent
 
         base_config = {

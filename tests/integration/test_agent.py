@@ -225,7 +225,7 @@ def test_websocket_tool_call():
     
     try:
         messages = []
-        with client.websocket_connect("/agent/ws") as websocket:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
             for prompt in prompts:
                 websocket.send_text(prompt)
                 msg = ""

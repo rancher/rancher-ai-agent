@@ -5,11 +5,13 @@ import httpx
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
+from .chat import create_chat_agent
+
 from .builtin_agents import BUILTIN_AGENTS, RANCHER_AGENT, AuthenticationType
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
-from fastapi import  WebSocket
+from fastapi import  Request, WebSocket
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from langgraph.checkpoint.memory import InMemorySaver
@@ -81,6 +83,22 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
             agent = create_child_agent(llm, tools, RANCHER_AGENT.system_prompt, InMemorySaver(), RANCHER_AGENT)
             
             yield agent
+
+def create_rest_api_agent(request: Request):
+    """
+    Creates a chat agent for REST API endpoints.
+    
+    This is a minimal agent creation for REST API use cases where
+    only reading chat state is needed (no LLM, tools, or MCP).
+    
+    Args:
+        checkpointer: The checkpointer for reading agent state.
+    
+    Returns:
+        CompiledStateGraph: The compiled agent ready to read state.
+    """
+    return create_chat_agent(request.app.memory_manager.get_checkpointer())
+
 
 async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:
     if agent_config.authentication == AuthenticationType.RANCHER:

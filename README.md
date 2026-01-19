@@ -92,7 +92,7 @@ graph TD
 First, add the Rancher AI Agent Helm repository to your cluster.
 
 ```bash
-helm repo add rancher-ai https://rancher-sandbox.github.io/rancher-ai-agent
+helm repo add rancher-ai https://rancher.github.io/rancher-ai-agent
 ```
 
 2. Update Your Helm Repositories
@@ -120,6 +120,14 @@ helm install rancher-ai-agent rancher-ai/agent \
 
 ## Accessing the UI
 Once the agent is installed, you need to install the UI extension
+
+## Chat History
+The AI Assistant maintains persistent chat history with REST API endpoints for accessing and managing conversations:
+- `GET /api/chats` - List all chat sessions
+- `GET /api/chats/{id}/messages` - Retrieve all messages for a specific chat session
+- `DELETE /api/chats/{id}` - Delete a specific chat session
+
+See the [OpenAPI spec](openapi.yaml) for full API details.
 
 ## RBAC
 
@@ -153,6 +161,7 @@ namespacedRules:
       verbs:
         - get
 ```
+
 
 
 

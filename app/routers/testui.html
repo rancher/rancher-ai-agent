@@ -20,7 +20,7 @@
         </form>
         <script>
             // Establish a WebSocket connection
-            const ws = new WebSocket("ws://localhost:8000/agent/ws");
+            const ws = new WebSocket("ws://localhost:8000/v1/ws/messages");
             ws.onopen = function(event) {
                 console.log("WebSocket connection established.");
                 const li = document.createElement('li');

@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse
 
 router = APIRouter()
 
-@router.get("/agent")
+@router.get("/ui")
 async def get(request: Request):
     """ONLY FOR TESTING. This serves the test HTML page for the chat client."""
     with open("app/routers/testui.html") as f:

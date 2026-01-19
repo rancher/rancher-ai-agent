@@ -203,7 +203,7 @@ def test_websocket_connection_and_agent_interaction(prompts: list[str], fake_llm
     
     try:
         messages = []
-        with client.websocket_connect("/agent/ws") as websocket:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
             for prompt in prompts:
                 websocket.send_text(prompt)
                 msg = ""

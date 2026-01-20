@@ -1,7 +1,6 @@
 import os
 import logging
 import json
-import httpx
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
@@ -16,9 +15,6 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_mcp_adapters.tools import load_mcp_tools
-from langgraph.graph.state import CompiledStateGraph
-from langchain.agents import create_agent
-from langchain.tools import tool
 from langchain_core.language_models.llms import BaseLanguageModel
 
 @dataclass
@@ -61,6 +57,24 @@ def parse_agent_configs(json_str: str) -> list[AgentConfig]:
 
 @asynccontextmanager
 async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
+    """
+    Create and configure an agent based on the available builtin agents.
+    
+    This factory function determines whether to create a parent agent with multiple
+    child agents or a single child agent, depending on the BUILTIN_AGENTS configuration.
+    
+    Args:
+        llm: The language model to use for agent reasoning and responses.
+        websocket: WebSocket connection used to extract authentication cookies and URL info.
+    
+    Yields:
+        CompiledStateGraph: Either a parent agent managing multiple child agents,
+            or a single child agent for the Rancher Core Agent.
+    
+    Note:
+        This is an async context manager that properly manages the lifecycle of
+        MCP (Model Context Protocol) connections and tools.
+    """
     if len(BUILTIN_AGENTS) > 0:
         logging.info("Multi-agent setup detected, creating parent agent.")        
         async with AsyncExitStack() as stack:
@@ -100,7 +114,32 @@ def create_rest_api_agent(request: Request):
     return create_chat_agent(request.app.memory_manager.get_checkpointer())
 
 
-async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:
+async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:    
+    """
+    Create and configure MCP (Model Context Protocol) tools for an agent.
+    
+    This function establishes a connection to an MCP server and loads the available
+    tools. It handles authentication based on the agent configuration, supporting
+    both Rancher-specific authentication and generic configurations.
+    
+    Args:
+        stack: AsyncExitStack for managing async context resources and cleanup.
+        websocket: WebSocket connection used to extract cookies and URL information
+            for Rancher authentication.
+        agent_config: Configuration object containing agent details including
+            authentication type, MCP URL, and agent name.
+    
+    Returns:
+        list: A list of tools loaded from the MCP server. If RAG is enabled for
+            the Rancher Core Agent, documentation retriever tools are prepended.
+            Returns an empty list if connection to MCP server fails.
+    
+    Note:
+        - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
+        - Respects INSECURE_SKIP_TLS environment variable for HTTP/HTTPS selection
+        - Adds RAG documentation retrievers if ENABLE_RAG is true for Rancher Core Agent
+    """    
+    
     if agent_config.authentication == AuthenticationType.RANCHER:
         cookies = websocket.cookies
         rancher_url = os.environ.get("RANCHER_URL","https://"+websocket.url.hostname)

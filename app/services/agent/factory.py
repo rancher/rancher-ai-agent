@@ -5,7 +5,7 @@ import json
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
-from .builtin_agents import BUILTIN_AGENTS, RANCHER_AGENT, AuthenticationType
+from .loader import AuthenticationType, load_agent_configs
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
@@ -59,7 +59,8 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     Create and configure an agent based on the available builtin agents.
     
     This factory function determines whether to create a parent agent with multiple
-    child agents or a single child agent, depending on the BUILTIN_AGENTS configuration.
+    child agents or a single child agent, depending on the agent configurations loaded
+    from CRDs or fallback to built-in agents.
     
     Args:
         llm: The language model to use for agent reasoning and responses.
@@ -74,12 +75,25 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         MCP (Model Context Protocol) connections and tools.
     """
     checkpointer = websocket.app.memory_manager.get_checkpointer()
+    
+    # Load agent configs from CRDs (or create defaults if none exist)
+    builtin_agents = load_agent_configs()
+    
+    if len(builtin_agents) == 0:
+        logging.error("Failed to load any agent configurations from CRDs")
+        raise RuntimeError(
+            "No agent configurations available. "
+            "Please ensure AIAgentConfig CRDs are properly installed in the cattle-ai-agent-system namespace "
+            "or check the Kubernetes API server connection."
+        )
 
-    if len(BUILTIN_AGENTS) > 0:
-        logging.info("Multi-agent setup detected, creating parent agent.")        
+    logging.info(f"Loaded {len(builtin_agents)} agent configuration(s)")
+    
+    if len(builtin_agents) > 1:
+        logging.info(f"Multi-agent setup detected, creating parent agent with {len(builtin_agents)} agents.")        
         async with AsyncExitStack() as stack:
             child_agents = []
-            for agent_cfg in BUILTIN_AGENTS:
+            for agent_cfg in builtin_agents:
                 tools = await _create_mcp_tools(stack, websocket, agent_cfg)
                 child_agents.append(ChildAgent(
                     name=agent_cfg.name,
@@ -90,11 +104,12 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
 
             yield parent_agent
     else:
-        logging.info("Single agent" )
+        logging.info("Single agent configuration detected")
+        agent_cfg = builtin_agents[0]
         
         async with AsyncExitStack() as stack:
-            tools = await _create_mcp_tools(stack, websocket, RANCHER_AGENT)
-            agent = create_child_agent(llm, tools, RANCHER_AGENT.system_prompt, checkpointer, RANCHER_AGENT)
+            tools = await _create_mcp_tools(stack, websocket, agent_cfg)
+            agent = create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
             
             yield agent
 

@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-from .builtin_agents import AgentConfig
+from .loader import AgentConfig
 
 from .base import BaseAgentBuilder, AgentState
 

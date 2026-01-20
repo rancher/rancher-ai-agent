@@ -13,7 +13,7 @@ from langgraph.graph.state import Checkpointer
 from langchain_core.language_models.chat_models import BaseChatModel
 from ollama import ResponseError
 from langchain_core.callbacks.manager import dispatch_custom_event
-from .builtin_agents import AgentConfig, HumanValidationTool
+from .loader import AgentConfig, HumanValidationTool
 from .types import AgentState
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"

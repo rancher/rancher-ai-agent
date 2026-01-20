@@ -1,11 +1,11 @@
 import os
 import logging
 import json
+
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
 from .chat import create_chat_agent
-
 from .builtin_agents import BUILTIN_AGENTS, RANCHER_AGENT, AuthenticationType
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
@@ -13,7 +13,6 @@ from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
 from fastapi import  Request, WebSocket
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
-from langgraph.checkpoint.memory import InMemorySaver
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.language_models.llms import BaseLanguageModel
 
@@ -75,6 +74,8 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         This is an async context manager that properly manages the lifecycle of
         MCP (Model Context Protocol) connections and tools.
     """
+    checkpointer = websocket.app.memory_manager.get_checkpointer()
+
     if len(BUILTIN_AGENTS) > 0:
         logging.info("Multi-agent setup detected, creating parent agent.")        
         async with AsyncExitStack() as stack:
@@ -84,9 +85,9 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                 child_agents.append(ChildAgent(
                     name=agent_cfg.name,
                     description=agent_cfg.description,
-                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, InMemorySaver(), agent_cfg)
+                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
                 ))
-            parent_agent = create_parent_agent(llm, child_agents, InMemorySaver())
+            parent_agent = create_parent_agent(llm, child_agents, checkpointer)
 
             yield parent_agent
     else:
@@ -94,9 +95,10 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         
         async with AsyncExitStack() as stack:
             tools = await _create_mcp_tools(stack, websocket, RANCHER_AGENT)
-            agent = create_child_agent(llm, tools, RANCHER_AGENT.system_prompt, InMemorySaver(), RANCHER_AGENT)
+            agent = create_child_agent(llm, tools, RANCHER_AGENT.system_prompt, checkpointer, RANCHER_AGENT)
             
             yield agent
+
 
 def create_rest_api_agent(request: Request):
     """
@@ -112,7 +114,6 @@ def create_rest_api_agent(request: Request):
         CompiledStateGraph: The compiled agent ready to read state.
     """
     return create_chat_agent(request.app.memory_manager.get_checkpointer())
-
 
 async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:    
     """

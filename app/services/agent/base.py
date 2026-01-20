@@ -6,9 +6,6 @@ import json
 import logging
 import langgraph.types
 
-from typing import Annotated, Sequence, TypedDict
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
 from langchain_core.messages import ToolMessage, HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException
@@ -17,14 +14,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from ollama import ResponseError
 from langchain_core.callbacks.manager import dispatch_custom_event
 from .builtin_agents import AgentConfig, HumanValidationTool
+from .types import AgentState
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
-
-class AgentState(TypedDict):
-    """The state of the agent."""
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    summary: str
-
 
 class BaseAgentBuilder:
     """Base class for agent builders with shared logic."""

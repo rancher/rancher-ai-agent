@@ -116,8 +116,9 @@ RANCHER_AGENT = AgentConfig(
     ]
 )
 
-BUILTIN_AGENTS = [WEATHER_AGENT, MATH_AGENT, RANCHER_AGENT]
+#BUILTIN_AGENTS = [WEATHER_AGENT, MATH_AGENT, RANCHER_AGENT]
 
+BUILTIN_AGENTS = []
 def parse_agents(json_str: str) -> list[AgentConfig]:
     """Parse JSON string into a list of AgentConfig objects."""
     data = json.loads(json_str)

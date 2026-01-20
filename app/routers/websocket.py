@@ -133,7 +133,7 @@ async def _call_agent(
     
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
-                #TODO! await _store_interrupt(agent, config, interrupt_value)
+                #await _store_interrupt(agent, config, interrupt_value)
                 await websocket.send_text(interrupt_value)
 
 async def _store_mcp_response(agent: CompiledStateGraph, config: dict, mcp_data: any) -> None:
@@ -179,7 +179,8 @@ async def _store_interrupt(agent: CompiledStateGraph, config: dict, interrupt_va
     
     await agent.aupdate_state(
         config,
-        {"agent_metadata": metadata}
+        {"agent_metadata": metadata},
+        as_node="tools"
     )
 
 def _extract_streaming_text(stream: dict) -> str | None:

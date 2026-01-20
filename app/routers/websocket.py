@@ -12,6 +12,7 @@ from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id
@@ -33,6 +34,7 @@ async def get_user_id_from_websocket(websocket: WebSocket) -> str:
 class WebSocketRequest:
     """Represents a parsed WebSocket request from the client."""
     prompt: str
+    user_input: str
     context: dict
     tags: list[str] = None
     agent: str = ""
@@ -77,7 +79,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
                 ws_request = _parse_websocket_request(request)
                 config = _build_config(base_config, request_id, ws_request)
-                input_data = _build_input_data(agent, config, ws_request)
+                input_data = await _build_input_data(agent, config, ws_request)
 
                 await _call_agent(
                     agent=agent,
@@ -132,30 +134,7 @@ async def _call_agent(
     
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
-                #await _store_interrupt(agent, config, interrupt_value)
                 await websocket.send_text(interrupt_value)
-
-async def _store_interrupt(agent: CompiledStateGraph, config: dict, interrupt_value: str) -> None:
-    """
-    Stores an interrupt value in the agent's metadata.
-    
-    Retrieves the current agent state, sets the last_interrupt field,
-    and updates the state.
-    
-    Args:
-        agent: The compiled LangGraph agent.
-        config: The run configuration.
-        interrupt_value: The interrupt value to store.
-    """
-    current_state = await agent.aget_state(config)
-    metadata = current_state.values.get("agent_metadata", {})
-    metadata["last_interrupt"] = interrupt_value
-    
-    await agent.aupdate_state(
-        config,
-        {"agent_metadata": metadata},
-        as_node="tools"
-    )
 
 def _extract_streaming_text(stream: dict) -> str | None:
     """
@@ -255,10 +234,11 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
     """
     try:
         json_request = json.loads(request)
-        prompt = json_request.get("prompt", "")
+        user_input = json_request.get("prompt", "")
         context = json_request.get("context", {})
         
         # Enrich prompt with context if present
+        prompt = user_input
         if context:
             context_parts = [f"{key}:{value}" for key, value in context.items()]
             context_suffix = (
@@ -271,6 +251,7 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
         
         return WebSocketRequest(
             prompt=prompt,
+            user_input=user_input,
             context=context,
             tags=json_request.get("tags", []),
             agent=json_request.get("agent", "")
@@ -301,6 +282,11 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
     }
 
     config["configurable"]["request_id"] = request_id
+    config["configurable"]["request_metadata"] = {
+        "user_input": ws_request.user_input,
+        "context": ws_request.context,
+        "tags": ws_request.tags
+    }
 
     if ws_request.agent:
         config["configurable"]["agent"] = ws_request.agent
@@ -314,7 +300,7 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
     
     return config
 
-def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:
+async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:
     """
     Builds the input data for the agent, handling interrupt resumption.
     
@@ -329,19 +315,21 @@ def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSo
     Returns:
         Either a Command to resume an interrupt, or a messages dict for a new turn.
     """
-    state = agent.get_state(config=config)
+    state = await agent.aget_state(config=config)
     
     if state.interrupts:
         return Command(resume=ws_request.prompt)
-    
-    input_messages = [{"role": "user", "content": ws_request.prompt}]
+
+    input_messages = [
+        HumanMessage(
+            content=ws_request.prompt,
+            additional_kwargs={
+                "request_id": config["configurable"]["request_id"],
+                "request_metadata": config["configurable"]["request_metadata"]
+            }
+        )
+    ]
 
     return {
         "messages": input_messages,
-        "agent_metadata": {
-            "prompt": ws_request.prompt,
-            "context": ws_request.context,
-            "tags": ws_request.tags,
-            "mcp_responses": [],
-        },
     }

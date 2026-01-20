@@ -1,4 +1,4 @@
-"""Built-in agent configurations."""
+"""THIS WILL BE REPLACED by a CRD!! Built-in agent configurations."""
 
 import json
 from enum import Enum

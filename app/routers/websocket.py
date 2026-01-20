@@ -128,38 +128,12 @@ async def _call_agent(
                 await websocket.send_text(text)
         
         if stream["event"] == "on_custom_event":
-            await _store_mcp_response(agent, config, stream["data"])
             await websocket.send_text(stream["data"])
     
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 #await _store_interrupt(agent, config, interrupt_value)
                 await websocket.send_text(interrupt_value)
-
-async def _store_mcp_response(agent: CompiledStateGraph, config: dict, mcp_data: any) -> None:
-    """
-    Stores MCP response data in the agent's metadata.
-    
-    Retrieves the current agent state, appends the MCP response to the
-    mcp_responses list, and updates the state.
-    
-    Args:
-        agent: The compiled LangGraph agent.
-        config: The run configuration.
-        mcp_data: The MCP response data to store.
-    """
-    current_state = await agent.aget_state(config)
-    metadata = current_state.values.get("agent_metadata", {})
-    mcp_responses = metadata.get("mcp_responses", [])
-    if mcp_responses is None:
-        mcp_responses = []
-    mcp_responses.append(mcp_data)
-    metadata["mcp_responses"] = mcp_responses
-    
-    await agent.aupdate_state(
-        config,
-        {"agent_metadata": metadata}
-    )
 
 async def _store_interrupt(agent: CompiledStateGraph, config: dict, interrupt_value: str) -> None:
     """

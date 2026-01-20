@@ -133,19 +133,30 @@ class BaseAgentBuilder:
             A dictionary containing a list of ToolMessage objects with the tool results,
             or an error message if a tool fails or is cancelled."""
         outputs = []
+        mcp_responses = []
+        interrupt_messages = []
+
         for tool_call in getattr(state["messages"][-1], "tool_calls", []):
-            if not handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call):
+            should_continue, interrupt_message = handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call)
+            if not should_continue:
                 return {"messages": ToolMessage(
                         content=INTERRUPT_CANCEL_MESSAGE,
                         name=tool_call["name"],
                         tool_call_id=tool_call["id"]
                         )}
             
+            if interrupt_message:
+                interrupt_messages.append(interrupt_message)
+            
             try:
                 logging.debug("calling tool")
                 tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"])
                 logging.debug("tool call finished")
-                processed_result = process_tool_result(tool_result)
+
+                processed_result, mcp_response = process_tool_result(tool_result, state)
+
+                if mcp_response:
+                    mcp_responses.append(mcp_response)
                 outputs.append(
                     ToolMessage(
                         content=processed_result,
@@ -158,6 +169,15 @@ class BaseAgentBuilder:
             except Exception as e:
                 logging.error(f"unexpected error during tool call: {e}")
                 return {"messages": f"unexpected error during tool call: {e}"}
+            
+
+        if mcp_responses or interrupt_messages:
+            metadata = state.get("agent_metadata", {})
+            if mcp_responses:
+                metadata.setdefault("mcp_responses", []).extend(mcp_responses)
+            if interrupt_messages:
+                metadata.setdefault("interrupt_messages", []).extend(interrupt_messages)
+            return {"messages": outputs, "agent_metadata": metadata}
 
         return {"messages": outputs}
     
@@ -268,19 +288,31 @@ def should_interrupt(human_validation_tools: list[HumanValidationTool], tool_cal
     return ""
 
     
-def handle_interrupt(human_validation_tools: list[HumanValidationTool], tool_call: dict) -> bool:
-    """Handles the user confirmation interrupt for a tool call."""
+def handle_interrupt(human_validation_tools: list[HumanValidationTool], tool_call: dict) -> tuple[bool, str | None]:
+    """Handles the user confirmation interrupt for a tool call.
+    
+    Returns:
+        A tuple of (should_continue, interrupt_message) where:
+        - should_continue: True if execution should continue, False if cancelled
+        - interrupt_message: The interrupt message if one was triggered, None otherwise
+    """
     if interrupt_message := should_interrupt(human_validation_tools, tool_call):
         response = langgraph.types.interrupt(interrupt_message)
         if response != "yes":
-            return False
+            return False, interrupt_message
+        return True, interrupt_message
           
-    return True 
+    return True, None 
 
 
-def process_tool_result(tool_result: str | list) -> str:
+def process_tool_result(tool_result: str | list, state: AgentState) -> tuple[str, str | None]:
     """Processes the raw tool result, handling JSON and streaming UI context if necessary.
-       MCP returns example: {"uiContext":{}, "llm": {}}"""
+       MCP returns example: {"uiContext":{}, "llm": {}}
+       
+       Returns:
+           A tuple of (processed_result, mcp_response) where mcp_response is None if no uiContext.
+    """
+    mcp_response = None
     try:
         # Handle list format: [{"type": "text", "text": "tool response", "id": "..."}]
         if isinstance(tool_result, list) and len(tool_result) > 0:
@@ -290,9 +322,8 @@ def process_tool_result(tool_result: str | list) -> str:
         json_result = json.loads(tool_result)
 
         if "uiContext" in json_result:
-            dispatch_custom_event(
-            "ui_context",
-            f"<mcp-response>{json.dumps(json_result['uiContext'])}</mcp-response>")
+            mcp_response = f"<mcp-response>{json.dumps(json_result['uiContext'])}</mcp-response>"
+            dispatch_custom_event("ui_context",mcp_response)
         if "docLinks" in json_result:
             for link in json_result['docLinks']:
                 dispatch_custom_event(
@@ -300,10 +331,10 @@ def process_tool_result(tool_result: str | list) -> str:
                 f"<mcp-doclink>{link}</mcp-doclink>")
 
         # Return the value for the LLM, or the full object if 'llm' key is not present
-        return convert_to_string_if_needed(json_result.get("llm", json_result))
+        return convert_to_string_if_needed(json_result.get("llm", json_result)), mcp_response
     except (json.JSONDecodeError, TypeError):
         # If it's not a valid JSON, return the raw string result
-        return tool_result
+        return tool_result, mcp_response
 
 
 def convert_to_string_if_needed(var):

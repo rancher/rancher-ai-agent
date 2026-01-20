@@ -3,6 +3,8 @@ import uuid
 import logging
 import json
 
+from ..dependencies import get_llm
+from ..services.agent.factory import create_agent
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -10,10 +12,10 @@ from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
+from langgraph.types import Command
 
 from ..services.auth import get_user_id
 from ..dependencies import get_llm
-from ..services.agent.agent import create_agent
 
 router = APIRouter()
 
@@ -56,9 +58,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     
     await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}"}}</chat-metadata>')
 
-    async with create_agent(llm=llm, websocket=websocket) as ctx:
-        agent = ctx.agent
-
+    async with create_agent(llm=llm, websocket=websocket) as agent:
         base_config = {
             "configurable": {
                 "thread_id": thread_id,
@@ -76,43 +76,10 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                 request_id = str(uuid.uuid4())
 
                 ws_request = _parse_websocket_request(request)
-                content = ws_request.prompt
-                if ws_request.context:
-                    context_prompt = ". Use the following parameters to populate tool calls when appropriate. \n Only include parameters relevant to the user's request (e.g., omit namespace for cluster-wide operations). \n Parameters (separated by ;): \n "
-                    for key, value in ws_request.context.items():
-                        context_prompt += f"{key}:{value};"
-                    content += context_prompt
+                config = _build_config(base_config, request_id, ws_request)
+                input_data = _build_input_data(agent, config, ws_request)
 
-                config = {
-                    **base_config,
-                    "configurable": {**base_config["configurable"]},
-                }
-
-                config["configurable"]["request_id"] = request_id
-
-                if ws_request.agent:
-                    config["configurable"]["agent"] = ws_request.agent
-                else:
-                    config["configurable"]["agent"] = ""
-
-                # Exclude "ephemeral" messages from being stored in memory
-                tags = ws_request.tags or []
-                if "ephemeral" in tags:
-                    config["configurable"]["thread_id"] = ""
-
-                input_messages = [{"role": "user", "content": content}]
-
-                input_data = {
-                    "messages": input_messages,
-                    "agent_metadata": {
-                        "prompt": ws_request.prompt,
-                        "context": ws_request.context,
-                        "tags": ws_request.tags,
-                        "mcp_responses": [],
-                    },
-                }
-
-                await stream_agent_response(
+                await _call_agent(
                     agent=agent,
                     input_data=input_data,
                     config=config,
@@ -132,13 +99,9 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_text("</message>")
 
-    # TODO: any additional cleanup if necessary and changes to support OAuth 2
-    # - Clean up MCP session and client if needed.
-    # - Each user requires their own session for token-based authentication.
-
-async def stream_agent_response(
+async def _call_agent(
     agent: CompiledStateGraph,
-    input_data: dict[str, list[dict[str, str]]],
+    input_data: any, 
     config: dict,
     websocket: WebSocket,
 ) -> None:
@@ -161,45 +124,97 @@ async def stream_agent_response(
         stream_mode=["updates", "messages", "custom", "events"],
     ):
         if stream["event"] == "on_chat_model_stream":
-            if stream["data"]["chunk"].content and (stream["metadata"]["langgraph_node"] == "agent" or stream["metadata"]["langgraph_node"] == "model"):
-                await websocket.send_text(_extract_text_from_chunk_content(stream["data"]["chunk"].content))
+            if text := _extract_streaming_text(stream):
+                await websocket.send_text(text)
         
         if stream["event"] == "on_custom_event":
-            current_state = await agent.aget_state(config)
-            metadata = current_state.values.get("agent_metadata", {})
-            mcp_responses = metadata.get("mcp_responses", [])
-            if mcp_responses is None:
-                mcp_responses = []
-            mcp_responses.append(stream["data"])
-            metadata["mcp_responses"] = mcp_responses
-            
-            await agent.aupdate_state(
-                config,
-                {"agent_metadata": metadata}
-            )
-            
             await websocket.send_text(stream["data"])
     
         if stream["event"] == "on_chain_stream":
-            data = stream.get("data")
-            if isinstance(data, dict):
-                chunk = data.get("chunk")
-                if chunk and isinstance(chunk, (list, tuple)) and len(chunk) > 0 and chunk[0] == "updates":
-                    if len(chunk) > 1 and isinstance(chunk[1], dict):
-                        interrupts = chunk[1].get("__interrupt__", [])
-                        if interrupts and len(interrupts) > 0:
-                            interrupt_value = interrupts[0].value
-                            if interrupt_value:
-                                current_state = await agent.aget_state(config)
-                                metadata = current_state.values.get("agent_metadata", {})
-                                metadata["last_interrupt"] = interrupt_value
-                                
-                                # Store interrupt in agent state
-                                await agent.aupdate_state(
-                                    config,
-                                    {"agent_metadata": metadata}
-                                )
-                                await websocket.send_text(interrupt_value)
+            if interrupt_value := _extract_interrupt_value(stream):
+                #await _store_interrupt(agent, config, interrupt_value)
+                await websocket.send_text(interrupt_value)
+
+async def _store_interrupt(agent: CompiledStateGraph, config: dict, interrupt_value: str) -> None:
+    """
+    Stores an interrupt value in the agent's metadata.
+    
+    Retrieves the current agent state, sets the last_interrupt field,
+    and updates the state.
+    
+    Args:
+        agent: The compiled LangGraph agent.
+        config: The run configuration.
+        interrupt_value: The interrupt value to store.
+    """
+    current_state = await agent.aget_state(config)
+    metadata = current_state.values.get("agent_metadata", {})
+    metadata["last_interrupt"] = interrupt_value
+    
+    await agent.aupdate_state(
+        config,
+        {"agent_metadata": metadata},
+        as_node="tools"
+    )
+
+def _extract_streaming_text(stream: dict) -> str | None:
+    """
+    Extracts text content from a chat model stream event.
+    
+    Only extracts text from 'agent' or 'model' nodes to avoid streaming
+    intermediate processing steps.
+    
+    Args:
+        stream: The stream event dictionary from astream_events.
+        
+    Returns:
+        The extracted text content, or None if not applicable.
+    """
+    STREAMABLE_NODES = ("agent", "model")
+    
+    node = stream.get("metadata", {}).get("langgraph_node")
+    if node not in STREAMABLE_NODES:
+        return None
+    
+    chunk = stream.get("data", {}).get("chunk")
+    if not chunk or not chunk.content:
+        return None
+    
+    return _extract_text_from_chunk_content(chunk.content)
+
+def _extract_interrupt_value(stream: dict) -> str | None:
+    """
+    Extracts the interrupt value from a chain stream event.
+    
+    LangGraph sends interrupt signals through on_chain_stream events with a specific
+    structure: data.chunk is a tuple like ("updates", {"__interrupt__": [Interrupt(...)]})
+    
+    Args:
+        stream: The stream event dictionary from astream_events.
+        
+    Returns:
+        The interrupt value string if present, None otherwise.
+    """
+    data = stream.get("data")
+    if not isinstance(data, dict):
+        return None
+    
+    chunk = data.get("chunk")
+    if not isinstance(chunk, (list, tuple)) or len(chunk) < 2:
+        return None
+    
+    if chunk[0] != "updates":
+        return None
+    
+    updates = chunk[1]
+    if not isinstance(updates, dict):
+        return None
+    
+    interrupts = updates.get("__interrupt__", [])
+    if not interrupts:
+        return None
+    
+    return interrupts[0].value or None
     
 def _extract_text_from_chunk_content(chunk_content: any) -> str:
     """
@@ -226,24 +241,107 @@ def _extract_text_from_chunk_content(chunk_content: any) -> str:
 
 def _parse_websocket_request(request: str) -> WebSocketRequest:
     """
-    Parses the incoming websocket request.
+    Parses the incoming websocket request and enriches the prompt with context.
 
     The request can be a JSON string with 'prompt', 'context', and 'agent' keys,
-    or a plain text string.
+    or a plain text string. If context is provided, it will be appended to the
+    prompt to guide tool call parameter population.
 
     Args:
         request: The raw request string from the websocket.
 
     Returns:
-        A WebSocketRequest object containing the parsed data.
+        A WebSocketRequest object containing the parsed data with enriched prompt.
     """
     try:
         json_request = json.loads(request)
+        prompt = json_request.get("prompt", "")
+        context = json_request.get("context", {})
+        
+        # Enrich prompt with context if present
+        if context:
+            context_parts = [f"{key}:{value}" for key, value in context.items()]
+            context_suffix = (
+                ". Use the following parameters to populate tool calls when appropriate. \n"
+                "Only include parameters relevant to the user's request "
+                "(e.g., omit namespace for cluster-wide operations). \n"
+                f"Parameters (separated by ;): \n {';'.join(context_parts)};"
+            )
+            prompt += context_suffix
+        
         return WebSocketRequest(
-            prompt=json_request.get("prompt", ""),
-            context=json_request.get("context", {}),
-            tags = json_request.get("tags", []),
+            prompt=prompt,
+            context=context,
+            tags=json_request.get("tags", []),
             agent=json_request.get("agent", "")
         )
     except json.JSONDecodeError:
         return WebSocketRequest(prompt=request, context={}, tags=[], agent="")
+
+def _build_config(base_config: dict, request_id: str, ws_request: WebSocketRequest) -> dict:
+    """
+    Builds the configuration dictionary for an agent run.
+    
+    Merges base configuration with request-specific settings including:
+    - request_id for tracking individual requests
+    - agent selection (if specified)
+    - ephemeral flag handling (prevents memory storage)
+    
+    Args:
+        base_config: The base configuration with thread_id and user_id.
+        request_id: Unique identifier for this request.
+        ws_request: The parsed WebSocket request.
+        
+    Returns:
+        A configuration dictionary ready for agent.astream_events.
+    """
+    config = {
+        **base_config,
+        "configurable": {**base_config["configurable"]},
+    }
+
+    config["configurable"]["request_id"] = request_id
+
+    if ws_request.agent:
+        config["configurable"]["agent"] = ws_request.agent
+    else:
+        config["configurable"]["agent"] = ""
+
+    # Exclude "ephemeral" messages from being stored in memory
+    tags = ws_request.tags or []
+    if "ephemeral" in tags:
+        config["configurable"]["thread_id"] = ""
+    
+    return config
+
+def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:
+    """
+    Builds the input data for the agent, handling interrupt resumption.
+    
+    If the agent is waiting on an interrupt, resumes with the user's response.
+    Otherwise, creates a new user message.
+    
+    Args:
+        agent: The compiled LangGraph agent.
+        config: The configuration dictionary for the agent run.
+        ws_request: The parsed WebSocket request.
+        
+    Returns:
+        Either a Command to resume an interrupt, or a messages dict for a new turn.
+    """
+    state = agent.get_state(config=config)
+    
+    if state.interrupts:
+        return Command(resume=ws_request.prompt)
+    
+    input_messages = [{"role": "user", "content": ws_request.prompt}]
+
+    return {
+        "messages": input_messages,
+        "agent_metadata": {
+            "prompt": ws_request.prompt,
+            "context": ws_request.context,
+            "tags": ws_request.tags,
+            "mcp_responses": [],
+        },
+    }

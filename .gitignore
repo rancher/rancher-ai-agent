@@ -4,3 +4,4 @@ __pycache__/
 ./app/__pycache__
 ./app/pytest_cache
 venv
+.vscode

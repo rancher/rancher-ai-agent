@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response, JSONResponse
 
 from ..services.auth import get_user_id
-from ..services.agent.agent import create_rest_api_agent
+from ..services.agent.factory import create_rest_api_agent
 
 async def get_user_id_from_request(request: Request) -> str:
     """

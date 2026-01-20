@@ -29,7 +29,7 @@ class AgentMetadata(TypedDict):
     prompt: NotRequired[str]
     context: NotRequired[dict]
     tags: NotRequired[list[str]]
-    mcp_responses: NotRequired[list[str]]
+    mcp_responses: NotRequired[list[str]] = []
 
 class AgentState(TypedDict):
     """The state of the agent."""

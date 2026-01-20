@@ -30,7 +30,7 @@ async def get_user_id_from_request(request: Request) -> str:
 
     return await get_user_id(host, token)
 
-router = APIRouter(prefix="/agent/api", tags=["chats"])
+router = APIRouter(prefix="/v1/api", tags=["chats"])
 
 @router.get("/chats")
 async def get_chats(request: Request, sort: str = "createdAt:desc"):

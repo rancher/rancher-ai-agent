@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
-from app.services.agent.factory import RANCHER_AGENT_PROMPT
+from app.services.agent.builtin_agents import RANCHER_AGENT_PROMPT
 from app.services.llm import LLMManager
 from langchain_core.language_models import FakeMessagesListChatModel
 from mcp.server.fastmcp import FastMCP
@@ -88,7 +88,11 @@ def remove_message_ids(messages: list[BaseMessage]) -> list[BaseMessage]:
     for message in messages:
         # Create a copy of the message, explicitly setting the 'id' field to None for consistent comparison.
         if isinstance(message, BaseMessage):
-            new_message = message.model_copy(update={"id": None})
+            new_message = message.model_copy(update={
+                "id": None,
+                "additional_kwargs": {},
+                "response_metadata": {}
+            })
         else:
             new_message = message
         
@@ -114,6 +118,13 @@ def setup_mock_mcp_server(module_monkeypatch):
     """Sets up and tears down a mock MCP server for the duration of the test module."""
     module_monkeypatch.setenv("MCP_URL", "localhost:8000/mcp")
     module_monkeypatch.setenv("INSECURE_SKIP_TLS", "true")
+
+    class MockMemoryManager:
+        def get_checkpointer(self):
+            from langgraph.checkpoint.memory import MemorySaver
+            return MemorySaver()
+
+    app.memory_manager = MockMemoryManager()
 
     process = multiprocessing.Process(target=run_mock_mcp)
     process.start()
@@ -149,7 +160,10 @@ def test_websocket_simple_prompt():
     
     try:
         messages = []
-        with client.websocket_connect("/agent/ws") as websocket:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
+            # Consume any initial messages from the server (chat-metadata, etc.)
+            websocket.receive_text()
+
             for prompt in prompts:
                 websocket.send_text(prompt)
                 msg = ""
@@ -185,7 +199,10 @@ def test_websocket_multiple_prompts():
     
     try:
         messages = []
-        with client.websocket_connect("/agent/ws") as websocket:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
+            # Consume any initial messages from the server (chat-metadata, etc.)
+            websocket.receive_text()
+
             for prompt in prompts:
                 websocket.send_text(prompt)
                 msg = ""
@@ -226,6 +243,9 @@ def test_websocket_tool_call():
     try:
         messages = []
         with client.websocket_connect("/v1/ws/messages") as websocket:
+            # Consume any initial messages from the server (chat-metadata, etc.)
+            websocket.receive_text()
+
             for prompt in prompts:
                 websocket.send_text(prompt)
                 msg = ""

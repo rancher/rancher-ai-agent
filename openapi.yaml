@@ -332,10 +332,6 @@ components:
           type: string
           format: uuid
           description: Unique identifier of the chat containing this message
-        requestId:
-          type: string
-          format: uuid
-          description: Unique identifier of the request/conversation turn
         role:
           type: string
           enum:
@@ -365,7 +361,6 @@ components:
           description: Unix timestamp of when the message was created
       required:
         - chatId
-        - requestId
         - role
         - message
         - context
@@ -373,7 +368,6 @@ components:
         - createdAt
       example:
         chatId: ad924baf-24d7-49a5-84ae-bba3a58218a6
-        requestId: 7b38fea1-d993-4525-8217-05087df34d84
         role: user
         message: Chat 1 - Message 1
         context: "{}"

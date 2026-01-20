@@ -257,7 +257,7 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
             agent=json_request.get("agent", "")
         )
     except json.JSONDecodeError:
-        return WebSocketRequest(prompt=request, context={}, tags=[], agent="")
+        return WebSocketRequest(prompt=request, user_input="", context={}, tags=[], agent="")
 
 def _build_config(base_config: dict, request_id: str, ws_request: WebSocketRequest) -> dict:
     """

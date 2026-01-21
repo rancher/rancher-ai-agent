@@ -67,21 +67,27 @@ class ParentAgentBuilder(BaseAgentBuilder):
         # UI override to force a specific child agent
         agent_override = config.get("configurable", {}).get("agent", "")
         if agent_override:
-            dispatch_custom_event(
-                "subagent_choice_event",
-                f"_DEBUG MESSAGE: Using UI-specified agent: {agent_override}_ \n",
-            )
             self.agent_selected = agent_override
             return Command(goto=agent_override)
 
         messages = state["messages"]
 
         # Build routing prompt with available child agents and their descriptions
-        router_prompt = "Based on the user request, decide which child agent is best suited to handle the user's request. Respond with only the name of the child agent.\n\n"
-        router_prompt += "Available child agents:\n"
+        router_prompt = """You are a routing supervisor for a multi-agent system. Your job is to analyze the user's request and select the most appropriate child agent to handle it.
+
+INSTRUCTIONS:
+1. Carefully analyze the user's request and intent
+2. Match the request to the child agent whose description best aligns with the user's needs
+3. Consider the full conversation context if available
+4. Respond with ONLY the exact name of the selected child agent (no explanations or extra text)
+5. You MUST choose exactly one agent - never return multiple names or explanations
+6. If the request is ambiguous or could match multiple agents, default to 'Rancher'
+
+"""
+        router_prompt += "AVAILABLE CHILD AGENTS:\n"
         for child in self.child_agents:
             router_prompt += f"- {child.name}: {child.description}\n"
-        router_prompt += f"\nUser's request: {messages[-1].content}"
+        router_prompt += f"\nUSER'S REQUEST: {messages[-1].content}\n\nSELECTED AGENT:"
                 
         user_and_ai_messages = [msg for msg in messages if isinstance(msg, (HumanMessage, AIMessage))]
         
@@ -92,7 +98,7 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
         dispatch_custom_event(
             "subagent_choice_event",
-            f"_DEBUG MESSAGE: LLM selected: {child_agent}_ \n",
+            f'<agent-metadata>{{"agentName": "{child_agent}"}}</agent-metadata>',
         )
 
         # Return Command to navigate to the selected child agent

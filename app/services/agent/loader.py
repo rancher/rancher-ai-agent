@@ -144,11 +144,11 @@ def _create_default_agents(api: client.CustomObjectsApi):
             "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
             "kind": "AIAgentConfig",
             "metadata": {
-                "name": "weather-agent",
+                "name": "weather",
                 "namespace": NAMESPACE,
             },
             "spec": {
-                "name": "Weather Agent",
+                "name": "Weather",
                 "description": "Provides weather information for a given location",
                 "systemPrompt": "answer the user",
                 "mcpURL": "http://localhost:8001/mcp",
@@ -161,11 +161,11 @@ def _create_default_agents(api: client.CustomObjectsApi):
             "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
             "kind": "AIAgentConfig",
             "metadata": {
-                "name": "math-agent",
+                "name": "math",
                 "namespace": NAMESPACE,
             },
             "spec": {
-                "name": "Math Agent",
+                "name": "Math",
                 "description": "Performs mathematical calculations and problem solving",
                 "systemPrompt": "answer the user",
                 "mcpURL": "http://localhost:8002/mcp",
@@ -178,11 +178,11 @@ def _create_default_agents(api: client.CustomObjectsApi):
             "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
             "kind": "AIAgentConfig",
             "metadata": {
-                "name": "rancher-agent",
+                "name": "rancher",
                 "namespace": NAMESPACE,
             },
             "spec": {
-                "name": "Rancher Agent",
+                "name": "Rancher",
                 "description": "Manages Rancher resources and operations",
                 "systemPrompt": RANCHER_AGENT_PROMPT,
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",

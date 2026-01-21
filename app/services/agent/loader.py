@@ -1,8 +1,7 @@
 """Load AIAgentConfig CRDs from Kubernetes cluster."""
 
-import json
-import os
 import logging
+
 from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel

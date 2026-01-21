@@ -9,7 +9,7 @@ from .loader import AuthenticationType, load_agent_configs
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
-from fastapi import  Request, WebSocket
+from fastapi import  WebSocket
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from langchain_mcp_adapters.tools import load_mcp_tools

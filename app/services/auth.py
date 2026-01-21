@@ -1,6 +1,5 @@
 import logging
 import httpx
-from urllib.parse import urlparse
 
 async def get_user_id(host: str, token: str) -> str:
     """

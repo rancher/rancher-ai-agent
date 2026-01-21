@@ -110,7 +110,7 @@ class MemoryManager:
 
             if not name:
                 # Use content of first User message as default chat name
-                name = messages[0].content if messages[0].content else "Untitled Chat"
+                name = messages[0].content[:50] if messages[0].content else "Untitled Chat"
 
         return {
             "name": name,

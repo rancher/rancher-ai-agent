@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response, JSONResponse
 
 from ..services.auth import get_user_id
-from ..services.agent.factory import create_rest_api_agent
 
 async def get_user_id_from_request(request: Request) -> str:
     """
@@ -174,6 +173,10 @@ async def update_chat(request: Request, chat_id: str, chat_data: dict) -> JSONRe
             user_id=user_id,
             chat_data=chat_data
         )
+        
+        if not updated_chat:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Failed to update chat, chat not found")
+        
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=updated_chat

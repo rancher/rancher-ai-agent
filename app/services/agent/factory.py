@@ -5,7 +5,6 @@ import json
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
-from .chat import create_chat_agent
 from .builtin_agents import BUILTIN_AGENTS, RANCHER_AGENT, AuthenticationType
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
@@ -99,21 +98,6 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
             
             yield agent
 
-
-def create_rest_api_agent(request: Request):
-    """
-    Creates a chat agent for REST API endpoints.
-    
-    This is a minimal agent creation for REST API use cases where
-    only reading chat state is needed (no LLM, tools, or MCP).
-    
-    Args:
-        checkpointer: The checkpointer for reading agent state.
-    
-    Returns:
-        CompiledStateGraph: The compiled agent ready to read state.
-    """
-    return create_chat_agent(request.app.memory_manager.get_checkpointer())
 
 async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:    
     """

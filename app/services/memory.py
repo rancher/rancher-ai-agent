@@ -94,20 +94,23 @@ class MemoryManager:
         """
         Extract chat metadata from a checkpoint tuple.
         """
+        metadata = checkpointTuple.metadata
         channel_values = checkpointTuple.checkpoint.get("channel_values", {})
-        messages = channel_values.get("messages", [])
 
-        name = ""
+        name = metadata.get("chat_name", "")
         created_at = None
-
+        
+        messages = channel_values.get("messages", [])
         if messages and len(messages) > 0:
             # First message is used for chat metadata
             message = messages[0]
 
             additional_kwargs = message.additional_kwargs
             created_at = additional_kwargs.get("created_at") if additional_kwargs else None
-            if created_at:
-                name = f"Chat - {datetime.fromisoformat(created_at).strftime('%Y-%m-%d %H:%M')}"
+
+            if not name:
+                # Use content of first User message as default chat name
+                name = messages[0].content if messages[0].content else "Untitled Chat"
 
         return {
             "name": name,
@@ -215,9 +218,28 @@ class MemoryManager:
         Returns:
             The updated chat thread record.
         """
-        # TODO: finish implementation of update_chat
+        name = chat_data.get("name")
+        
+        if name and isinstance(name, str) and len(name) > 0:
+            config = { "configurable": { "thread_id": chat_id, "user_id": user_id, "checkpoint_ns": "" }}
+            
+            checkpoint_tuple = await self.checkpointer.aget_tuple(config)
+            
+            if checkpoint_tuple:
+                current_metadata = dict(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else {}
 
-        return chat_data  # Placeholder return
+                new_metadata = {**current_metadata, "chat_name": name}
+
+                await self.checkpointer.aput(
+                    config=config,
+                    checkpoint=checkpoint_tuple.checkpoint,
+                    metadata=new_metadata,
+                    new_versions={}
+                )
+
+        chat = await self.fetch_chat(chat_id, user_id)
+
+        return chat
     
     async def delete_chat(self, chat_id: str, user_id: str) -> None:
         """

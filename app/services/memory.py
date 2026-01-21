@@ -109,8 +109,11 @@ class MemoryManager:
             created_at = additional_kwargs.get("created_at") if additional_kwargs else None
 
             if not name:
+                request_metadata = message.additional_kwargs.get("request_metadata", {})
+                user_input = request_metadata.get("user_input", "")
+                
                 # Use content of first User message as default chat name
-                name = messages[0].content[:50] if messages[0].content else "Untitled Chat"
+                name = user_input[:50] if user_input else "Untitled Chat"
 
         return {
             "name": name,

@@ -22,36 +22,6 @@ class AgentConfig:
     description: str
     system_prompt: str
     mcp_url: str
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> 'AgentConfig':
-        """Create an AgentConfig from a dictionary."""
-        return cls(
-            name=data.get("agent", ""),
-            description=data.get("description", ""),
-            system_prompt=data.get("systemPrompt", ""),
-            mcp_url=data.get("mcpURL", "")
-        )
-
-def parse_agent_configs(json_str: str) -> list[AgentConfig]:
-    """
-    Parse JSON string into a list of AgentConfig objects.
-    
-    Args:
-        json_str: JSON string containing agent configurations
-    
-    Returns:
-        List of AgentConfig objects
-    """
-    try:
-        data = json.loads(json_str)
-        return [AgentConfig.from_dict(agent_dict) for agent_dict in data]
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse agent configs: {e}")
-        return []
-    except Exception as e:
-        logging.error(f"Error creating agent configs: {e}")
-        return []
 
 @asynccontextmanager
 async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):

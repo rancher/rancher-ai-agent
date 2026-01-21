@@ -251,11 +251,8 @@ async def get_chat_messages(request: Request, chat_id: str) -> JSONResponse:
         )
         if not chat:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-        
-        stateGraph = create_rest_api_agent(request)
 
         messages = await request.app.memory_manager.fetch_messages(
-            stateGraph=stateGraph,
             chat_id=chat_id,
             user_id=user_id
         )

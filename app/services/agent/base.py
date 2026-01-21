@@ -110,15 +110,16 @@ class BaseAgentBuilder:
             A dictionary containing the LLM's response message."""
         
         logging.debug("calling model")
-
         messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
         response = self._invoke_llm_with_retry(messages, config)
+        
+        response.additional_kwargs["request_id"] = config["configurable"]["request_id"]
 
         logging.debug("model call finished")
 
         return {"messages": [response]}
 
-    async def tool_node(self, state: AgentState):
+    async def tool_node(self, state: AgentState, config: RunnableConfig):
         """
         Executes tools based on the LLM's request.
 
@@ -133,20 +134,28 @@ class BaseAgentBuilder:
             A dictionary containing a list of ToolMessage objects with the tool results,
             or an error message if a tool fails or is cancelled."""
         outputs = []
-        mcp_responses = []
-        interrupt_messages = []
+        
+        request_id = config["configurable"]["request_id"]
 
         for tool_call in getattr(state["messages"][-1], "tool_calls", []):
             should_continue, interrupt_message = handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call)
+
+            additional_kwargs = { "request_id": request_id }
+
+            if interrupt_message:
+                additional_kwargs["interrupt_message"] = interrupt_message
+                additional_kwargs["confirmation"] = True
+
             if not should_continue:
-                return {"messages": ToolMessage(
+                additional_kwargs["confirmation"] = False
+                return {
+                    "messages": [ToolMessage(
                         content=INTERRUPT_CANCEL_MESSAGE,
                         name=tool_call["name"],
-                        tool_call_id=tool_call["id"]
-                        )}
-            
-            if interrupt_message:
-                interrupt_messages.append(interrupt_message)
+                        tool_call_id=tool_call["id"],
+                        additional_kwargs=additional_kwargs
+                    )]
+                }
             
             try:
                 logging.debug("calling tool")
@@ -156,28 +165,35 @@ class BaseAgentBuilder:
                 processed_result, mcp_response = process_tool_result(tool_result, state)
 
                 if mcp_response:
-                    mcp_responses.append(mcp_response)
+                    additional_kwargs["mcp_response"] = mcp_response
+
                 outputs.append(
                     ToolMessage(
                         content=processed_result,
                         name=tool_call["name"],
-                        tool_call_id=tool_call["id"]
+                        tool_call_id=tool_call["id"],
+                        additional_kwargs=additional_kwargs
                     )
                 )
             except ToolException as e:
-                return {"messages": str(e)}
+                return {
+                    "messages": [ToolMessage(
+                        content=str(e),
+                        name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                        additional_kwargs=additional_kwargs
+                    )]
+                }
             except Exception as e:
                 logging.error(f"unexpected error during tool call: {e}")
-                return {"messages": f"unexpected error during tool call: {e}"}
-            
-
-        if mcp_responses or interrupt_messages:
-            metadata = state.get("agent_metadata", {})
-            if mcp_responses:
-                metadata.setdefault("mcp_responses", []).extend(mcp_responses)
-            if interrupt_messages:
-                metadata.setdefault("interrupt_messages", []).extend(interrupt_messages)
-            return {"messages": outputs, "agent_metadata": metadata}
+                return {
+                    "messages": [ToolMessage(
+                        content=f"unexpected error during tool call: {e}",
+                        name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                        additional_kwargs=additional_kwargs
+                    )]
+                }
 
         return {"messages": outputs}
     

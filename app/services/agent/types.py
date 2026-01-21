@@ -2,7 +2,7 @@
 from datetime import datetime
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
-from typing import Sequence, TypedDict, NotRequired, Annotated
+from typing import Sequence, TypedDict, Annotated
 
 def add_messages_with_timestamp(left: Sequence[BaseMessage], right: Sequence[BaseMessage]):
     """Returns the result of add_messages after adding timestamps to messages."""
@@ -24,16 +24,7 @@ def add_messages_with_timestamp(left: Sequence[BaseMessage], right: Sequence[Bas
 
     return add_messages(left, new_messages)
 
-class AgentMetadata(TypedDict):
-    """The agent's metadata."""
-    prompt: NotRequired[str]
-    context: NotRequired[dict]
-    tags: NotRequired[list[str]]
-    mcp_responses: NotRequired[list[str]] = []
-
 class AgentState(TypedDict):
     """The state of the agent."""
     messages: Annotated[Sequence[BaseMessage], add_messages_with_timestamp]
     summary: str
-    # Fields below are persisted by LangGraph but not handled by LLM or tools
-    agent_metadata: NotRequired[AgentMetadata]

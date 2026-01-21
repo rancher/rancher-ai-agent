@@ -4,7 +4,6 @@ from datetime import datetime
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.base import CheckpointTuple
 
 class MemoryManager:
@@ -184,10 +183,10 @@ class MemoryManager:
         Returns:
             A chat thread record or None if not found.
         """
-        config = {"configurable": {"thread_id": chat_id}}
+        config = {"configurable": {"thread_id": chat_id, "user_id": user_id}}
         checkpoint_tuple = await self.checkpointer.aget_tuple(config=config)
 
-        if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
+        if checkpoint_tuple:
             logging.debug(f"Found checkpoint_tuple for chat_id: {chat_id}, user_id: {user_id}")
 
             if self._is_empty_chat(checkpoint_tuple):
@@ -235,7 +234,7 @@ class MemoryManager:
             await self.checkpointer.adelete_thread(chat_id)
             logging.debug(f"Deleted thread: {chat_id}, user_id: {user_id}")
 
-    async def fetch_messages(self, stateGraph: CompiledStateGraph, chat_id: str, user_id: str, filters: dict = {}) -> list:
+    async def fetch_messages(self, chat_id: str, user_id: str, filters: dict = {}) -> list:
         """
         TODO: implement tags filtering logic.
         Fetch messages from the database based on filter configuration.
@@ -253,117 +252,82 @@ class MemoryManager:
                 { "ai": ["welcome"] },
             ]
         """
+        limit = filters.get("limit")
+
         rows = []
         
-        # Filter by chat_id
-        config = {"configurable": {"thread_id": chat_id}}
-        
-        limit = filters.get("limit")
-        tag_filters = filters.get("tag_filters", [])
-        
-        # Collect states in reverse order
-        states_list = []
-        async for state in stateGraph.aget_state_history(config, filter={"user_id": user_id}):
-            states_list.insert(0, state)
+        config = {"configurable": {"thread_id": chat_id, "user_id": user_id}}
+        checkpoint_tuple = await self.checkpointer.aget_tuple(config=config)
 
-        # Group states by request_id
-        states_dict = {}
-        for state in states_list:
-            if state and state.values and state.metadata:
-                state_request_id = state.metadata.get("request_id")
-                if state_request_id:
-                    if state_request_id not in states_dict:
-                        states_dict[state_request_id] = []
-                    states_dict[state_request_id].append(state)
-        
-        # Process states for each request_id
-        processed_message_ids = []
-        for request_id, states in states_dict.items():
+        all_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get("messages", []) if checkpoint_tuple else []
+
+        # Group messages by request_id
+        messages_map = {}
+        for message in all_messages:
+            request_id = message.additional_kwargs["request_id"]
+            if request_id:
+                if request_id not in messages_map:
+                    messages_map[request_id] = []
+                messages_map[request_id].append(message)
+
+        # Process messages for each request_id
+        for request_id, messages in messages_map.items():
+            logging.debug(f"Processing request_id: {request_id} with {len(messages)} messages")
             
-            logging.debug(f"Processing state for chat_id: {chat_id}, request_id: {request_id}")
-            
-            user_row = None
-            agent_row = None
-            
-            # Accumulators for the current request_id
-            all_mcp_responses = []
-            last_interrupt_val = ""
-            
-            # First pass to collect all MCP responses and last_interrupt across all checkpoints of this request_id
-            for state in states:
-                metadata = state.values.get("agent_metadata", {})
+            # Tags are propagated from user message to agent messages in the same request
+            tags = []
+
+            llm_str = ""
+            mcp_str = ""
+
+            for msg in messages:
+                if msg.type == 'human':
+                    request_metadata = msg.additional_kwargs.get("request_metadata", {})
+
+                    tags = request_metadata.get("tags", [])
+                    user_input = request_metadata.get("user_input", "")
+
+                    if user_input:
+                        rows.append({
+                            "chatId": chat_id,
+                            "role": "user",
+                            "message": request_metadata.get("user_input", ""),
+                            "context": request_metadata.get("context", None),
+                            "tags": tags,
+                            "createdAt": msg.additional_kwargs.get("created_at"),
+                        })
                 
-                # Collect MCP responses
-                mcp_in_state = metadata.get("mcp_responses", [])
-                if mcp_in_state:
-                    for resp in mcp_in_state:
-                        if resp not in all_mcp_responses:
-                            all_mcp_responses.append(resp)
-                
-                # Collect last_interrupt (take the most recent non-empty one)
-                interrupt_in_state = metadata.get("last_interrupt", "")
-                if interrupt_in_state:
-                    last_interrupt_val = interrupt_in_state
-
-            mcp_str = "".join(all_mcp_responses)
-            interrupt_str = str(last_interrupt_val) if last_interrupt_val else ""
-
-            for state in states:
-                agent_metadata = state.values.get("agent_metadata", {})
-                context = agent_metadata.get("context", {})
-                tags = agent_metadata.get("tags", [])
-
-                # Filter out already processed messages
-                messages = [m for m in state.values.get("messages", []) if hasattr(m, "id") and m.id not in processed_message_ids]
-
-                for msg in messages:
-                    # Skip internal summary messages, marked at creation time in agent/parent.py and agent/child.py
-                    if getattr(msg, "additional_kwargs", {}).get("is_summary"):
-                        processed_message_ids.append(msg.id)
-                        continue
-
-                    if msg.type == 'human' and self._filter_by_tags(tag_filters, tags, msg.type):
-                        if user_row is None:
-                            text = agent_metadata.get("prompt", "")
-                            user_row = {
-                                "chatId": chat_id,
-                                "requestId": request_id,
-                                "role": "user",
-                                "message": text if text else "",
-                                "context": context,
-                                "tags": tags,
-                                "createdAt": msg.additional_kwargs.get("created_at"),
-                            }
-
-                    if msg.type == 'ai' and self._filter_by_tags(tag_filters, tags, msg.type):
+                else:
+                    if msg.type == 'ai':
                         llm_str = msg.content if msg.content else ""
-                        
-                        text = llm_str
-                        
-                        if interrupt_str and llm_str:
-                            text = llm_str
-                        elif interrupt_str:
-                            text = interrupt_str
-                        elif mcp_str:
-                            text = mcp_str + llm_str
 
-                        text = text if text else agent_row["message"] if agent_row else ""
-                        
-                        if text:                            
-                            agent_row = {
+                    if msg.type == 'tool':
+                        interrupt_str = msg.additional_kwargs.get("interrupt_message", "")
+                        confirmation = msg.additional_kwargs.get("confirmation", None)
+
+                        if confirmation is not None and interrupt_str:
+                            rows.append({
                                 "chatId": chat_id,
-                                "requestId": request_id,
                                 "role": "agent",
-                                "message": text,
-                                "context": None,
-                                "tags": tags,
-                                "createdAt": msg.additional_kwargs.get("created_at"), # Always the date from latest Agent node
-                            }
-                    processed_message_ids.append(msg.id)
-            if user_row:
-                rows.append(user_row)
-            if agent_row:
-                rows.append(agent_row)
+                                "message": interrupt_str,
+                                "confirmation": confirmation,
+                                "createdAt": msg.additional_kwargs.get("created_at"),
+                            })
+                        else:
+                            mcp_response = msg.additional_kwargs.get("mcp_response", "")
+                            if mcp_response:
+                                mcp_str = mcp_response
+                                
+            if mcp_str or llm_str:
+                agent_response = mcp_str + llm_str
+                if agent_response:
+                    rows.append({
+                        "chatId": chat_id,
+                        "role": "agent",
+                        "message": agent_response,
+                        "tags": tags,
+                        "createdAt": msg.additional_kwargs.get("created_at"),
+                    })
 
             if limit and len(rows) >= limit:
                 return rows[:limit]

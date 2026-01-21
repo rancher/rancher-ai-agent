@@ -52,6 +52,33 @@ async def test_update_chat_success(mock_request):
         assert resp.status_code == status.HTTP_200_OK
         assert b"updated" in resp.body
 
+
+@pytest.mark.asyncio
+async def test_update_chat_not_found(mock_request):
+    mock_request.app.memory_manager.fetch_chat.return_value = None
+    with patch("app.routers.chat.get_user_id_from_request", AsyncMock(return_value="u")):
+        with pytest.raises(HTTPException) as exc:
+            await chat_router.update_chat(mock_request, chat_id="notfound", chat_data={"name": "updated"})
+        assert exc.value.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_update_chat_update_failure(mock_request):
+    mock_request.app.memory_manager.fetch_chat.return_value = {"id": "1", "userId": "u"}
+    mock_request.app.memory_manager.update_chat.return_value = None
+    with patch("app.routers.chat.get_user_id_from_request", AsyncMock(return_value="u")):
+        with pytest.raises(HTTPException) as exc:
+            await chat_router.update_chat(mock_request, chat_id="1", chat_data={"name": "fail"})
+        assert exc.value.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_update_chat_invalid_data(mock_request):
+    mock_request.app.memory_manager.fetch_chat.return_value = {"id": "1", "userId": "u"}
+    with patch("app.routers.chat.get_user_id_from_request", AsyncMock(return_value="u")):
+        with pytest.raises(Exception):
+            await chat_router.update_chat(mock_request, chat_id="1", chat_data=None)
+
 @pytest.mark.asyncio
 async def test_delete_chat_success(mock_request):
     mock_request.app.memory_manager.fetch_chat.return_value = {"id": "1", "userId": "u"}

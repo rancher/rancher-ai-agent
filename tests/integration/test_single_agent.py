@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
-from app.services.agent.builtin_agents import RANCHER_AGENT_PROMPT
+from app.services.agent.loader import RANCHER_AGENT_PROMPT, AgentConfig, AuthenticationType
 from app.services.llm import LLMManager
 from langchain_core.language_models import FakeMessagesListChatModel
 from mcp.server.fastmcp import FastMCP
@@ -10,6 +10,7 @@ from langchain_core.language_models.base import LanguageModelInput
 from langchain_core.tools import BaseTool
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
+from unittest.mock import AsyncMock, patch
 
 import time
 import multiprocessing
@@ -116,7 +117,6 @@ def module_monkeypatch(request):
 @pytest.fixture(scope="module", autouse=True)
 def setup_mock_mcp_server(module_monkeypatch):
     """Sets up and tears down a mock MCP server for the duration of the test module."""
-    module_monkeypatch.setenv("MCP_URL", "localhost:8000/mcp")
     module_monkeypatch.setenv("INSECURE_SKIP_TLS", "true")
 
     class MockMemoryManager:
@@ -125,6 +125,17 @@ def setup_mock_mcp_server(module_monkeypatch):
             return MemorySaver()
 
     app.memory_manager = MockMemoryManager()
+    
+    module_monkeypatch.setattr("app.routers.websocket.get_user_id", AsyncMock(return_value="test-user-id"))
+    
+    mock_agent_config = AgentConfig(
+        name="test-agent",
+        description="Test agent for integration tests",
+        system_prompt=RANCHER_AGENT_PROMPT,
+        mcp_url="http://localhost:8000/mcp",
+        authentication=AuthenticationType.NONE,
+    )
+    module_monkeypatch.setattr("app.services.agent.factory.load_agent_configs", lambda: [mock_agent_config])
 
     process = multiprocessing.Process(target=run_mock_mcp)
     process.start()

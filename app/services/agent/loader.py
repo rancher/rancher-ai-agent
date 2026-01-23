@@ -132,6 +132,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         system_prompt=spec.get("systemPrompt", ""),
         mcp_url=spec.get("mcpURL", ""),
         authentication=AuthenticationType[spec.get("authenticationType", "NONE")],
+        toolset=spec.get("toolSet", None),
         human_validation_tools=human_validation_tools,
     )
 
@@ -139,40 +140,6 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
 def _create_default_agents(api: client.CustomObjectsApi):
     """Create default agents in the cluster."""
     default_agents = [
-        {
-            "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
-            "kind": "AIAgentConfig",
-            "metadata": {
-                "name": "weather",
-                "namespace": NAMESPACE,
-            },
-            "spec": {
-                "name": "Weather",
-                "description": "Provides weather information for a given location",
-                "systemPrompt": "answer the user",
-                "mcpURL": "http://localhost:8001/mcp",
-                "authenticationType": "NONE",
-                "builtIn": True,
-                "enabled": True,
-            }
-        },
-        {
-            "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
-            "kind": "AIAgentConfig",
-            "metadata": {
-                "name": "math",
-                "namespace": NAMESPACE,
-            },
-            "spec": {
-                "name": "Math",
-                "description": "Performs mathematical calculations and problem solving",
-                "systemPrompt": "answer the user",
-                "mcpURL": "http://localhost:8002/mcp",
-                "authenticationType": "NONE",
-                "builtIn": True,
-                "enabled": True,
-            }
-        },
         {
             "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
             "kind": "AIAgentConfig",
@@ -188,10 +155,29 @@ def _create_default_agents(api: client.CustomObjectsApi):
                 "authenticationType": "RANCHER",
                 "builtIn": True,
                 "enabled": True,
+                "toolSet": "rancher",
                 "humanValidationTools": [
                     {"name": "createKubernetesResource", "type": "CREATE"},
                     {"name": "patchKubernetesResource", "type": "UPDATE"},
                 ]
+            }
+        },
+         {
+            "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
+            "kind": "AIAgentConfig",
+            "metadata": {
+                "name": "fleet",
+                "namespace": NAMESPACE,
+            },
+            "spec": {
+                "name": "Fleet",
+                "description": "Manages Fleet resources such as GitRepos and Bundles",
+                "systemPrompt": RANCHER_AGENT_PROMPT,
+                "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
+                "authenticationType": "RANCHER",
+                "builtIn": True,
+                "enabled": True,
+                "toolSet": "fleet",
             }
         }
     ]

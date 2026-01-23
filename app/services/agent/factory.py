@@ -5,7 +5,7 @@ import json
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
-from .loader import AuthenticationType, load_agent_configs
+from .loader import AuthenticationType, load_agent_configs, AgentConfig
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
@@ -15,13 +15,6 @@ from mcp.client.streamable_http import streamablehttp_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.language_models.llms import BaseLanguageModel
 
-@dataclass
-class AgentConfig:
-    """Configuration for a child agent."""
-    name: str
-    description: str
-    system_prompt: str
-    mcp_url: str
 
 @asynccontextmanager
 async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
@@ -138,6 +131,15 @@ async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_c
         session = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         tools = await load_mcp_tools(session)
+        
+        # Filter tools by toolset if specified in agent config
+        if agent_config.toolset:
+            tools = [
+                tool for tool in tools 
+                if tool.metadata.get("_meta", {}).get("toolset") == agent_config.toolset
+            ]
+            logging.info(f"Filtered {len(tools)} tools for toolset '{agent_config.toolset}'")
+
     except Exception as e: #TODO not catching exception here!!!
         logging.error(f"Failed to connect to MCP server at {mcp_url}: {e}")
         logging.warning(f"Agent '{agent_config.name}' will run without MCP tools")

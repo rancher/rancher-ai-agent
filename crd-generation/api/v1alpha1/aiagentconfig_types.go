@@ -43,6 +43,10 @@ type AIAgentConfigSpec struct {
 	// HumanValidationTools lists tools requiring human validation
 	// +optional
 	HumanValidationTools []HumanValidationTool `json:"humanValidationTools,omitempty"`
+
+	// ToolSet specifies a predefined set of tools for the agent
+	// +optional
+	ToolSet string `json:"toolSet,omitempty"`
 }
 
 // HumanValidationTool defines a tool that requires human confirmation

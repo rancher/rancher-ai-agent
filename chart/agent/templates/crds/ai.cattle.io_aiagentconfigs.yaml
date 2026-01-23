@@ -101,6 +101,9 @@ spec:
                 description: SystemPrompt is the initial system-level instructions
                   for the agent
                 type: string
+              toolSet:
+                description: ToolSet specifies a predefined set of tools for the agent
+                type: string
             required:
             - name
             type: object

@@ -144,6 +144,7 @@ async def test_create_mcp_tools_basic(mock_session_class, mock_load_tools, mock_
     mock_config.authentication = AuthenticationType.NONE
     mock_config.mcp_url = "http://test:8080"
     mock_config.name = "TestAgent"
+    mock_config.toolset = None
     
     mock_read = MagicMock()
     mock_write = MagicMock()
@@ -248,6 +249,7 @@ async def test_create_mcp_tools_rag_only_for_rancher_core(mock_session_class, mo
     mock_config.authentication = AuthenticationType.NONE
     mock_config.mcp_url = "http://test:8080"
     mock_config.name = "Fleet Agent"  # Not Rancher Core Agent
+    mock_config.toolset = None
     
     mock_read = MagicMock()
     mock_write = MagicMock()

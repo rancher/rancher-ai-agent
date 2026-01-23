@@ -22,9 +22,9 @@ from app.services.agent.loader import AuthenticationType
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
 @patch('app.services.agent.factory._create_mcp_tools')
-@patch('app.services.agent.factory.create_child_agent')
-async def test_create_agent_single_agent(mock_create_child, mock_create_tools, mock_load_configs):
-    """Verify create_agent creates a single child agent when one config is available."""
+@patch('app.services.agent.factory.create_root_agent')
+async def test_create_agent_single_agent(mock_create_root, mock_create_tools, mock_load_configs):
+    """Verify create_agent creates a root agent when one config is available."""
     # Setup mocks
     mock_llm = MagicMock()
     mock_websocket = MagicMock()
@@ -42,13 +42,13 @@ async def test_create_agent_single_agent(mock_create_child, mock_create_tools, m
     mock_create_tools.return_value = mock_tools
     
     mock_agent = MagicMock()
-    mock_create_child.return_value = mock_agent
+    mock_create_root.return_value = mock_agent
     
     # Execute
     async with create_agent(mock_llm, mock_websocket) as agent:
         # Verify
         assert agent == mock_agent
-        mock_create_child.assert_called_once_with(
+        mock_create_root.assert_called_once_with(
             mock_llm, 
             mock_tools, 
             "Test prompt", 

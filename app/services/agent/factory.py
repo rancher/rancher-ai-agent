@@ -5,6 +5,7 @@ import json
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
+from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
@@ -72,7 +73,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         
         async with AsyncExitStack() as stack:
             tools = await _create_mcp_tools(stack, websocket, agent_cfg)
-            agent = create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+            agent = create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
             
             yield agent
 

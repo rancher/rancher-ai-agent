@@ -176,7 +176,7 @@ def _create_default_agents(api: client.CustomObjectsApi):
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
                 "authenticationType": "RANCHER",
                 "builtIn": True,
-                "enabled": True,
+                "enabled": False,
                 "toolSet": "fleet",
             }
         }

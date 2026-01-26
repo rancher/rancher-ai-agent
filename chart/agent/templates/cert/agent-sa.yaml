@@ -20,6 +20,9 @@ rules:
   resources: ["deployments"]
   verbs: ["get", "update", "patch"]
   resourceNames: ["rancher-ai-agent"]
+- apiGroups: ["ai.cattle.io"]
+  resources: ["aiagentconfigs"]
+  verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

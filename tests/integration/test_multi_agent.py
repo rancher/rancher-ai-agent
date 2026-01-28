@@ -497,14 +497,14 @@ def test_summary():
         ], "Ninth call should be summary generation with full conversation history"
         assert fake_llm.all_calls[9] == [
             SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_5)),
-            AIMessage(content=fake_summary_response),
+            SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
             HumanMessage(content=fake_prompt_5)
         ], "Tenth call should be routing call with summary (messages replaced by summary)"
         assert fake_llm.all_calls[10] == [
             SystemMessage(content=MATH_AGENT_PROMPT),
-            AIMessage(content=fake_summary_response),
+            SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
             HumanMessage(content=fake_prompt_5)
-        ], "Eleventh call should be child agent call with summary (messages replaced by summary)"
+        ], "Eleventh call should be child agent call with summary"
 
     finally:
         LLMManager._instance = None

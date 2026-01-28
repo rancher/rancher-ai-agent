@@ -312,7 +312,7 @@ def test_summary():
         # Sixth call - after summary, messages replaced by summary + new prompt
         assert fake_llm.all_calls[5] == [
             SystemMessage(content=RANCHER_AGENT_PROMPT),
-            AIMessage(content=fake_summary_response),
+            SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
             HumanMessage(content=fake_prompt_5),
         ], "Sixth call should have summary replacing conversation history"
         

@@ -63,16 +63,17 @@ class BaseAgentBuilder:
         messages = state["messages"] + [HumanMessage(content=summary_message)]
         response = self.llm.invoke(messages)
 
+        new_messages = [RemoveMessage(id=m.id) for m in messages[:-1]]
+
         # Mark this response explicitly as a summary so that it can be filtered
         # out from the memory endpoints results.
         # Summary are used to condense the conversation but should not appear
         # as part of the conversation history.
-        if response.additional_kwargs is None:
-            response.additional_kwargs = {}
-        response.additional_kwargs["is_summary"] = True
-
-        new_messages = [RemoveMessage(id=m.id) for m in messages[:-1]]
-        new_messages = new_messages + [response]
+        summary_msg = SystemMessage(
+            content="Conversation summary: " + response.content,
+            additional_kwargs={"is_summary": True} 
+        )
+        new_messages = new_messages + [summary_msg]
 
         logging.debug("summarizing conversation")
         

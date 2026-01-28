@@ -283,6 +283,7 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
 
     config["configurable"]["request_id"] = request_id
     config["configurable"]["request_metadata"] = {
+        "agent": ws_request.agent,
         "user_input": ws_request.user_input,
         "context": ws_request.context,
         "tags": ws_request.tags

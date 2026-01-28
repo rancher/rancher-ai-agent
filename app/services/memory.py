@@ -301,6 +301,7 @@ class MemoryManager:
             # Tags are propagated from user message to agent messages in the same request
             tags = []
 
+            selected_agent = "Rancher"
             llm_str = ""
             mcp_str = ""
 
@@ -315,13 +316,16 @@ class MemoryManager:
                         rows.append({
                             "chatId": chat_id,
                             "role": "user",
+                            "agent": request_metadata.get("agent", None),
                             "message": request_metadata.get("user_input", ""),
                             "context": request_metadata.get("context", None),
                             "tags": tags,
                             "createdAt": msg.additional_kwargs.get("created_at"),
                         })
-                
+
                 else:
+                    selected_agent = msg.additional_kwargs.get("selected_agent", selected_agent)
+
                     if msg.type == 'ai':
                         llm_str = msg.content if msg.content else ""
 
@@ -333,6 +337,7 @@ class MemoryManager:
                             rows.append({
                                 "chatId": chat_id,
                                 "role": "agent",
+                                "agent": selected_agent,
                                 "message": interrupt_str,
                                 "confirmation": confirmation,
                                 "createdAt": msg.additional_kwargs.get("created_at"),
@@ -348,6 +353,7 @@ class MemoryManager:
                     rows.append({
                         "chatId": chat_id,
                         "role": "agent",
+                        "agent": selected_agent,
                         "message": agent_response,
                         "tags": tags,
                         "createdAt": msg.additional_kwargs.get("created_at"),

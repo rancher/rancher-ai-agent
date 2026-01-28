@@ -6,7 +6,7 @@ import json
 import logging
 import langgraph.types
 
-from langchain_core.messages import ToolMessage, HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException
 from langgraph.graph.state import Checkpointer
@@ -52,10 +52,12 @@ class BaseAgentBuilder:
 
         Returns:
             A dictionary with the updated summary and a condensed list of messages."""
-        summary = state.get("summary", "")
-        if summary:
+        summary = state.get("summary", {})
+
+        summary_text = summary.get("text", "") if summary else ""
+        if summary_text:
             summary_message = (
-                f"This is summary of the conversation to date: {summary}\n"
+                f"This is summary of the conversation to date: {summary_text}\n"
                 "Extend the summary by taking into account the new messages above:" )
         else:
             summary_message = "Create a summary of the conversation above:"
@@ -63,21 +65,14 @@ class BaseAgentBuilder:
         messages = state["messages"] + [HumanMessage(content=summary_message)]
         response = self.llm.invoke(messages)
 
-        new_messages = [RemoveMessage(id=m.id) for m in messages[:-1]]
-
-        # Mark this response explicitly as a summary so that it can be filtered
-        # out from the memory endpoints results.
-        # Summary are used to condense the conversation but should not appear
-        # as part of the conversation history.
-        summary_msg = SystemMessage(
-            content="Conversation summary: " + response.content,
-            additional_kwargs={"is_summary": True} 
-        )
-        new_messages = new_messages + [summary_msg]
-
         logging.debug("summarizing conversation")
-        
-        return {"summary": response.content, "messages": new_messages}
+
+        return {
+            "summary": {
+                "text": response.content,
+                "msg_count": len(state["messages"])
+            }
+        }
 
     def _invoke_llm_with_retry(self, messages: list, config: RunnableConfig):
         """
@@ -111,9 +106,21 @@ class BaseAgentBuilder:
             A dictionary containing the LLM's response message."""
         
         logging.debug("calling model")
-        messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
-        response = self._invoke_llm_with_retry(messages, config)
+        messages = [SystemMessage(content=self.system_prompt)]
+
+        summary = state.get("summary", {})
+
+        summary_text = summary.get("text", "") if summary else ""
+        msg_count = summary.get("msg_count", 0) if summary else 0
         
+        if summary_text:
+            messages.append(SystemMessage(content=f"Summary of conversation so far: {summary_text}"))
+            messages += state["messages"][msg_count:]
+        else:
+            messages += state["messages"]
+
+        response = self._invoke_llm_with_retry(messages, config)
+
         response.additional_kwargs["request_id"] = config["configurable"]["request_id"]
         response.additional_kwargs["selected_agent"] = state.get("selected_agent")
 
@@ -217,12 +224,18 @@ class BaseAgentBuilder:
             "summarize_conversation", or "end"."""
         messages = state["messages"]
         last_message = messages[-1]
-        if not getattr(last_message, "tool_calls", []):
-            if len(messages) > 7:
-                return "summarize_conversation"
-            return "end"
-        else:
+
+        if getattr(last_message, "tool_calls", []):
             return "continue"
+
+        summary = state.get("summary", {})
+        
+        # Summarize batches of 7 messages - this threshold is arbitrary
+        last_count = summary.get("msg_count", 0) if summary else 0
+        if len(messages) - last_count >= 7:
+            return "summarize_conversation"
+
+        return "end"
         
     def should_continue(self, state: AgentState):
         """Check if agent should continue based on tool calls."""

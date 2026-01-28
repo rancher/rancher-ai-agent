@@ -12,6 +12,8 @@ from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from dataclasses import dataclass
+
+from .loader import DEFAULT_AGENT_NAME
 from .base import BaseAgentBuilder, AgentState
 
 SYSTEM_ROUTER_PROMPT = """You are a routing supervisor for a multi-agent system. Your job is to analyze the user's request and select the most appropriate child agent to handle it.
@@ -105,7 +107,7 @@ class ParentAgentBuilder(BaseAgentBuilder):
         child_agent = self.llm.invoke([SystemMessage(content=router_prompt)] + user_and_ai_messages).content
         if child_agent not in [child.name for child in self.child_agents]:
             # Fallback to default agent if the agent selection from LLM is invalid
-            child_agent = "Rancher"
+            child_agent = DEFAULT_AGENT_NAME
 
         self.agent_selected = child_agent
 

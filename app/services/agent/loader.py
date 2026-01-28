@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
+DEFAULT_AGENT_NAME = "Rancher"
 NAMESPACE = "cattle-ai-agent-system"
 CRD_GROUP = "ai.cattle.io"
 CRD_VERSION = "v1alpha1"
@@ -144,7 +145,7 @@ def _create_default_agents(api: client.CustomObjectsApi):
             "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
             "kind": "AIAgentConfig",
             "metadata": {
-                "name": "rancher",
+                "name": DEFAULT_AGENT_NAME,
                 "namespace": NAMESPACE,
             },
             "spec": {

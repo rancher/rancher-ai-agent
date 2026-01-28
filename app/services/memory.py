@@ -5,6 +5,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.base import CheckpointTuple
 
+from ..services.agent.loader import DEFAULT_AGENT_NAME
+
 class MemoryManager:
     """
     Manages chat memories using a database or in-memory storage.
@@ -301,7 +303,7 @@ class MemoryManager:
             # Tags are propagated from user message to agent messages in the same request
             tags = []
 
-            selected_agent = "Rancher"
+            selected_agent = DEFAULT_AGENT_NAME
             llm_str = ""
             mcp_str = ""
 

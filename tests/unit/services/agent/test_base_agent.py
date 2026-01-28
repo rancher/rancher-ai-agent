@@ -15,7 +15,7 @@ from app.services.agent.base import (
     INTERRUPT_CANCEL_MESSAGE,
     BaseAgentBuilder
 )
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage, SystemMessage
 from langchain_core.tools import ToolException
 from app.services.agent.loader import HumanValidationTool
 from ollama import ResponseError
@@ -450,7 +450,9 @@ def test_summarize_conversation_creates_new_summary(mock_llm, mock_tools, mock_c
 
     assert result["summary"] == "Summary of conversation"
     assert any(isinstance(msg, RemoveMessage) for msg in result["messages"])
-    assert result["messages"][-1].content == "Summary of conversation"
+    # The summary is now a SystemMessage with "Conversation summary: " prefix
+    assert isinstance(result["messages"][-1], SystemMessage)
+    assert result["messages"][-1].content == "Conversation summary: Summary of conversation"
     assert result["messages"][-1].additional_kwargs.get("is_summary") is True
 
 def test_summarize_conversation_extends_existing_summary(mock_llm, mock_tools, mock_checkpointer):

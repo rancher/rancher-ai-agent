@@ -17,8 +17,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.name
-      name: Name
+    - jsonPath: .spec.displayName
+      name: Display Name
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -94,8 +94,8 @@ spec:
               mcpURL:
                 description: MCPURL is the Model Context Protocol server URL
                 type: string
-              name:
-                description: Name is the name of the AI agent
+              displayName:
+                description: DisplayName is the display name of the AI agent
                 type: string
               systemPrompt:
                 description: SystemPrompt is the initial system-level instructions
@@ -104,8 +104,6 @@ spec:
               toolSet:
                 description: ToolSet specifies a predefined set of tools for the agent
                 type: string
-            required:
-            - name
             type: object
           status:
             description: AIAgentConfigStatus defines the observed state of AIAgentConfig

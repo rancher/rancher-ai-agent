@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-DEFAULT_AGENT_NAME = "Rancher"
+DEFAULT_AGENT_NAME = "rancher"
 NAMESPACE = "cattle-ai-agent-system"
 CRD_GROUP = "ai.cattle.io"
 CRD_VERSION = "v1alpha1"
@@ -93,6 +93,7 @@ class HumanValidationTool(BaseModel):
 class AgentConfig(BaseModel):
     """Configuration for a single agent."""
     name: str 
+    displayName: str
     description: str 
     system_prompt: str 
     mcp_url: str
@@ -115,6 +116,7 @@ def _init_k8s_client():
 
 def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
     """Convert CRD object to AgentConfig."""
+    metadata = crd_obj.get("metadata", {})
     spec = crd_obj.get("spec", {})
     
     # Convert human validation tools
@@ -128,7 +130,8 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         )
     
     return AgentConfig(
-        name=spec.get("name", ""),
+        name=metadata.get("name", ""),
+        displayName=spec.get("displayName", ""),
         description=spec.get("description", ""),
         system_prompt=spec.get("systemPrompt", ""),
         mcp_url=spec.get("mcpURL", ""),
@@ -149,7 +152,7 @@ def _create_default_agents(api: client.CustomObjectsApi):
                 "namespace": NAMESPACE,
             },
             "spec": {
-                "name": "Rancher",
+                "displayName": "Rancher",
                 "description": "Manages Rancher resources and operations",
                 "systemPrompt": RANCHER_AGENT_PROMPT,
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
@@ -171,7 +174,7 @@ def _create_default_agents(api: client.CustomObjectsApi):
                 "namespace": NAMESPACE,
             },
             "spec": {
-                "name": "Fleet",
+                "displayName": "Fleet",
                 "description": "Manages Fleet resources such as GitRepos and Bundles",
                 "systemPrompt": RANCHER_AGENT_PROMPT,
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",

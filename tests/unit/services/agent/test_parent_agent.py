@@ -74,7 +74,8 @@ def agent_state():
         "messages": [
             HumanMessage(content="How do I deploy a workload in Rancher?")
         ],
-        "summary": ""
+        "summary": {},
+        "selected-agent": ""
     }
 
 
@@ -151,7 +152,8 @@ def test_choose_child_agent_includes_all_agents_in_prompt(mock_dispatch, mock_ll
     assert "Expert in Harvester HCI" in system_message.content
 
 
-def test_choose_child_agent_with_agent_override(mock_llm, mock_child_agents, mock_checkpointer, agent_state):
+@patch("app.services.agent.parent.dispatch_custom_event")
+def test_choose_child_agent_with_agent_override(mock_dispatch, mock_llm, mock_child_agents, mock_checkpointer, agent_state):
     """Verify that agent override in config forces selection of specific agent."""
     builder = ParentAgentBuilder(
         llm=mock_llm,
@@ -174,6 +176,7 @@ def test_choose_child_agent_with_agent_override(mock_llm, mock_child_agents, moc
     assert isinstance(result, Command)
     assert result.goto == "Fleet"
     assert builder.agent_selected == "Fleet"
+    assert result.update["selected_agent"] == "Fleet"
 
 
 @patch('app.services.agent.parent.dispatch_custom_event')
@@ -205,7 +208,8 @@ def test_choose_child_agent_with_conversation_context(mock_dispatch, mock_llm, m
             AIMessage(content="Fleet is a GitOps tool..."),
             HumanMessage(content="How do I use it with Rancher?")
         ],
-        "summary": ""
+        "summary": {},
+        "selected-agent": ""
     }
     
     builder = ParentAgentBuilder(

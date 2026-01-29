@@ -49,6 +49,7 @@ def agent_config():
     """Mock agent configuration."""
     return AgentConfig(
         name="test-child-agent",
+        displayName="Test Child Agent",
         description="Test child agent",
         system_prompt="You are a test child agent",
         mcp_url="http://test:8080",

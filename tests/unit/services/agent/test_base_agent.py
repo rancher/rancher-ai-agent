@@ -425,6 +425,26 @@ def test_call_model_node_fails_after_retry_limit(mock_llm, mock_tools, mock_chec
     
     assert mock_llm.invoke.call_count == 2
 
+def test_call_model_node_uses_sliding_window_with_summary(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that call_model_node uses summary and slices messages correctly."""
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+    messages = [AIMessage(content=f"M{i}") for i in range(10)]
+    state = {
+        "messages": messages,
+        "summary": {"text": "Summary context", "msg_count": 7}
+    }
+    builder.call_model_node(state, mock_config)
+    call_args = mock_llm.invoke.call_args[0][0]
+    assert any("Summary context" in str(m.content) for m in call_args)
+    # 1 system + 1 summary system + (10-7) messages = 5
+    assert len(call_args) == 5
+
 # ============================================================================
 # Conversation Summarization Tests
 # ============================================================================
@@ -448,12 +468,11 @@ def test_summarize_conversation_creates_new_summary(mock_llm, mock_tools, mock_c
 
     result = builder.summarize_conversation_node(state)
 
-    assert result["summary"] == "Summary of conversation"
-    assert any(isinstance(msg, RemoveMessage) for msg in result["messages"])
-    # The summary is now a SystemMessage with "Conversation summary: " prefix
-    assert isinstance(result["messages"][-1], SystemMessage)
-    assert result["messages"][-1].content == "Conversation summary: Summary of conversation"
-    assert result["messages"][-1].content == "Summary of conversation"
+    assert result["summary"] == {
+        "text": "Summary of conversation",
+        "msg_count": 2
+    }
+    assert "messages" not in result
 
 def test_summarize_conversation_extends_existing_summary(mock_llm, mock_tools, mock_checkpointer):
     """Verify that summarize_conversation extends an existing summary."""
@@ -471,12 +490,17 @@ def test_summarize_conversation_extends_existing_summary(mock_llm, mock_tools, m
     msg1 = HumanMessage(content="New message", id="msg1")
     state = {
         "messages": [msg1],
-        "summary": "Previous summary"
+        "summary": {
+            "text": "Previous summary",
+            "msg_count": 2
+        },
+        "selected-agent": ""
     }
 
     result = builder.summarize_conversation_node(state)
 
-    assert result["summary"] == "Extended summary"
+    assert result["summary"]["text"] == "Extended summary"
+    assert result["summary"]["msg_count"] == 1
     call_args = mock_llm.invoke.call_args[0][0]
     assert any("Previous summary" in str(msg.content) for msg in call_args)
 
@@ -508,7 +532,7 @@ def test_should_summarize_conversation_returns_end_for_short_conversations(mock_
     )
     
     messages = [AIMessage(content=f"Message {i}") for i in range(5)]
-    state = {"messages": messages}
+    state = {"messages": messages, "summary": {"msg_count": 0}}
 
     result = builder.should_summarize_conversation(state)
 

@@ -48,6 +48,7 @@ def agent_config():
     """Mock agent configuration."""
     return AgentConfig(
         name="test-root-agent",
+        displayName="Test Root Agent",
         description="Test root agent",
         system_prompt="You are a test root agent",
         mcp_url="http://test:8080",

@@ -59,7 +59,7 @@ class BaseAgentBuilder:
         msg_count = summary.get("msg_count", 0)
         
         if summary_text:
-            messages.append(SystemMessage(content=f"Summary of conversation so far: {summary_text}"))
+            messages.append(SystemMessage(content=f"Conversation summary: {summary_text}"))
             # Get messages since last summary only + current messages window
             messages += state["messages"][msg_count:]
         else:

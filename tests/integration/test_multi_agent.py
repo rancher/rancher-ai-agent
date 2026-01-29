@@ -498,6 +498,16 @@ def test_summary():
             AIMessage(content=fake_llm_response_4),
             HumanMessage(content="Create a summary of the conversation above:")
         ], "Ninth call should be summary generation with full conversation history"
+        assert fake_llm.all_calls[9] == [
+            SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_5)),
+            SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
+            HumanMessage(content=fake_prompt_5)
+        ], "Tenth call should be routing call with summary (messages replaced by summary)"
+        assert fake_llm.all_calls[10] == [
+            SystemMessage(content=MATH_AGENT_PROMPT),
+            SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
+            HumanMessage(content=fake_prompt_5)
+        ], "Eleventh call should be child agent call with summary"
 
         # Tenth call - routing call (Parent Agent)
         # Note: If ParentAgent hasn't been updated with sliding window, it sends full history.
@@ -510,7 +520,7 @@ def test_summary():
         # Verify the child agent receives the summary context and uses sliding window
         eleventh_call = fake_llm.all_calls[10]
         assert eleventh_call[0].content == MATH_AGENT_PROMPT
-        assert eleventh_call[1].content == f"Summary of conversation so far: {fake_summary_response}"
+        assert eleventh_call[1].content == f"Conversation summary: {fake_summary_response}"
         assert eleventh_call[2].content == fake_prompt_5
         assert len(eleventh_call) == 3
 

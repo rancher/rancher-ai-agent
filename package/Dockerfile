@@ -41,7 +41,7 @@ RUN apk add --no-cache git && \
 # installs runtime dependencies, and copies the prepared documentation
 # artifact from the first stage.
 # =================================================================
-FROM registry.suse.com/bci/python:3.13
+FROM registry.suse.com/bci/python:3.10
 
 WORKDIR /app
 

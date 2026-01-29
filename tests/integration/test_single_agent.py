@@ -57,6 +57,7 @@ def setup_mock_mcp_server(module_monkeypatch):
     
     mock_agent_config = AgentConfig(
         name="test-agent",
+        displayName="Test Agent",
         description="Test agent for integration tests",
         system_prompt=RANCHER_AGENT_PROMPT,
         mcp_url="http://localhost:8000/mcp",
@@ -312,7 +313,7 @@ def test_summary():
         # Sixth call - after summary, messages replaced by summary + new prompt
         assert fake_llm.all_calls[5] == [
             SystemMessage(content=RANCHER_AGENT_PROMPT),
-            SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
+            SystemMessage(content=f"Summary of conversation so far: {fake_summary_response}"),
             HumanMessage(content=fake_prompt_5),
         ], "Sixth call should have summary replacing conversation history"
         

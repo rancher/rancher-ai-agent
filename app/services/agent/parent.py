@@ -85,7 +85,7 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
             dispatch_custom_event(
                 "subagent_choice_event",
-                f'<agent-metadata>{{"agent": "{agent_override}", "selectionMode": "manual"}}</agent-metadata>',
+                f'<agent-metadata>{{"agentName": "{agent_override}", "selectionMode": "manual"}}</agent-metadata>',
             )
 
             return Command(
@@ -113,7 +113,7 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
         dispatch_custom_event(
             "subagent_choice_event",
-            f'<agent-metadata>{{"agent": "{child_agent}", "selectionMode": "auto"}}</agent-metadata>',
+            f'<agent-metadata>{{"agentName": "{child_agent}", "selectionMode": "auto"}}</agent-metadata>',
         )
 
         # Return Command to navigate to the selected child agent

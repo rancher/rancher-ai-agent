@@ -4,6 +4,8 @@ import certifi
 
 from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
+
+from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .routers import chat, websocket, ui
 
@@ -51,6 +53,9 @@ async def lifespan(app: FastAPI):
         logging.getLogger().setLevel(LOG_LEVEL)
         if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() != "true":
             SimpleTruststore().set_truststore()
+
+        configs = ensure_default_ai_agent_config_crds()
+        logging.info(f"Startup: {len(configs)} AIAgentConfig CRDs in the cluster.")
 
         app.memory_manager = await create_memory_manager()
     except ValueError as e:

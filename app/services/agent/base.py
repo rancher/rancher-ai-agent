@@ -39,14 +39,11 @@ class BaseAgentBuilder:
         self.tools_by_name = {tool.name: tool for tool in self.tools}
         self.agent_config = agent_config
         
-    def _get_messages_from_last_summary(self, state: AgentState, filter_types: tuple = (HumanMessage, AIMessage, ToolMessage)) -> list:
+    def _get_messages_from_last_summary(self, state: AgentState) -> list:
         """
         Combines the system prompt, the current summary (if any), 
         and the relevant messages since the last summary.
         """
-        if SystemMessage not in filter_types:
-            filter_types += (SystemMessage,)
-        
         messages = []
 
         # Add system prompt if defined
@@ -65,9 +62,7 @@ class BaseAgentBuilder:
         else:
             messages += state["messages"]
 
-        filtered_messages = [msg for msg in messages if isinstance(msg, filter_types)]
-
-        return filtered_messages
+        return messages
     
     def summarize_conversation_node(self, state: AgentState):
         """

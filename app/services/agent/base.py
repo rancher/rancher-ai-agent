@@ -6,7 +6,7 @@ import json
 import logging
 import langgraph.types
 
-from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
+from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException
 from langgraph.graph.state import Checkpointer
@@ -38,6 +38,36 @@ class BaseAgentBuilder:
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         self.tools_by_name = {tool.name: tool for tool in self.tools}
         self.agent_config = agent_config
+        
+    def _get_messages_from_last_summary(self, state: AgentState, filter_types: tuple = (HumanMessage, AIMessage, ToolMessage)) -> list:
+        """
+        Combines the system prompt, the current summary (if any), 
+        and the relevant messages since the last summary.
+        """
+        if SystemMessage not in filter_types:
+            filter_types += (SystemMessage,)
+        
+        messages = []
+
+        # Add system prompt if defined
+        if self.system_prompt.strip():
+            messages.append(SystemMessage(content=self.system_prompt))
+
+        summary = state.get("summary", {})
+        
+        summary_text = summary.get("text", "") if summary else ""
+        msg_count = summary.get("msg_count", 0) if summary else 0
+        
+        if summary_text:
+            messages.append(SystemMessage(content=f"Summary of conversation so far: {summary_text}"))
+            # Get messages since last summary only + current messages window
+            messages += state["messages"][msg_count:]
+        else:
+            messages += state["messages"]
+
+        filtered_messages = [msg for msg in messages if isinstance(msg, filter_types)]
+
+        return filtered_messages
     
     def summarize_conversation_node(self, state: AgentState):
         """
@@ -53,19 +83,21 @@ class BaseAgentBuilder:
         Returns:
             A dictionary with the updated summary and a condensed list of messages."""
         summary = state.get("summary", {})
-
-        summary_text = summary.get("text", "") if summary else ""
+        summary_text = summary.get("text", "")
+        
+        messages = self._get_messages_from_last_summary(state)
+        
+        summary_prompt = "Create a summary of the conversation above:"
         if summary_text:
-            summary_message = (
-                f"This is summary of the conversation to date: {summary_text}\n"
-                "Extend the summary by taking into account the new messages above:" )
-        else:
-            summary_message = "Create a summary of the conversation above:"
+            summary_prompt = (
+                "Extend the current summary by incorporating the new messages above. "
+                "Maintain a concise but complete overview of the entire conversation."
+            )
 
-        messages = state["messages"] + [HumanMessage(content=summary_message)]
+        messages.append(HumanMessage(content=summary_prompt))
         response = self.llm.invoke(messages)
 
-        logging.debug("summarizing conversation")
+        logging.debug(f"Conversation summarized. New history window will start from index {len(state['messages'])}")
 
         return {
             "summary": {
@@ -106,18 +138,7 @@ class BaseAgentBuilder:
             A dictionary containing the LLM's response message."""
         
         logging.debug("calling model")
-        messages = [SystemMessage(content=self.system_prompt)]
-
-        summary = state.get("summary", {})
-
-        summary_text = summary.get("text", "") if summary else ""
-        msg_count = summary.get("msg_count", 0) if summary else 0
-        
-        if summary_text:
-            messages.append(SystemMessage(content=f"Summary of conversation so far: {summary_text}"))
-            messages += state["messages"][msg_count:]
-        else:
-            messages += state["messages"]
+        messages = self._get_messages_from_last_summary(state)
 
         response = self._invoke_llm_with_retry(messages, config)
 

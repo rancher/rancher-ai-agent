@@ -297,8 +297,9 @@ def test_summary():
             HumanMessage(content=fake_prompt_4),
         ], "Fourth call should include full conversation history"
         
-        # Fifth call - summary generation (no system message)
+        # Fifth call - summary generation
         assert fake_llm.all_calls[4] == [
+            SystemMessage(content=RANCHER_AGENT_PROMPT),
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2),

@@ -100,8 +100,8 @@ class ParentAgentBuilder(BaseAgentBuilder):
         for child in self.child_agents:
             router_prompt += f"- {child.name}: {child.description}\n"
         router_prompt += f"\nUSER'S REQUEST: {messages[-1].content}\n"
-                
-        user_and_ai_messages = [msg for msg in messages if isinstance(msg, (HumanMessage, AIMessage, SystemMessage))]
+        
+        user_and_ai_messages = self._get_messages_from_last_summary(state, filter_types=(HumanMessage, AIMessage))
         
         # Use LLM to select the appropriate child agent
         child_agent = self.llm.invoke([SystemMessage(content=router_prompt)] + user_and_ai_messages).content

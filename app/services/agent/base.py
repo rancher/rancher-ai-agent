@@ -55,8 +55,8 @@ class BaseAgentBuilder:
 
         summary = state.get("summary", {})
         
-        summary_text = summary.get("text", "") if summary else ""
-        msg_count = summary.get("msg_count", 0) if summary else 0
+        summary_text = summary.get("text", "")
+        msg_count = summary.get("msg_count", 0)
         
         if summary_text:
             messages.append(SystemMessage(content=f"Summary of conversation so far: {summary_text}"))

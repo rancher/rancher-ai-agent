@@ -90,7 +90,12 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
             return Command(
                 goto=agent_override,
-                update={"selected_agent": agent_override}
+                update={
+                    "selected_agent": {
+                        "name": agent_override,
+                        "mode": "manual"
+                    }
+                }
             )
 
         messages = state["messages"]
@@ -119,7 +124,12 @@ class ParentAgentBuilder(BaseAgentBuilder):
         # Return Command to navigate to the selected child agent
         return Command(
             goto=child_agent,
-            update={"selected_agent": child_agent}
+            update={
+                "selected_agent": {
+                    "name": child_agent,
+                    "mode": "auto"
+                }
+            }
         )
 
     def build(self) -> CompiledStateGraph:

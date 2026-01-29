@@ -303,7 +303,10 @@ class MemoryManager:
             # Tags are propagated from user message to agent messages in the same request
             tags = []
 
-            selected_agent = DEFAULT_AGENT_NAME
+            selected_agent = {
+                "name": DEFAULT_AGENT_NAME,
+                "mode": "auto"
+            }
             llm_str = ""
             mcp_str = ""
 

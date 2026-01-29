@@ -176,7 +176,10 @@ def test_choose_child_agent_with_agent_override(mock_dispatch, mock_llm, mock_ch
     assert isinstance(result, Command)
     assert result.goto == "Fleet"
     assert builder.agent_selected == "Fleet"
-    assert result.update["selected_agent"] == "Fleet"
+    assert result.update["selected_agent"] == {
+        "name": "Fleet",
+        "mode": "manual"
+    }
 
 
 @patch('app.services.agent.parent.dispatch_custom_event')
@@ -196,7 +199,12 @@ def test_choose_child_agent_dispatches_event(mock_dispatch, mock_llm, mock_child
     mock_dispatch.assert_called_once()
     call_args = mock_dispatch.call_args
     assert call_args[0][0] == "subagent_choice_event"
-    assert "Fleet" in call_args[0][1]
+    event_name = mock_dispatch.call_args[0][0]
+    event_payload = mock_dispatch.call_args[0][1]
+    assert event_name == "subagent_choice_event"
+    assert "Fleet" in event_payload
+    assert "auto" in event_payload
+    assert "<agent-metadata>" in event_payload
 
 
 @patch('app.services.agent.parent.dispatch_custom_event')

@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from dataclasses import dataclass
 
 from .loader import DEFAULT_AGENT_NAME
-from .base import BaseAgentBuilder, AgentState
+from .base import BaseAgentBuilder, AgentState, build_agent_metadata
 
 SYSTEM_ROUTER_PROMPT = """You are a routing supervisor for a multi-agent system. Your job is to analyze the user's request and select the most appropriate child agent to handle it.
 
@@ -85,7 +85,7 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
             dispatch_custom_event(
                 "subagent_choice_event",
-                f'<agent-metadata>{{"agentName": "{agent_override}", "selectionMode": "manual"}}</agent-metadata>',
+                build_agent_metadata(agent_override, "manual"),
             )
 
             return Command(
@@ -118,7 +118,7 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
         dispatch_custom_event(
             "subagent_choice_event",
-            f'<agent-metadata>{{"agentName": "{child_agent}", "selectionMode": "auto"}}</agent-metadata>',
+            build_agent_metadata(child_agent, "auto"),
         )
 
         # Return Command to navigate to the selected child agent

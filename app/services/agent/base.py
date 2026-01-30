@@ -6,7 +6,7 @@ import json
 import logging
 import langgraph.types
 
-from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException
 from langgraph.graph.state import Checkpointer
@@ -166,7 +166,7 @@ class BaseAgentBuilder:
         request_id = config["configurable"]["request_id"]
 
         for tool_call in getattr(state["messages"][-1], "tool_calls", []):
-            should_continue, interrupt_message = handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call)
+            should_continue, interrupt_message = handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call, state)
 
             additional_kwargs = {
                 "request_id": request_id,
@@ -285,6 +285,11 @@ class BaseAgentBuilder:
         return "continue"
 
 
+def build_agent_metadata(agent_name: str, selection_mode: str):
+    """Builds a structured agent metadata string for custom events."""
+    return f'<agent-metadata>{{"agentName": "{agent_name}", "selectionMode": "{selection_mode}"}}</agent-metadata>'
+
+
 def create_confirmation_response(payload: str, type: str, name: str, kind: str, cluster: str, namespace: str):
     """
     Creates a structured confirmation response for the UI.
@@ -341,7 +346,7 @@ def should_interrupt(human_validation_tools: list[HumanValidationTool], tool_cal
     return ""
 
     
-def handle_interrupt(human_validation_tools: list[HumanValidationTool], tool_call: dict) -> tuple[bool, str | None]:
+def handle_interrupt(human_validation_tools: list[HumanValidationTool], tool_call: dict, state: AgentState) -> tuple[bool, str | None]:
     """Handles the user confirmation interrupt for a tool call.
     
     Returns:
@@ -353,6 +358,13 @@ def handle_interrupt(human_validation_tools: list[HumanValidationTool], tool_cal
         response = langgraph.types.interrupt(interrupt_message)
         if response != "yes":
             return False, interrupt_message
+        
+        selected_agent = state.get("selected_agent", {})
+        if selected_agent:
+            dispatch_custom_event(
+                "subagent_choice_event",
+                build_agent_metadata(selected_agent.get("name"), selected_agent.get("mode")),
+            )
         return True, interrupt_message
           
     return True, None 

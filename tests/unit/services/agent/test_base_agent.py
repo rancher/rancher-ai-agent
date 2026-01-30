@@ -700,7 +700,7 @@ def test_handle_interrupt_cancels_on_no_response():
     }
     
     with patch("langgraph.types.interrupt", return_value="no"):
-        should_continue, interrupt_msg = handle_interrupt(validation_tools, tool_call)
+        should_continue, interrupt_msg = handle_interrupt(validation_tools, tool_call, {})
     
     assert should_continue is False
     assert interrupt_msg is not None
@@ -720,7 +720,7 @@ def test_handle_interrupt_continues_on_yes_response():
     }
     
     with patch("langgraph.types.interrupt", return_value="yes"):
-        should_continue, interrupt_msg = handle_interrupt(validation_tools, tool_call)
+        should_continue, interrupt_msg = handle_interrupt(validation_tools, tool_call, {})
     
     assert should_continue is True
     assert interrupt_msg is not None

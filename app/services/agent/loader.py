@@ -1,6 +1,7 @@
 """Load AIAgentConfig CRDs from Kubernetes cluster."""
 
 import logging
+import base64
 
 from enum import Enum
 from typing import List, Optional
@@ -96,6 +97,7 @@ class AgentConfig(BaseModel):
     system_prompt: str 
     mcp_url: str
     authentication: AuthenticationType = AuthenticationType.NONE
+    authentication_secret: Optional[str] = None
     toolset: Optional[str] = None
     human_validation_tools: list[HumanValidationTool] = []
 
@@ -110,6 +112,47 @@ def _init_k8s_client():
         config.load_kube_config()
     
     return client.CustomObjectsApi()
+
+
+def get_basic_auth_credentials(secret_name: str) -> str:
+    """
+    Retrieve Basic Auth credentials from a Kubernetes secret.
+    
+    Args:
+        secret_name: Name of the kubernetes.io/basic-auth secret to retrieve.
+    
+    Returns:
+        str: Base64-encoded credentials in the format "username:password".
+    """
+    # Initialize Kubernetes client
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+    
+    v1 = client.CoreV1Api()
+    secret = v1.read_namespaced_secret(secret_name, NAMESPACE)
+    
+    if not secret.data:
+        raise RuntimeError(
+            f"Authentication secret '{secret_name}' in namespace '{NAMESPACE}' is empty"
+        )
+    
+    # kubernetes.io/basic-auth secrets have 'username' and 'password' keys
+    if 'username' not in secret.data or 'password' not in secret.data:
+        raise RuntimeError(
+            f"Authentication secret '{secret_name}' in namespace '{NAMESPACE}' "
+            "does not contain 'username' and 'password' keys. "
+        )
+    
+    # Decode the base64-encoded username and password
+    username = base64.b64decode(secret.data['username']).decode('utf-8')
+    password = base64.b64decode(secret.data['password']).decode('utf-8')
+    
+    # Encode as Basic Auth format
+    credentials = base64.b64encode(f"{username}:{password}".encode('utf-8')).decode('utf-8')
+    return credentials
+
 
 
 def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
@@ -132,6 +175,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         system_prompt=spec.get("systemPrompt", ""),
         mcp_url=spec.get("mcpURL", ""),
         authentication=AuthenticationType[spec.get("authenticationType", "NONE")],
+        authentication_secret=spec.get("authenticationSecret", None),
         toolset=spec.get("toolSet", None),
         human_validation_tools=human_validation_tools,
     )

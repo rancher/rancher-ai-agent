@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
 from .root import create_root_agent
-from .loader import AuthenticationType, load_agent_configs, AgentConfig
+from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
@@ -117,6 +117,13 @@ async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_c
                 "R_token": token,
                 "R_url": rancher_url
             }
+    elif agent_config.authentication == AuthenticationType.BASIC:
+        mcp_url = agent_config.mcp_url
+        credentials = get_basic_auth_credentials(agent_config.authentication_secret)
+        headers = {
+            "Authorization": f"Basic {credentials}"
+        }
+
     else:
         mcp_url = agent_config.mcp_url
         headers = {}

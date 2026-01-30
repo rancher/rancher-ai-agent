@@ -41,14 +41,9 @@ class BaseAgentBuilder:
         
     def _get_messages_from_last_summary(self, state: AgentState) -> list:
         """
-        Combines the system prompt, the current summary (if any), 
-        and the relevant messages since the last summary.
+        Combines the current summary (if any), and the relevant messages since the last summary.
         """
         messages = []
-
-        # Add system prompt if defined
-        if self.system_prompt.strip():
-            messages.append(SystemMessage(content=self.system_prompt))
 
         summary = state.get("summary", {})
         
@@ -133,7 +128,15 @@ class BaseAgentBuilder:
             A dictionary containing the LLM's response message."""
         
         logging.debug("calling model")
-        messages = self._get_messages_from_last_summary(state)
+
+        base_messages = self._get_messages_from_last_summary(state)
+        
+        # Add the System Prompt - it should be used only for user requests
+        messages = []
+        if self.system_prompt.strip():
+            messages.append(SystemMessage(content=self.system_prompt))
+        
+        messages.extend(base_messages)
 
         response = self._invoke_llm_with_retry(messages, config)
 

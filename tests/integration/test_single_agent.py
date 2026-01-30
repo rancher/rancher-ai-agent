@@ -299,7 +299,6 @@ def test_summary():
         
         # Fifth call - summary generation
         assert fake_llm.all_calls[4] == [
-            SystemMessage(content=RANCHER_AGENT_PROMPT),
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2),

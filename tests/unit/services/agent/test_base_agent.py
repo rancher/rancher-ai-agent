@@ -771,6 +771,48 @@ def test_process_tool_result_handles_doc_links():
         calls = [call for call in mock_dispatch.call_args_list if call[0][0] == "dock_link"]
         assert len(calls) == 1
         assert "https://docs.example.com" in calls[0][0][1]
+        
+@patch("app.services.agent.base.dispatch_custom_event")
+@patch("langgraph.types.interrupt")
+def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt, mock_dispatch):
+    """
+    Verify that handle_interrupt dispatches subagent_choice_event with correct metadata
+    when user approves tool execution.
+    """
+    # Tool requiring human validation
+    validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+    tool_call = {
+        "name": "patchKubernetesResource",
+        "args": {
+            "patch": "[]",
+            "name": "test-pod",
+            "kind": "Pod",
+            "cluster": "local",
+            "namespace": "default"
+        }
+    }
+
+    state = {
+        "selected_agent": {
+            "name": "rancher",
+            "mode": "auto"
+        }
+    }
+
+    mock_interrupt.return_value = "yes"
+
+    should_continue, _ = handle_interrupt(validation_tools, tool_call, state)
+
+    assert should_continue is True
+    
+    # Verify that dispatch_custom_event was called with the correct parameters
+    mock_dispatch.assert_called_once()
+    event_name = mock_dispatch.call_args[0][0]
+    event_payload = mock_dispatch.call_args[0][1]
+    
+    # The payload should contain the agent metadata formatted as expected by build_agent_metadata
+    assert event_name == "subagent_choice_event"
+    assert '<agent-metadata>{"agentName": "rancher", "selectionMode": "auto"}</agent-metadata>' in event_payload
 
 def test_convert_to_string_if_needed_converts_dict():
     """Verify dicts are converted to JSON strings."""

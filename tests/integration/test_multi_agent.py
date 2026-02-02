@@ -261,7 +261,7 @@ def test_single_prompt():
         assert messages == expected_messages_send_to_websocket
         assert len(fake_llm.all_calls) == 2, "Expected 2 LLM calls (routing + child agent)"
         assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt)), HumanMessage(content=fake_prompt)], "First call should be routing call with prompt"
-        assert fake_llm.all_calls[1] == [SystemMessage(content=MATH_AGENT_PROMPT), HumanMessage(content=fake_prompt)], "Second call should be child agent call with prompt"
+        assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt)], "Second call should be child agent call with prompt"
 
     finally:
         LLMManager._instance = None
@@ -309,7 +309,7 @@ def test_multiple_prompts():
         # First routing call (only has the first prompt)
         assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_1)), HumanMessage(content=fake_prompt_1)], "First call should be routing call with prompt"
         # First child agent call
-        assert fake_llm.all_calls[1] == [SystemMessage(content=MATH_AGENT_PROMPT), HumanMessage(content=fake_prompt_1)], "Second call should be child agent call with prompt"
+        assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt_1)], "Second call should be child agent call with prompt"
         # Second routing call (includes conversation history)
         assert fake_llm.all_calls[2] == [
             SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_2)), 
@@ -319,7 +319,7 @@ def test_multiple_prompts():
         ], "Third call should be routing call with conversation history"
         # Second child agent call (also includes conversation history)
         assert fake_llm.all_calls[3] == [
-            SystemMessage(content=CALCULATOR_AGENT_PROMPT), 
+            SystemMessage(content=_build_child_agent_prompt(CALCULATOR_AGENT_PROMPT, MATH_AGENT_NAME)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2)
@@ -371,10 +371,10 @@ def test_delegate_to_child_agent_with_tool():
         # First routing call
         assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt)), HumanMessage(content=fake_prompt)], "First call should be routing call with prompt"
         # First child agent call (requests tool)
-        assert fake_llm.all_calls[1] == [SystemMessage(content=MATH_AGENT_PROMPT), HumanMessage(content=fake_prompt)], "Second call should be child agent call with prompt"
+        assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt)], "Second call should be child agent call with prompt"
         # Second child agent call (after tool execution, includes conversation history with tool result)
         third_call = fake_llm.all_calls[2]
-        assert third_call[0] == SystemMessage(content=MATH_AGENT_PROMPT), "Third call should have math agent system prompt"
+        assert third_call[0] == SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), "Third call should have math agent system prompt"
         assert third_call[1] == HumanMessage(content=fake_prompt), "Third call should have original prompt"
         assert isinstance(third_call[2], AIMessage) and third_call[2].tool_calls[0]["name"] == "add", "Third call should have AI message with add tool call"
         assert isinstance(third_call[3], ToolMessage) and third_call[3].content == "sum is 9", "Third call should have tool result with sum"
@@ -438,7 +438,7 @@ def test_summary():
         assert len(fake_llm.all_calls) == 11, "Expected 11 LLM calls (5 routing + 5 child agent + 1 summary)"
 
         assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_1)), HumanMessage(content=fake_prompt_1)], "First call should be routing call with prompt"
-        assert fake_llm.all_calls[1] == [SystemMessage(content=MATH_AGENT_PROMPT), HumanMessage(content=fake_prompt_1)], "Second call should be child agent call with prompt"
+        assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt_1)], "Second call should be child agent call with prompt"
         assert fake_llm.all_calls[2] == [
             SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_2)), 
             HumanMessage(content=fake_prompt_1),
@@ -446,7 +446,7 @@ def test_summary():
             HumanMessage(content=fake_prompt_2)
         ], "Third call should be routing call with conversation history"
         assert fake_llm.all_calls[3] == [
-            SystemMessage(content=CALCULATOR_AGENT_PROMPT), 
+            SystemMessage(content=_build_child_agent_prompt(CALCULATOR_AGENT_PROMPT, MATH_AGENT_NAME)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2)
@@ -460,7 +460,7 @@ def test_summary():
             HumanMessage(content=fake_prompt_3)
         ], "Fifth call should be routing call with conversation history"
         assert fake_llm.all_calls[5] == [
-            SystemMessage(content=MATH_AGENT_PROMPT), 
+            SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2),
@@ -478,7 +478,7 @@ def test_summary():
             HumanMessage(content=fake_prompt_4)
         ], "Seventh call should be routing call with conversation history"
         assert fake_llm.all_calls[7] == [
-            SystemMessage(content=CALCULATOR_AGENT_PROMPT), 
+            SystemMessage(content=_build_child_agent_prompt(CALCULATOR_AGENT_PROMPT, MATH_AGENT_NAME)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2),
@@ -504,7 +504,7 @@ def test_summary():
             HumanMessage(content=fake_prompt_5)
         ], "Tenth call should be routing call with summary (messages replaced by summary)"
         assert fake_llm.all_calls[10] == [
-            SystemMessage(content=MATH_AGENT_PROMPT),
+            SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)),
             SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
             HumanMessage(content=fake_prompt_5)
         ], "Eleventh call should be child agent call with summary"
@@ -519,7 +519,7 @@ def test_summary():
         # Eleventh call - child agent call (Math Agent)
         # Verify the child agent receives the summary context and uses sliding window
         eleventh_call = fake_llm.all_calls[10]
-        assert eleventh_call[0].content == MATH_AGENT_PROMPT
+        assert eleventh_call[0].content == _build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)
         assert eleventh_call[1].content == f"Conversation summary: {fake_summary_response}"
         assert eleventh_call[2].content == fake_prompt_5
         assert len(eleventh_call) == 3
@@ -537,3 +537,20 @@ def _build_router_prompt(system_router_prompt: str, user_request: str) -> str:
     router_prompt += f"- {CALCULATOR_AGENT_NAME}: Agent that can perform multiplication operations\n"
     router_prompt += f"\nUSER'S REQUEST: {user_request}\n"
     return router_prompt
+
+def _build_child_agent_prompt(base_prompt: str, excluded_agent: str) -> str:
+    """
+    Builds the child agent prompt with recommendations for other available agents.
+    Excludes the currently selected agent from the list.
+    """
+    # Determine which agent to include based on exclusion
+    if excluded_agent == CALCULATOR_AGENT_NAME:
+        other_agent = f"- {CALCULATOR_AGENT_NAME}: Agent that can perform multiplication operations"
+    else:
+        other_agent = f"- {MATH_AGENT_NAME}: Agent that can perform addition operations"
+    
+    return f"""{base_prompt}
+
+You are a highly specialized Assistant. Your primary goal is to provide accurate information within your domain. To maintain accuracy, you must never guess. If a user's request falls outside your expertise, you are required to direct them to the appropriate specialized agent from the following list of available child agents:
+
+{other_agent}"""

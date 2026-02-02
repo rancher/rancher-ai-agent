@@ -50,7 +50,7 @@ class ChildAgentBuilder(BaseAgentBuilder):
         return workflow.compile(checkpointer=self.checkpointer)
 
 
-def create_child_agent(llm: BaseChatModel, tools: list[BaseTool], system_prompt: str, checkpointer: Checkpointer, agent_config: AgentConfig) -> CompiledStateGraph:
+def create_child_agent(llm: BaseChatModel, tools: list[BaseTool], system_prompt: str, checkpointer: Checkpointer, agent_config: AgentConfig, all_children_agents: list[AgentConfig]) -> CompiledStateGraph:
     """
     Creates a LangGraph child agent capable of interacting with Rancher and Kubernetes resources.
     
@@ -63,8 +63,9 @@ def create_child_agent(llm: BaseChatModel, tools: list[BaseTool], system_prompt:
         system_prompt: The initial system-level instructions for the agent.
         checkpointer: The checkpointer for persisting agent state.
         agent_config: Configuration for the agent's behavior and settings.
+        all_children_agents: List of all child agent configurations in the system.
     Returns:
         A compiled LangGraph StateGraph ready to be invoked.
     """
-    builder = ChildAgentBuilder(llm, tools, system_prompt, checkpointer, agent_config)
+    builder = ChildAgentBuilder(llm, tools, system_prompt, checkpointer, agent_config, all_children_agents=all_children_agents)
     return builder.build()

@@ -41,9 +41,9 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     checkpointer = websocket.app.memory_manager.get_checkpointer()
     
     # Load agent configs from CRDs (or create defaults if none exist)
-    builtin_agents = load_agent_configs()
+    agents = load_agent_configs()
     
-    if len(builtin_agents) == 0:
+    if len(agents) == 0:
         logging.error("Failed to load any agent configurations from CRDs")
         raise RuntimeError(
             "No agent configurations available. "
@@ -51,25 +51,25 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
             "or check the Kubernetes API server connection."
         )
 
-    logging.info(f"Loaded {len(builtin_agents)} agent configuration(s)")
+    logging.info(f"Loaded {len(agents)} agent configuration(s)")
     
-    if len(builtin_agents) > 1:
-        logging.info(f"Multi-agent setup detected, creating parent agent with {len(builtin_agents)} agents.")        
+    if len(agents) > 1:
+        logging.info(f"Multi-agent setup detected, creating parent agent with {len(agents)} agents.")        
         async with AsyncExitStack() as stack:
             child_agents = []
-            for agent_cfg in builtin_agents:
+            for agent_cfg in agents:
                 tools = await _create_mcp_tools(stack, websocket, agent_cfg)
                 child_agents.append(ChildAgent(
                     name=agent_cfg.name,
                     description=agent_cfg.description,
-                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
                 ))
             parent_agent = create_parent_agent(llm, child_agents, checkpointer)
 
             yield parent_agent
     else:
         logging.info("Single agent configuration detected")
-        agent_cfg = builtin_agents[0]
+        agent_cfg = agents[0]
         
         async with AsyncExitStack() as stack:
             tools = await _create_mcp_tools(stack, websocket, agent_cfg)

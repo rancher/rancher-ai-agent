@@ -21,7 +21,7 @@ INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 class BaseAgentBuilder:
     """Base class for agent builders with shared logic."""
     
-    def __init__(self, llm: BaseChatModel, tools: list[BaseTool], system_prompt: str, checkpointer: Checkpointer, agent_config: AgentConfig):
+    def __init__(self, llm: BaseChatModel, tools: list[BaseTool], system_prompt: str, checkpointer: Checkpointer, agent_config: AgentConfig, all_children_agents: list[AgentConfig] = []):
         """
         Initializes the BaseAgentBuilder.
 
@@ -30,6 +30,8 @@ class BaseAgentBuilder:
             tools: A list of tools the agent can use.
             system_prompt: The initial system-level instructions for the agent.
             checkpointer: The checkpointer for persisting agent state.
+            agent_config: Configuration for the agent's behavior and settings.
+            all_children_agents: List of all child agent configurations in the system.
         """
         self.llm = llm
         self.tools = tools
@@ -38,6 +40,7 @@ class BaseAgentBuilder:
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         self.tools_by_name = {tool.name: tool for tool in self.tools}
         self.agent_config = agent_config
+        self.all_children_agents = all_children_agents
         
     def _get_messages_from_last_summary(self, state: AgentState) -> list:
         """
@@ -134,7 +137,27 @@ class BaseAgentBuilder:
         # Add the System Prompt - it should be used only for user requests
         messages = []
         if self.system_prompt.strip():
-            messages.append(SystemMessage(content=self.system_prompt))
+            selected_agent = state.get("selected_agent", {})
+            if selected_agent and self.all_children_agents:
+                # Build list of available child agents (excluding the currently selected one)
+                available_children = [
+                    f"- {child.name}: {child.description}"
+                    for child in self.all_children_agents
+                    if child.name != selected_agent.get("name")
+                ]
+                
+                if available_children:
+                    children_description = "\n".join(available_children)
+                    system_prompt_with_children = f"""{self.system_prompt}
+
+You are a highly specialized Assistant. Your primary goal is to provide accurate information within your domain. To maintain accuracy, you must never guess. If a user's request falls outside your expertise, you are required to direct them to the appropriate specialized agent from the following list of available child agents:
+
+{children_description}"""
+                    messages.append(SystemMessage(content=system_prompt_with_children))
+                else:
+                    messages.append(SystemMessage(content=self.system_prompt))
+            else:
+                messages.append(SystemMessage(content=self.system_prompt))
         
         messages.extend(base_messages)
 
@@ -285,9 +308,9 @@ class BaseAgentBuilder:
         return "continue"
 
 
-def build_agent_metadata(agent_name: str, selection_mode: str):
+def build_agent_metadata(agent_name: str, selection_mode: str, extra_metadata : str = "") -> str:
     """Builds a structured agent metadata string for custom events."""
-    return f'<agent-metadata>{{"agentName": "{agent_name}", "selectionMode": "{selection_mode}"}}</agent-metadata>'
+    return f'<agent-metadata>{{"agentName": "{agent_name}", "selectionMode": "{selection_mode}"{extra_metadata}}}</agent-metadata>'
 
 
 def create_confirmation_response(payload: str, type: str, name: str, kind: str, cluster: str, namespace: str):

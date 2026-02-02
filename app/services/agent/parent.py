@@ -50,6 +50,8 @@ class ParentAgentBuilder(BaseAgentBuilder):
     The parent agent uses an LLM to analyze incoming requests and route them to the
     most appropriate child agent using LangGraph's Command primitive for navigation.
     """
+    old_agent_selected: str = ""
+    agent_selected_count: int = 0
     
     def __init__(self, llm: BaseChatModel, child_agents: list[ChildAgent], checkpointer: Checkpointer):
         """
@@ -81,6 +83,8 @@ class ParentAgentBuilder(BaseAgentBuilder):
         # UI override to force a specific child agent
         agent_override = config.get("configurable", {}).get("agent", "")
         if agent_override:
+            self.old_agent_selected = ""
+            self.agent_selected_count = 0
             self.agent_selected = agent_override
 
             dispatch_custom_event(
@@ -116,9 +120,16 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
         self.agent_selected = child_agent
 
+        if child_agent == self.old_agent_selected:
+            self.agent_selected_count += 1
+        else:
+            self.old_agent_selected = child_agent
+            self.agent_selected_count = 1
+
+        recommended_field = f', "recommended": "{child_agent}"' if self.agent_selected_count >= 3 else ""
         dispatch_custom_event(
             "subagent_choice_event",
-            build_agent_metadata(child_agent, "auto"),
+            build_agent_metadata(child_agent, "auto", recommended_field),
         )
 
         # Return Command to navigate to the selected child agent

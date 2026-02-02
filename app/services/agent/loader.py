@@ -220,7 +220,7 @@ def _create_default_ai_agent_config_crds(api: client.CustomObjectsApi):
             "spec": {
                 "displayName": "Fleet",
                 "description": "Manages Fleet resources such as GitRepos and Bundles",
-                "systemPrompt": RANCHER_AGENT_PROMPT,
+                "systemPrompt": "You are an AI assistant specialized in managing Fleet resources such as GitRepos and Bundles.",
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
                 "authenticationType": "RANCHER",
                 "builtIn": True,

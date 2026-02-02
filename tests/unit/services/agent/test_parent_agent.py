@@ -208,6 +208,74 @@ def test_choose_child_agent_dispatches_event(mock_dispatch, mock_llm, mock_child
 
 
 @patch('app.services.agent.parent.dispatch_custom_event')
+def test_choose_child_agent_includes_recommended_after_three_selections(mock_dispatch, mock_llm, mock_child_agents, mock_checkpointer, agent_state, mock_config):
+    """Verify that recommended field is included in agent-metadata after 3 consecutive selections of the same agent."""
+    mock_llm.invoke.return_value = AIMessage(content="Rancher")
+    
+    builder = ParentAgentBuilder(
+        llm=mock_llm,
+        child_agents=mock_child_agents,
+        checkpointer=mock_checkpointer
+    )
+
+    # First selection - should not include recommended
+    builder.choose_child_agent(agent_state, mock_config)
+    event_payload = mock_dispatch.call_args[0][1]
+    assert "recommended" not in event_payload
+    assert builder.agent_selected_count == 1
+
+    # Second selection - should not include recommended
+    mock_dispatch.reset_mock()
+    builder.choose_child_agent(agent_state, mock_config)
+    event_payload = mock_dispatch.call_args[0][1]
+    assert "recommended" not in event_payload
+    assert builder.agent_selected_count == 2
+
+    # Third selection - should include recommended (count >= 3)
+    mock_dispatch.reset_mock()
+    builder.choose_child_agent(agent_state, mock_config)
+    event_payload = mock_dispatch.call_args[0][1]
+    assert '"recommended": "Rancher"' in event_payload
+    assert builder.agent_selected_count == 3
+
+    # Fourth selection - should still include recommended
+    mock_dispatch.reset_mock()
+    builder.choose_child_agent(agent_state, mock_config)
+    event_payload = mock_dispatch.call_args[0][1]
+    assert '"recommended": "Rancher"' in event_payload
+    assert builder.agent_selected_count == 4
+
+
+@patch('app.services.agent.parent.dispatch_custom_event')
+def test_choose_child_agent_resets_count_when_different_agent_selected(mock_dispatch, mock_llm, mock_child_agents, mock_checkpointer, agent_state, mock_config):
+    """Verify that agent_selected_count resets when a different agent is selected."""
+    builder = ParentAgentBuilder(
+        llm=mock_llm,
+        child_agents=mock_child_agents,
+        checkpointer=mock_checkpointer
+    )
+
+    # Select Rancher 3 times to trigger recommended
+    mock_llm.invoke.return_value = AIMessage(content="Rancher")
+    for _ in range(3):
+        builder.choose_child_agent(agent_state, mock_config)
+    
+    assert builder.agent_selected_count == 3
+    event_payload = mock_dispatch.call_args[0][1]
+    assert '"recommended": "Rancher"' in event_payload
+
+    # Now select Fleet - count should reset
+    mock_dispatch.reset_mock()
+    mock_llm.invoke.return_value = AIMessage(content="Fleet")
+    builder.choose_child_agent(agent_state, mock_config)
+    
+    assert builder.agent_selected_count == 1
+    assert builder.old_agent_selected == "Fleet"
+    event_payload = mock_dispatch.call_args[0][1]
+    assert "recommended" not in event_payload
+
+
+@patch('app.services.agent.parent.dispatch_custom_event')
 def test_choose_child_agent_with_conversation_context(mock_dispatch, mock_llm, mock_child_agents, mock_checkpointer, mock_config):
     """Verify that choose_child_agent includes conversation context in routing decision."""
     state_with_history = {

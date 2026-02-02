@@ -141,7 +141,7 @@ class BaseAgentBuilder:
             if selected_agent and self.all_children_agents:
                 # Build list of available child agents (excluding the currently selected one)
                 available_children = [
-                    f"- {child.name}: {child.description}"
+                    f"- {child.name}: {child.description}\n"
                     for child in self.all_children_agents
                     if child.name != selected_agent.get("name")
                 ]

@@ -834,3 +834,174 @@ def test_convert_to_string_if_needed_preserves_primitives():
     assert convert_to_string_if_needed(42) == 42
     assert convert_to_string_if_needed(True) is True
     assert convert_to_string_if_needed(None) is None
+
+# ============================================================================
+# Child Agent Recommendation Tests
+# ============================================================================
+
+def test_call_model_node_adds_recommendation_for_child_agent(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that child agents receive recommendation to sibling agents."""
+    from app.services.agent.loader import AgentConfig, AuthenticationType
+    
+    # Create agent configs for multiple child agents
+    agent_config = AgentConfig(
+        name="math-agent",
+        displayName="Math Agent",
+        description="Handles math operations",
+        system_prompt="You are a math assistant.",
+        mcp_url="http://localhost:8001/mcp",
+        authentication=AuthenticationType.NONE,
+    )
+    
+    calculator_config = AgentConfig(
+        name="calculator-agent",
+        displayName="Calculator Agent",
+        description="Handles calculator operations",
+        system_prompt="You are a calculator assistant.",
+        mcp_url="http://localhost:8002/mcp",
+        authentication=AuthenticationType.NONE,
+    )
+    
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="You are a specialized agent.",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+        all_children_agents=[agent_config, calculator_config]
+    )
+    
+    state = {
+        "messages": [HumanMessage(content="test prompt")],
+        "selected_agent": {"name": "math-agent", "mode": "auto"}
+    }
+    
+    mock_llm.invoke = MagicMock(return_value=AIMessage(content="response"))
+    
+    builder.call_model_node(state, mock_config)
+    
+    # Verify LLM was called with recommendation
+    call_args = mock_llm.invoke.call_args[0][0]
+    system_message = call_args[0]
+    
+    assert isinstance(system_message, SystemMessage)
+    assert "You are a specialized agent." in system_message.content
+    assert "You are a highly specialized Assistant" in system_message.content
+    assert "calculator-agent: Handles calculator operations" in system_message.content
+    assert "math-agent" not in system_message.content  # Current agent excluded from routing options
+
+def test_call_model_node_no_recommendation_without_selected_agent(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that agents without selected_agent don't get recommendation."""
+    from app.services.agent.loader import AgentConfig, AuthenticationType
+    
+    agent_config = AgentConfig(
+        name="root-agent",
+        displayName="Root Agent",
+        description="Main agent",
+        system_prompt="You are a root agent.",
+        mcp_url="http://localhost:8001/mcp",
+        authentication=AuthenticationType.NONE,
+    )
+    
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="You are a specialized agent.",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+        all_children_agents=[agent_config]
+    )
+    
+    state = {
+        "messages": [HumanMessage(content="test prompt")]
+    }
+    
+    mock_llm.invoke = MagicMock(return_value=AIMessage(content="response"))
+    
+    builder.call_model_node(state, mock_config)
+    
+    # Verify LLM was called with basic prompt only
+    call_args = mock_llm.invoke.call_args[0][0]
+    system_message = call_args[0]
+    
+    assert isinstance(system_message, SystemMessage)
+    assert system_message.content == "You are a specialized agent."
+    assert "highly specialized Assistant" not in system_message.content
+
+def test_call_model_node_no_routing_without_children_agents(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that agents without sibling agents don't get routing instructions."""
+    from app.services.agent.loader import AgentConfig, AuthenticationType
+    
+    agent_config = AgentConfig(
+        name="single-agent",
+        displayName="Single Agent",
+        description="Only agent",
+        system_prompt="You are a single agent.",
+        mcp_url="http://localhost:8001/mcp",
+        authentication=AuthenticationType.NONE,
+    )
+    
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="You are a specialized agent.",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+        all_children_agents=[]  # Empty list
+    )
+    
+    state = {
+        "messages": [HumanMessage(content="test prompt")],
+        "selected_agent": {"name": "single-agent", "mode": "auto"}
+    }
+    
+    mock_llm.invoke = MagicMock(return_value=AIMessage(content="response"))
+    
+    builder.call_model_node(state, mock_config)
+    
+    # Verify LLM was called with basic prompt only
+    call_args = mock_llm.invoke.call_args[0][0]
+    system_message = call_args[0]
+    
+    assert isinstance(system_message, SystemMessage)
+    assert system_message.content == "You are a specialized agent."
+    assert "highly specialized Assistant" not in system_message.content
+
+def test_call_model_node_no_routing_when_only_one_sibling(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that when a child agent has no other siblings (only itself in list), no routing instructions are added."""
+    from app.services.agent.loader import AgentConfig, AuthenticationType
+    
+    agent_config = AgentConfig(
+        name="only-agent",
+        displayName="Only Agent",
+        description="The only agent in the list",
+        system_prompt="You are the only agent.",
+        mcp_url="http://localhost:8001/mcp",
+        authentication=AuthenticationType.NONE,
+    )
+    
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="You are a specialized agent.",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+        all_children_agents=[agent_config]  # Only contains itself
+    )
+    
+    state = {
+        "messages": [HumanMessage(content="test prompt")],
+        "selected_agent": {"name": "only-agent", "mode": "auto"}
+    }
+    
+    mock_llm.invoke = MagicMock(return_value=AIMessage(content="response"))
+    
+    builder.call_model_node(state, mock_config)
+    
+    # Verify LLM was called with basic prompt only (no routing since no other agents available)
+    call_args = mock_llm.invoke.call_args[0][0]
+    system_message = call_args[0]
+    
+    assert isinstance(system_message, SystemMessage)
+    assert system_message.content == "You are a specialized agent."
+    assert "highly specialized Assistant" not in system_message.content

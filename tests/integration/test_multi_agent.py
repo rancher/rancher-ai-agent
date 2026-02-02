@@ -545,9 +545,9 @@ def _build_child_agent_prompt(base_prompt: str, excluded_agent: str) -> str:
     """
     # Determine which agent to include based on exclusion
     if excluded_agent == CALCULATOR_AGENT_NAME:
-        other_agent = f"- {CALCULATOR_AGENT_NAME}: Agent that can perform multiplication operations"
+        other_agent = f"- {CALCULATOR_AGENT_NAME}: Agent that can perform multiplication operations\n"
     else:
-        other_agent = f"- {MATH_AGENT_NAME}: Agent that can perform addition operations"
+        other_agent = f"- {MATH_AGENT_NAME}: Agent that can perform addition operations\n"
     
     return f"""{base_prompt}
 

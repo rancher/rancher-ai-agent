@@ -1,6 +1,6 @@
 import pytest
 
-from app.routers.websocket import websocket_endpoint
+from app.routers.websocketbk import websocket_endpoint
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from fastapi import WebSocketDisconnect
 from contextlib import asynccontextmanager

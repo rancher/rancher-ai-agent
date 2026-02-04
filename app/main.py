@@ -5,9 +5,10 @@ import certifi
 from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
 
+
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
-from .routers import chat, websocket, ui
+from .routers import chat, ui, oauth2, websocket
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -68,6 +69,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.include_router(websocket.router)
 app.include_router(chat.router)
+app.include_router(oauth2.router)
 
 if os.environ.get("ENABLE_TEST_UI", "").lower() == "true":
     app.include_router(ui.router)

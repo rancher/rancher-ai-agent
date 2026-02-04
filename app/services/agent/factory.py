@@ -5,6 +5,8 @@ import json
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass
 
+from httpx import HTTPStatusError
+
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials
 from .child import create_child_agent
@@ -18,7 +20,7 @@ from langchain_core.language_models.llms import BaseLanguageModel
 
 
 @asynccontextmanager
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
+async def create_agent(llm: BaseLanguageModel, websocket: WebSocket, access_token: str):
     """
     Create and configure an agent based on the available builtin agents.
     
@@ -58,7 +60,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         async with AsyncExitStack() as stack:
             child_agents = []
             for agent_cfg in builtin_agents:
-                tools = await _create_mcp_tools(stack, websocket, agent_cfg)
+                tools = await _create_mcp_tools(stack, websocket, agent_cfg, access_token)
                 child_agents.append(ChildAgent(
                     name=agent_cfg.name,
                     description=agent_cfg.description,
@@ -70,15 +72,18 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     else:
         logging.info("Single agent configuration detected")
         agent_cfg = builtin_agents[0]
-        
         async with AsyncExitStack() as stack:
-            tools = await _create_mcp_tools(stack, websocket, agent_cfg)
+        
+            tools = await _create_mcp_tools(stack, websocket, agent_cfg, access_token)
+        
             agent = create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
             
             yield agent
 
 
-async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:    
+
+
+async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig, access_token: str) -> list:    
     """
     Create and configure MCP (Model Context Protocol) tools for an agent.
     
@@ -113,8 +118,9 @@ async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_c
             mcp_url = "http://" + mcp_url
         else:
             mcp_url = "https://" + mcp_url
+
         headers={
-                "R_token": token,
+                "Authorization": "Bearer " + access_token,
                 "R_url": rancher_url
             }
     elif agent_config.authentication == AuthenticationType.BASIC:
@@ -128,14 +134,14 @@ async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_c
         mcp_url = agent_config.mcp_url
         headers = {}
 
-    read, write, _ = await stack.enter_async_context(
-        streamablehttp_client(
-            url=mcp_url,
-            headers=headers
-        )
-    )
-    
     try:
+        read, write, _ = await stack.enter_async_context(
+            streamablehttp_client(
+                url=mcp_url,
+                headers=headers
+            )
+        )
+        
         session = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         tools = await load_mcp_tools(session)
@@ -148,7 +154,7 @@ async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_c
             ]
             logging.info(f"Filtered {len(tools)} tools for toolset '{agent_config.toolset}'")
 
-    except Exception as e: #TODO not catching exception here!!!
+    except Exception as e:
         logging.error(f"Failed to connect to MCP server at {mcp_url}: {e}")
         logging.warning(f"Agent '{agent_config.name}' will run without MCP tools")
         tools = []

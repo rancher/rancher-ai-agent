@@ -3,6 +3,8 @@ import uuid
 import logging
 import json
 
+from httpx import HTTPStatusError
+
 from ..dependencies import get_llm
 from ..services.agent.factory import create_agent
 from dataclasses import dataclass
@@ -16,7 +18,9 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id
+from ..services.oauth2 import OAuthClient
 from ..dependencies import get_llm
+from .oauth2 import oauth_state_store
 
 router = APIRouter()
 
@@ -39,6 +43,7 @@ class WebSocketRequest:
     tags: list[str] = None
     agent: str = ""
 
+
 @router.websocket("/v1/ws/messages")
 @router.websocket("/v1/ws/messages/{thread_id}")
 async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: BaseLanguageModel = Depends(get_llm)):
@@ -60,46 +65,90 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     
     await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}"}}</chat-metadata>')
 
-    async with create_agent(llm=llm, websocket=websocket) as agent:
-        base_config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "user_id": user_id,
-            },
-        }
+    oauth_client = OAuthClient(client_id="client-f7scct59zg", client_secret="secret-c7jtfpjflwqfhn2nch4dfbtnn7pvwsxktxjccqcjw5pvms64t7ltf7qv", metadata_url="https://raul-cabello.ngrok.app/oidc/.well-known/openid-configuration")
+    auth_endpoint = "https://raul-cabello.ngrok.app/oidc/authorize"
+    redirect_uri = "http://localhost:8000/oauth/callback"
+    
+    # Generate URL and the secret verifier
+    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
+    
+    # Store the verifier and oauth_client for later use in the callback
+    oauth_state_store[state] = {
+        "verifier": verifier,
+        "oauth_client": oauth_client
+    }
+    await websocket.send_text(f'<authentication>{{"type": "oauth2", "url": "{str(url)}"}}</authentication>')
+    request = await websocket.receive_text() #TODO change format
 
-        if os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_HOST"):
-            langfuse_handler = CallbackHandler()
-            base_config["callbacks"] = [langfuse_handler]
+    await _handle_agent_session(llm, websocket, thread_id, user_id, access_token=request)
 
-        while True:
-            try:
-                request = await websocket.receive_text()
-                request_id = str(uuid.uuid4())
+async def _handle_agent_session(
+    llm: BaseLanguageModel,
+    websocket: WebSocket,
+    thread_id: str,
+    user_id: str,
+    access_token: str,
+) -> None:
+    """
+    Handles the agent session lifecycle and message processing loop.
+    
+    Creates an agent, configures it with the given parameters, and processes
+    incoming WebSocket messages in a loop until disconnection or error.
+    
+    Args:
+        llm: The language model to use for the agent.
+        websocket: The WebSocket connection for communication.
+        thread_id: Unique identifier for the conversation thread.
+        user_id: The authenticated user's ID.
+        access_token: The access token for authentication.
+    """
+    try:
+        async with create_agent(llm=llm, websocket=websocket, access_token=access_token) as agent:
+            base_config = {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "user_id": user_id,
+                    "access_token": access_token,
+                },
+            }
 
-                ws_request = _parse_websocket_request(request)
-                config = _build_config(base_config, request_id, ws_request)
-                input_data = await _build_input_data(agent, config, ws_request)
+            if os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_HOST"):
+                langfuse_handler = CallbackHandler()
+                base_config["callbacks"] = [langfuse_handler]
 
-                await _call_agent(
-                    agent=agent,
-                    input_data=input_data,
-                    config=config,
-                    websocket=websocket)
-                
-            except WebSocketDisconnect:
-                logging.info(f"Client {websocket.client.host} disconnected.")
+            while True:
+                try:
+                    request = await websocket.receive_text()
+                    request_id = str(uuid.uuid4())
 
-                break
-            except Exception as e:
-                logging.error(f"An error occurred: {e}", exc_info=True)
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_text(f'<error>{{"message": "{str(e)}"}}</error>')
-                else:
+                    ws_request = _parse_websocket_request(request)
+                    config = _build_config(base_config, request_id, ws_request)
+                    input_data = await _build_input_data(agent, config, ws_request)
+        
+                    await _call_agent(
+                        agent=agent,
+                        input_data=input_data,
+                        config=config,
+                        websocket=websocket) 
+                    
+                except WebSocketDisconnect:
+                    logging.info(f"Client {websocket.client.host} disconnected.")
                     break
-            finally:
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_text("</message>")
+                except Exception as e:
+                    logging.error(f"An error occurred: {e}", exc_info=True)
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_text(f'<error>{{"message": "{str(e)}"}}</error>')
+                    else:
+                        break
+                finally:
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_text("</message>")
+    except* HTTPStatusError as eg:
+        for e in eg.exceptions:
+            logging.error(f"MCP auth failed: {e}")
+            if hasattr(e, 'response') and e.response.status_code == 401:
+                logging.info("Received 401, retrying agent session...")
+                #TODO: Implement retry logic or notify client appropriately
 
 async def _call_agent(
     agent: CompiledStateGraph,

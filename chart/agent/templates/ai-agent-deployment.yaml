@@ -172,6 +172,21 @@ spec:
             value: "{{ .Values.llmMock.url }}"
         ports:
          - containerPort: 8000
+        startupProbe:
+          httpGet:
+            path: /v1/api/readiness
+            port: 8000
+          {{ toYaml .Values.probes.startup | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /v1/api/health
+            port: 8000
+          {{ toYaml .Values.probes.liveness | nindent 10 }}
+        readinessProbe:
+          httpGet:
+            path: /v1/api/readiness
+            port: 8000
+          {{ toYaml .Values.probes.readiness | nindent 10 }}
         {{- if or (not .Values.insecureSkipTls) .Values.rag.pvc }}
         volumeMounts:
         {{- if not .Values.insecureSkipTls }}

@@ -7,7 +7,7 @@ from fastapi.concurrency import asynccontextmanager
 
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
-from .routers import chat, websocket, ui
+from .routers import agent, chat, websocket, ui
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -58,7 +58,10 @@ async def lifespan(app: FastAPI):
         logging.info(f"Startup: {len(configs)} AIAgentConfig CRDs in the cluster.")
 
         app.memory_manager = await create_memory_manager()
+
+        app.state.ready = True
     except ValueError as e:
+        app.state.ready = False
         logging.critical(e)
         raise e
     yield
@@ -67,6 +70,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(websocket.router)
+app.include_router(agent.router)
 app.include_router(chat.router)
 
 if os.environ.get("ENABLE_TEST_UI", "").lower() == "true":

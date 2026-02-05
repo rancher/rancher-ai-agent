@@ -35,6 +35,21 @@ langfuseHost:
 storage:
   enabled: false
   connectionString: ""
+probes:
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 2
+    failureThreshold: 10
+  liveness:
+    initialDelaySeconds: 0
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 2
 insecureSkipTls: false
 llmMock:
   enabled: false

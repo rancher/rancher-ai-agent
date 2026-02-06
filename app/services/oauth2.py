@@ -46,3 +46,11 @@ class OAuthClient:
             code_verifier=verifier  # Crucial for PKCE
         )
         return token
+    
+    async def refresh_token(self, token_endpoint, refresh_token):
+        """Refresh the access token using a refresh token."""
+        token = await self.client.refresh_token(
+            token_endpoint,
+            refresh_token=refresh_token
+        )
+        return token

@@ -47,7 +47,7 @@ async def get(request: Request):
         )
         
         access_token = token["access_token"]
-        
+        # setTimeout(() => window.close(), 500);
         # Return HTML that sends token to parent and closes popup
         html_content = f"""
         <!DOCTYPE html>
@@ -61,10 +61,11 @@ async def get(request: Request):
                 if (window.opener) {{
                     window.opener.postMessage({{
                         type: 'oauth_success',
-                        access_token: '{access_token}'
+                        access_token: '{access_token}',
+                        refresh_token: '{token.get("refresh_token", "")}',
                     }}, '*');
                     // Close the popup after a short delay
-                    setTimeout(() => window.close(), 500);
+                    window.close()
                 }} else {{
                     document.body.innerHTML = '<h2>Authentication Successful!</h2><p>You can close this window now.</p>';
                 }}

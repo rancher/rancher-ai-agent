@@ -24,6 +24,12 @@ from .oauth2 import oauth_state_store
 
 router = APIRouter()
 
+#TODO move this
+oauth_client = OAuthClient(client_id="client-fp76fxsc8q", client_secret="secret-rj2xsf9t65d4bdfzl7krdbpjlvtl78c4g2kgc4lr9gp245g4pblm8d84", metadata_url="https://raul-cabello.ngrok.app/oidc/.well-known/openid-configuration")
+auth_endpoint = "https://raul-cabello.ngrok.app/oidc/authorize"
+token_endpoint = "https://raul-cabello.ngrok.app/oidc/token"
+redirect_uri = "http://localhost:8000/oauth/callback"
+
 async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     """
     Retrieves the user ID from the Rancher API using the session token from the WebSocket cookies.
@@ -33,6 +39,33 @@ async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
 
     return await get_user_id(rancher_url, token)
+
+async def _perform_oauth_authentication(websocket: WebSocket) -> tuple[str, str]:
+    """
+    Performs OAuth authentication flow with the client.
+    
+    Generates an OAuth URL, sends it to the client, and waits for the access and refresh tokens.
+    
+    Args:
+        websocket: The WebSocket connection for communication.
+        
+    Returns:
+        A tuple of (access_token, refresh_token) received from the client.
+    """
+    # Generate URL and the secret verifier
+    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
+    
+    # Store the verifier and oauth_client for later use in the callback
+    # TODO - This is a temporary in-memory store. This needs to be improved!
+    oauth_state_store[state] = {
+        "verifier": verifier,
+        "oauth_client": oauth_client
+    }
+    await websocket.send_text(f'<authentication>{{"type": "oauth2", "url": "{str(url)}"}}</authentication>')
+    token_response = await websocket.receive_text()
+    token_data = json.loads(token_response)
+    
+    return token_data["access_token"], token_data["refresh_token"]
 
 @dataclass
 class WebSocketRequest:
@@ -65,22 +98,8 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     
     await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}"}}</chat-metadata>')
 
-    oauth_client = OAuthClient(client_id="client-f7scct59zg", client_secret="secret-c7jtfpjflwqfhn2nch4dfbtnn7pvwsxktxjccqcjw5pvms64t7ltf7qv", metadata_url="https://raul-cabello.ngrok.app/oidc/.well-known/openid-configuration")
-    auth_endpoint = "https://raul-cabello.ngrok.app/oidc/authorize"
-    redirect_uri = "http://localhost:8000/oauth/callback"
-    
-    # Generate URL and the secret verifier
-    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
-    
-    # Store the verifier and oauth_client for later use in the callback
-    oauth_state_store[state] = {
-        "verifier": verifier,
-        "oauth_client": oauth_client
-    }
-    await websocket.send_text(f'<authentication>{{"type": "oauth2", "url": "{str(url)}"}}</authentication>')
-    request = await websocket.receive_text() #TODO change format
-
-    await _handle_agent_session(llm, websocket, thread_id, user_id, access_token=request)
+    access_token, refresh_token = await _perform_oauth_authentication(websocket)
+    await _handle_agent_session(llm, websocket, thread_id, user_id, access_token=access_token, refresh_token=refresh_token)
 
 async def _handle_agent_session(
     llm: BaseLanguageModel,
@@ -88,6 +107,9 @@ async def _handle_agent_session(
     thread_id: str,
     user_id: str,
     access_token: str,
+    refresh_token: str = None,
+    request_id: str = None,
+    initial_request: str = None
 ) -> None:
     """
     Handles the agent session lifecycle and message processing loop.
@@ -101,6 +123,7 @@ async def _handle_agent_session(
         thread_id: Unique identifier for the conversation thread.
         user_id: The authenticated user's ID.
         access_token: The access token for authentication.
+        refresh_token: The refresh token for authentication.
     """
     try:
         async with create_agent(llm=llm, websocket=websocket, access_token=access_token) as agent:
@@ -116,15 +139,21 @@ async def _handle_agent_session(
                 langfuse_handler = CallbackHandler()
                 base_config["callbacks"] = [langfuse_handler]
 
+            needs_reauth = False
+
             while True:
                 try:
-                    request = await websocket.receive_text()
-                    request_id = str(uuid.uuid4())
+                    if not initial_request:
+                        request = await websocket.receive_text()
+                        request_id = str(uuid.uuid4())
+                    else:
+                        request = initial_request
+                        initial_request = None
 
                     ws_request = _parse_websocket_request(request)
                     config = _build_config(base_config, request_id, ws_request)
                     input_data = await _build_input_data(agent, config, ws_request)
-        
+
                     await _call_agent(
                         agent=agent,
                         input_data=input_data,
@@ -134,6 +163,13 @@ async def _handle_agent_session(
                 except WebSocketDisconnect:
                     logging.info(f"Client {websocket.client.host} disconnected.")
                     break
+
+                except HTTPStatusError as e:
+                    logging.error(f"HTTP auth error: {e}")
+                    if e.response.status_code == 401:
+                        needs_reauth = True
+                        break
+                
                 except Exception as e:
                     logging.error(f"An error occurred: {e}", exc_info=True)
                     if websocket.client_state == WebSocketState.CONNECTED:
@@ -147,8 +183,30 @@ async def _handle_agent_session(
         for e in eg.exceptions:
             logging.error(f"MCP auth failed: {e}")
             if hasattr(e, 'response') and e.response.status_code == 401:
-                logging.info("Received 401, retrying agent session...")
-                #TODO: Implement retry logic or notify client appropriately
+                logging.info("ERROR! Received 401, retrying agent session...")
+                needs_reauth = True
+                
+    finally:
+        if needs_reauth:
+            try:
+                token = await oauth_client.refresh_token(token_endpoint=token_endpoint, refresh_token=refresh_token)
+                logging.info("Successfully refreshed access token, resuming agent session...")
+                access_token = token["access_token"]
+                refresh_token = token.get("refresh_token", refresh_token)
+            except Exception as e: #TODO
+                logging.error(f"Failed to refresh token: {e}")
+                access_token, refresh_token = await _perform_oauth_authentication(websocket)
+
+            await _handle_agent_session(
+                llm=llm,
+                websocket=websocket,
+                thread_id=thread_id,
+                user_id=user_id,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                request_id=request_id,
+                initial_request=request) 
+
 
 async def _call_agent(
     agent: CompiledStateGraph,

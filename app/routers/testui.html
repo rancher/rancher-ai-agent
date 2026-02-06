@@ -36,7 +36,7 @@
                     const messages = document.getElementById('messages');
                     
                     // Send the access token via websocket
-                    ws.send(event.data.access_token);
+                    ws.send('{"access_token": "' + event.data.access_token + '", "refresh_token": "' + event.data.refresh_token + '"}');
                     
                     // Update UI to show authentication completed
                     const successLi = document.createElement('li');
@@ -65,8 +65,8 @@
                         const authInfo = JSON.parse(authData);
                         if (authInfo.type === "oauth2" && authInfo.url) {
                             // Open OAuth popup
-                            const width = 600;
-                            const height = 700;
+                            const width = 800;
+                            const height = 900;
                             const left = (screen.width - width) / 2;
                             const top = (screen.height - height) / 2;
                             const popup = window.open(

@@ -4,6 +4,7 @@ Base agent builder with shared logic for all agent types.
 
 import json
 import logging
+from httpx import HTTPStatusError
 import langgraph.types
 
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
@@ -190,7 +191,9 @@ class BaseAgentBuilder:
             
             try:
                 logging.debug("calling tool")
+                
                 tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"])
+                
                 logging.debug("tool call finished")
 
                 processed_result, mcp_response = process_tool_result(tool_result, state)
@@ -207,6 +210,10 @@ class BaseAgentBuilder:
                     )
                 )
             except ToolException as e:
+                if "Unauthorized" in str(e): #todo check not enough permissions vs expired token
+                    logging.warning(f"!!!!!!!!!Received Unauthorized error from tool {tool_call['name']}, likely due to expired token. Prompting re-authentication.")
+                    raise HTTPStatusError("Unauthorized", request=None, response=type('obj', (object,), {'status_code': 401})())
+
                 return {
                     "messages": [ToolMessage(
                         content=str(e),

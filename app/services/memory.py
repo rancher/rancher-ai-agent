@@ -114,7 +114,7 @@ class MemoryManager:
                 user_input = request_metadata.get("user_input", "")
                 
                 # Use content of first User message as default chat name
-                name = user_input[:50] if user_input else "Untitled Chat"
+                name = user_input if user_input else "Untitled Chat"
 
         return {
             "name": name,

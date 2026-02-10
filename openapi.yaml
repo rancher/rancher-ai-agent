@@ -349,6 +349,11 @@ components:
               description: Additional context data as JSON object
             - type: string
               description: Empty string for agent messages
+        labels:
+          type: object
+          nullable: true
+          description: Labels as JSON object with key-value pairs, null for agent messages
+          example: '{"summary": "Chat summary"}'
         tags:
           oneOf:
             - type: string
@@ -371,6 +376,7 @@ components:
         role: user
         message: Chat 1 - Message 1
         context: "{}"
+        labels: '{"summary": "Chat summary"}'
         tags: "[]"
         createdAt: 1767638974
 

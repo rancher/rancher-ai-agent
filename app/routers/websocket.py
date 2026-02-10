@@ -37,6 +37,7 @@ class WebSocketRequest:
     user_input: str
     context: dict
     tags: list[str] = None
+    labels: dict = None
     agent: str = ""
 
 @router.websocket("/v1/ws/messages")
@@ -254,10 +255,11 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
             user_input=user_input,
             context=context,
             tags=json_request.get("tags", []),
+            labels=json_request.get("labels", {}),
             agent=json_request.get("agent", "")
         )
     except json.JSONDecodeError:
-        return WebSocketRequest(prompt=request, user_input="", context={}, tags=[], agent="")
+        return WebSocketRequest(prompt=request, user_input="", context={}, tags=[], labels={}, agent="")
 
 def _build_config(base_config: dict, request_id: str, ws_request: WebSocketRequest) -> dict:
     """
@@ -286,6 +288,7 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
         "agent": ws_request.agent,
         "user_input": ws_request.user_input,
         "context": ws_request.context,
+        "labels": ws_request.labels,
         "tags": ws_request.tags
     }
 

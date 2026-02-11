@@ -53,7 +53,7 @@ def get_llm() -> BaseLanguageModel:
 
     model = get_llm_model(active)
     
-    llm_mock_enabled = os.environ.get("LLM_MOCK_ENABLED", False)
+    llm_mock_enabled = os.environ.get("LLM_MOCK_ENABLED", "false").lower() == "true"
     llm_mock_url = os.environ.get("LLM_MOCK_URL", "")
     if active and llm_mock_enabled:
         logging.info(f"Connecting to LLM Mock server at {llm_mock_url}")

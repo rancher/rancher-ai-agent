@@ -42,3 +42,32 @@ def test_get_llm_invalid_active_model():
     with patch.dict(os.environ, {"MODEL": "some-model", "ACTIVE_LLM": "invalid-llm"}, clear=True):
         with pytest.raises(ValueError, match="Unsupported Active LLM specified."):
             get_llm()
+
+@patch('app.services.llm.ChatOllama')
+def test_get_llm_with_mock(mock_chat_ollama):
+    """Test that mock URL is used when LLM_MOCK_ENABLED is true"""
+    with patch.dict(os.environ, {
+        "MODEL": "test-model",
+        "ACTIVE_LLM": "ollama",
+        "OLLAMA_URL": "http://localhost:11434",
+        "LLM_MOCK_ENABLED": "true",
+        "LLM_MOCK_URL": "http://mock-server:8000"
+    }, clear=True):
+        llm = get_llm()
+        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://mock-server:8000")
+        assert llm == mock_chat_ollama.return_value
+
+@patch('app.services.llm.ChatOllama')
+def test_get_llm_without_mock(mock_chat_ollama):
+    """Test that original URL is used when LLM_MOCK_ENABLED is false"""
+    with patch.dict(os.environ, {
+        "MODEL": "test-model",
+        "ACTIVE_LLM": "ollama",
+        "OLLAMA_URL": "http://localhost:11434",
+        "LLM_MOCK_ENABLED": "false",
+        "LLM_MOCK_URL": "http://mock-server:8000"
+    }, clear=True):
+        llm = get_llm()
+        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434")
+        assert llm == mock_chat_ollama.return_value
+

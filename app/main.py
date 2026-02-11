@@ -1,13 +1,15 @@
+import asyncio
 import logging
 import os
 import certifi
+import kopf
 
 from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
-
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .routers import agent, chat, websocket, ui
+from .controllers import ai_agent_config  # Import to register kopf handlers
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -60,12 +62,26 @@ async def lifespan(app: FastAPI):
         app.memory_manager = await create_memory_manager()
 
         app.state.ready = True
+                
+        # Run kopf as a background task
+        kopf_task = asyncio.create_task(kopf.operator())
+
     except ValueError as e:
         app.state.ready = False
         logging.critical(e)
         raise e
+    
     yield
+
     await app.memory_manager.destroy()
+    
+    # Cancel the kopf task on shutdown
+    if kopf_task:
+        kopf_task.cancel()
+        try:
+            await kopf_task
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(lifespan=lifespan)
 

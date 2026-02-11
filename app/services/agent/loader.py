@@ -102,6 +102,7 @@ class AgentConfig(BaseModel):
     authentication_secret: Optional[str] = None
     toolset: Optional[str] = None
     human_validation_tools: list[HumanValidationTool] = []
+    ready: bool = False
 
 
 def _init_k8s_client():
@@ -161,6 +162,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
     """Convert CRD object to AgentConfig."""
     metadata = crd_obj.get("metadata", {})
     spec = crd_obj.get("spec", {})
+    status = crd_obj.get("status", {})
     
     # Convert human validation tools
     human_validation_tools = []
@@ -182,6 +184,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         authentication_secret=spec.get("authenticationSecret", None),
         toolset=spec.get("toolSet", None),
         human_validation_tools=human_validation_tools,
+        ready=status.get("phase", "Failed") == "Ready"
     )
 
 
@@ -224,7 +227,7 @@ def _create_default_ai_agent_config_crds(api: client.CustomObjectsApi):
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
                 "authenticationType": "RANCHER",
                 "builtIn": True,
-                "enabled": True,
+                "enabled": False,
                 "toolSet": "fleet",
             }
         }

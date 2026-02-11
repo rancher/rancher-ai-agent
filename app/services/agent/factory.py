@@ -1,7 +1,8 @@
 import os
 import logging
+from datetime import datetime, timezone
 
-
+from kubernetes import client, config
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials
 from .child import create_child_agent
@@ -11,9 +12,12 @@ from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph.state import Checkpointer
 
+NAMESPACE = "cattle-ai-agent-system"
+
 class NoAgentAvailableError(Exception):
     """Exception raised when loading MCP tools fails."""
     pass
+
 
 async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     """
@@ -50,6 +54,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         logging.info(f"Multi-agent setup detected, creating parent agent with {len(agents)} agents.")  
         child_agents = []
         agents_metadata = []
+
         for agent_cfg in agents:
             mcp_url, header = get_mcp_url_and_headers(agent_cfg, websocket)
             client = MultiServerMCPClient({
@@ -67,6 +72,8 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                     description=agent_cfg.description,
                     agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
                 ))
+                
+                _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
 
                 agents_metadata.append({
                     "name": agent_cfg.name,
@@ -77,6 +84,8 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                 for e in eg.exceptions:
                     error_message += f"{str(e)} "
                 logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}")
+                
+                _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
 
                 agents_metadata.append({
                     "name": agent_cfg.name,
@@ -84,11 +93,11 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                     "description": f"{error_message}"
                 })
 
+
         if len(child_agents) == 0:
             logging.error("Failed to create any child agents due to MCP connection issues")
-            raise NoAgentAvailableError(
-                "No agents could be created. Please check the MCP server connections and configurations for each agent."
-            )
+            raise NoAgentAvailableError("No agents could be created. Please check the MCP server connections and configurations for each agent.")
+        
         if len(child_agents) == 1:
             logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
             return await _create_single_agent(llm, agents[0], checkpointer, websocket)
@@ -99,7 +108,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     else:
         return await _create_single_agent(llm, agents[0], checkpointer, websocket)
 
-def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket) -> tuple[str, dict]:
+def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | None = None) -> tuple[str, dict]:
     """
     Determine the MCP URL and headers for authentication based on the agent configuration.
     
@@ -108,7 +117,8 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket) -> 
     
     Args:
         agent_config: The configuration object for the agent, containing authentication details.
-        websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
+        websocket: Optional WebSocket connection used to extract cookies and URL information for Rancher authentication.
+                   If not provided, falls back to environment variables only.
     
     Returns:
         tuple: A tuple containing the MCP URL (str) and a dictionary of headers for authentication.
@@ -120,9 +130,14 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket) -> 
         - For NONE authentication, returns the MCP URL with no additional headers
     """
     if agent_config.authentication == AuthenticationType.RANCHER:
-        cookies = websocket.cookies
-        rancher_url = os.environ.get("RANCHER_URL","https://"+websocket.url.hostname)
-        token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
+        if websocket:
+            cookies = websocket.cookies
+            rancher_url = os.environ.get("RANCHER_URL", "https://" + websocket.url.hostname)
+            token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
+        else:
+            rancher_url = os.environ.get("RANCHER_URL", "")
+            token = os.environ.get("RANCHER_API_TOKEN", "")
+        
         mcp_url = os.environ.get("MCP_URL", agent_config.mcp_url)
         if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == "true":
             mcp_url = "http://" + mcp_url
@@ -169,12 +184,16 @@ async def _create_single_agent(llm: BaseLanguageModel, agent_cfg: AgentConfig, c
     })      
     try:
         tools = await client.get_tools()
+        _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
     
     except* Exception as eg:
         error_message = ""
         for e in eg.exceptions:
             error_message += f"{str(e)} "
         logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}")
+        
+        _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
+        
         raise NoAgentAvailableError(
             f"Failed to load MCP tools for agent '{agent_cfg.name}'. Please check the MCP server connection and configuration. Error details: {error_message}"
         )
@@ -183,3 +202,50 @@ async def _create_single_agent(llm: BaseLanguageModel, agent_cfg: AgentConfig, c
             "name": agent_cfg.name,
             "status": "active",
         }]
+
+def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
+    """
+    Update the status of an AIAgentConfig CRD in Kubernetes.
+    
+    Args:
+        agent_cfg: The agent configuration object
+        is_ready: Whether the agent is ready
+        reason: Short reason for the status
+        message: Detailed message about the status
+    """
+    # Only update if status has changed
+    if agent_cfg.ready == is_ready:
+        return
+    
+    try:
+        # Load in-cluster config (works when running in a pod)
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            # Fall back to kubeconfig (for local development)
+            config.load_kube_config()
+        
+        api = client.CustomObjectsApi()
+        
+        status = {
+            'conditions': [{
+                'type': 'Ready',
+                'status': 'True' if is_ready else 'False',
+                'reason': reason,
+                'message': message,
+                'lastTransitionTime': datetime.now(timezone.utc).isoformat()
+            }],
+            'phase': 'Ready' if is_ready else 'Failed'
+        }
+        
+        api.patch_namespaced_custom_object_status(
+            group='ai.cattle.io',
+            version='v1alpha1',
+            namespace=NAMESPACE,
+            plural='aiagentconfigs',
+            name=agent_cfg.name,
+            body={'status': status}
+        )
+        logging.info(f"Updated status for AIAgentConfig '{agent_cfg.name}' to {status['phase']}")
+    except Exception as e:
+        logging.error(f"Failed to update status for AIAgentConfig '{agent_cfg.name}': {str(e)}")

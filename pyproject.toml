@@ -26,6 +26,8 @@ dependencies = [
     "fastmcp>=2.13.1",
     "langchain-aws>=1.1.0",
     "psycopg[binary,pool]>=3.3.2",
+    "kopf>=1.42.5",
+    "httpx>=0.28.2",
 ]
 
 [dependency-groups]

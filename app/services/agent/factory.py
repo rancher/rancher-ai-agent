@@ -1,23 +1,20 @@
 import os
 import logging
-import json
 
-from contextlib import asynccontextmanager, AsyncExitStack
-from dataclasses import dataclass
 
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
-from ..rag import fleet_documentation_retriever, rancher_documentation_retriever
 from fastapi import  WebSocket
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
-from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.language_models.llms import BaseLanguageModel
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.graph.state import Checkpointer
 
+class NoAgentAvailableError(Exception):
+    """Exception raised when loading MCP tools fails."""
+    pass
 
-@asynccontextmanager
 async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     """
     Create and configure an agent based on the available builtin agents.
@@ -30,7 +27,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         llm: The language model to use for agent reasoning and responses.
         websocket: WebSocket connection used to extract authentication cookies and URL info.
     
-    Yields:
+    Returns:
         CompiledStateGraph: Either a parent agent managing multiple child agents,
             or a single child agent for the Rancher Core Agent.
     
@@ -45,65 +42,83 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     
     if len(agents) == 0:
         logging.error("Failed to load any agent configurations from CRDs")
-        raise RuntimeError(
-            "No agent configurations available. "
-            "Please ensure AIAgentConfig CRDs are properly installed in the cattle-ai-agent-system namespace "
-            "or check the Kubernetes API server connection."
-        )
+        raise NoAgentAvailableError("No agent configurations available. ")
 
     logging.info(f"Loaded {len(agents)} agent configuration(s)")
     
     if len(agents) > 1:
-        logging.info(f"Multi-agent setup detected, creating parent agent with {len(agents)} agents.")        
-        async with AsyncExitStack() as stack:
-            child_agents = []
-            for agent_cfg in agents:
-                tools = await _create_mcp_tools(stack, websocket, agent_cfg)
+        logging.info(f"Multi-agent setup detected, creating parent agent with {len(agents)} agents.")  
+        child_agents = []
+        agents_metadata = []
+        for agent_cfg in agents:
+            mcp_url, header = get_mcp_url_and_headers(agent_cfg, websocket)
+            client = MultiServerMCPClient({
+                agent_cfg.name: {
+                    "url": mcp_url,
+                    "transport": "streamable_http",
+                    "headers": header,
+                },
+            })      
+            try:
+                tools = await client.get_tools()
+        
                 child_agents.append(ChildAgent(
                     name=agent_cfg.name,
                     description=agent_cfg.description,
                     agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
                 ))
-            parent_agent = create_parent_agent(llm, child_agents, checkpointer)
 
-            yield parent_agent
+                agents_metadata.append({
+                    "name": agent_cfg.name,
+                    "status": "active",
+                })
+            except* Exception as eg:
+                error_message = ""
+                for e in eg.exceptions:
+                    error_message += f"{str(e)} "
+                logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}")
+
+                agents_metadata.append({
+                    "name": agent_cfg.name,
+                    "status": "error",
+                    "description": f"{error_message}"
+                })
+
+        if len(child_agents) == 0:
+            logging.error("Failed to create any child agents due to MCP connection issues")
+            raise NoAgentAvailableError(
+                "No agents could be created. Please check the MCP server connections and configurations for each agent."
+            )
+        if len(child_agents) == 1:
+            logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
+            return await _create_single_agent(llm, agents[0], checkpointer, websocket)
+
+        parent_agent = create_parent_agent(llm, child_agents, checkpointer)
+
+        return parent_agent, agents_metadata
     else:
-        logging.info("Single agent configuration detected")
-        agent_cfg = agents[0]
-        
-        async with AsyncExitStack() as stack:
-            tools = await _create_mcp_tools(stack, websocket, agent_cfg)
-            agent = create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
-            
-            yield agent
+        return await _create_single_agent(llm, agents[0], checkpointer, websocket)
 
-
-async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_config: AgentConfig) -> list:    
+def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket) -> tuple[str, dict]:
     """
-    Create and configure MCP (Model Context Protocol) tools for an agent.
+    Determine the MCP URL and headers for authentication based on the agent configuration.
     
-    This function establishes a connection to an MCP server and loads the available
-    tools. It handles authentication based on the agent configuration, supporting
-    both Rancher-specific authentication and generic configurations.
+    This function checks the authentication type specified in the agent configuration and
+    constructs the appropriate MCP URL and headers for connecting to the MCP server.
     
     Args:
-        stack: AsyncExitStack for managing async context resources and cleanup.
-        websocket: WebSocket connection used to extract cookies and URL information
-            for Rancher authentication.
-        agent_config: Configuration object containing agent details including
-            authentication type, MCP URL, and agent name.
+        agent_config: The configuration object for the agent, containing authentication details.
+        websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
     
     Returns:
-        list: A list of tools loaded from the MCP server. If RAG is enabled for
-            the Rancher Core Agent, documentation retriever tools are prepended.
-            Returns an empty list if connection to MCP server fails.
+        tuple: A tuple containing the MCP URL (str) and a dictionary of headers for authentication.
     
     Note:
         - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
         - Respects INSECURE_SKIP_TLS environment variable for HTTP/HTTPS selection
-        - Adds RAG documentation retrievers if ENABLE_RAG is true for Rancher Core Agent
-    """    
-    
+        - For BASIC authentication, encodes credentials in the Authorization header
+        - For NONE authentication, returns the MCP URL with no additional headers
+    """
     if agent_config.authentication == AuthenticationType.RANCHER:
         cookies = websocket.cookies
         rancher_url = os.environ.get("RANCHER_URL","https://"+websocket.url.hostname)
@@ -128,33 +143,43 @@ async def _create_mcp_tools(stack: AsyncExitStack, websocket: WebSocket, agent_c
         mcp_url = agent_config.mcp_url
         headers = {}
 
-    read, write, _ = await stack.enter_async_context(
-        streamablehttp_client(
-            url=mcp_url,
-            headers=headers
-        )
-    )
+    return mcp_url, headers
+
+async def _create_single_agent(llm: BaseLanguageModel, agent_cfg: AgentConfig, checkpointer: Checkpointer, websocket: WebSocket) -> ChildAgent:
+    """
+    Create a single child agent based on the provided agent configuration.
     
+    This function is used when only one agent configuration is available. It establishes
+    the MCP connection, loads the tools, and creates a child agent accordingly.
+    
+    Args:
+        llm: The language model to use for the agent.
+        agent_cfg: The configuration object for the agent, containing MCP connection details and system prompt.
+        checkpointer: Checkpointer for persisting agent state.
+        websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
+    """
+
+    mcp_url, header = get_mcp_url_and_headers(agent_cfg, websocket)
+    client = MultiServerMCPClient({
+        agent_cfg.name: {
+            "url": mcp_url,
+            "transport": "streamable_http",
+            "headers": header,
+        },
+    })      
     try:
-        session = await stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
-        tools = await load_mcp_tools(session)
-        
-        # Filter tools by toolset if specified in agent config
-        if agent_config.toolset:
-            tools = [
-                tool for tool in tools 
-                if tool.metadata.get("_meta", {}).get("toolset") == agent_config.toolset
-            ]
-            logging.info(f"Filtered {len(tools)} tools for toolset '{agent_config.toolset}'")
+        tools = await client.get_tools()
+    
+    except* Exception as eg:
+        error_message = ""
+        for e in eg.exceptions:
+            error_message += f"{str(e)} "
+        logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}")
+        raise NoAgentAvailableError(
+            f"Failed to load MCP tools for agent '{agent_cfg.name}'. Please check the MCP server connection and configuration. Error details: {error_message}"
+        )
 
-    except Exception as e: #TODO not catching exception here!!!
-        logging.error(f"Failed to connect to MCP server at {mcp_url}: {e}")
-        logging.warning(f"Agent '{agent_config.name}' will run without MCP tools")
-        tools = []
-
-    if agent_config.name == "Rancher Core Agent" and os.environ.get("ENABLE_RAG", "false").lower() == "true":
-        tools = [fleet_documentation_retriever, rancher_documentation_retriever] + tools
-
-    return tools
-
+    return create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg), [{
+            "name": agent_cfg.name,
+            "status": "active",
+        }]

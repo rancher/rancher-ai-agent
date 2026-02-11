@@ -4,7 +4,7 @@ import logging
 import json
 
 from ..dependencies import get_llm
-from ..services.agent.factory import create_agent
+from ..services.agent.factory import NoAgentAvailableError, create_agent
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -59,48 +59,55 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     await websocket.accept()
     logging.debug("ws/messages connection opened")
     
-    await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}"}}</chat-metadata>')
+    try:
+        agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket) 
+    except NoAgentAvailableError as e:
+        logging.error(f"Error creating agent: {e}")
+        await websocket.send_text(f'<error>{{"message": "{str(e)}"}}</error>')
+        await websocket.close()
+        return
 
-    async with create_agent(llm=llm, websocket=websocket) as agent:
-        base_config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "user_id": user_id,
-            },
-        }
+    await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}", "agents": {json.dumps(agents_metadata)}}}</chat-metadata>')
 
-        if os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_HOST"):
-            langfuse_handler = CallbackHandler()
-            base_config["callbacks"] = [langfuse_handler]
+    base_config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "user_id": user_id,
+        },
+    }
 
-        while True:
-            try:
-                request = await websocket.receive_text()
-                request_id = str(uuid.uuid4())
+    if os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_HOST"):
+        langfuse_handler = CallbackHandler()
+        base_config["callbacks"] = [langfuse_handler]
 
-                ws_request = _parse_websocket_request(request)
-                config = _build_config(base_config, request_id, ws_request)
-                input_data = await _build_input_data(agent, config, ws_request)
+    while True:
+        try:
+            request = await websocket.receive_text()
+            request_id = str(uuid.uuid4())
 
-                await _call_agent(
-                    agent=agent,
-                    input_data=input_data,
-                    config=config,
-                    websocket=websocket)
-                
-            except WebSocketDisconnect:
-                logging.info(f"Client {websocket.client.host} disconnected.")
+            ws_request = _parse_websocket_request(request)
+            config = _build_config(base_config, request_id, ws_request)
+            input_data = await _build_input_data(agent, config, ws_request)
 
+            await _call_agent(
+                agent=agent,
+                input_data=input_data,
+                config=config,
+                websocket=websocket)
+            
+        except WebSocketDisconnect:
+            logging.info(f"Client {websocket.client.host} disconnected.")
+
+            break
+        except Exception as e:
+            logging.error(f"An error occurred: {e}", exc_info=True)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_text(f'<error>{{"message": "{str(e)}"}}</error>')
+            else:
                 break
-            except Exception as e:
-                logging.error(f"An error occurred: {e}", exc_info=True)
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_text(f'<error>{{"message": "{str(e)}"}}</error>')
-                else:
-                    break
-            finally:
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_text("</message>")
+        finally:
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_text("</message>")
 
 async def _call_agent(
     agent: CompiledStateGraph,

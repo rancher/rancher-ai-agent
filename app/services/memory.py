@@ -341,7 +341,7 @@ class MemoryManager:
                     selected_agent = msg.additional_kwargs.get("selected_agent", selected_agent)
 
                     if msg.type == 'ai':
-                        llm_str = msg.content if msg.content else ""
+                        llm_str = msg.text if msg.text else ""
 
                     if msg.type == 'tool':
                         interrupt_str = msg.additional_kwargs.get("interrupt_message", "")

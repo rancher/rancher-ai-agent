@@ -22,12 +22,11 @@ dependencies = [
     "unstructured[md]>=0.16.11",
     "numpy>=2.1.0",
     "langchain-chroma>=1.0.0",
-    "kubernetes>=34.1.0",
+    "kubernetes>=35.0.0",
     "fastmcp>=2.13.1",
     "langchain-aws>=1.1.0",
     "psycopg[binary,pool]>=3.3.2",
     "kopf>=1.42.5",
-    "httpx>=0.28.2",
 ]
 
 [dependency-groups]
@@ -41,3 +40,6 @@ test = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:HTTPResponse.getheaders\\(\\) is deprecated:DeprecationWarning:kubernetes.client.rest",
+]

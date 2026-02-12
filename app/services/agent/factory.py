@@ -129,6 +129,8 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | No
         - For BASIC authentication, encodes credentials in the Authorization header
         - For NONE authentication, returns the MCP URL with no additional headers
     """
+    headers = {}
+
     if agent_config.authentication == AuthenticationType.RANCHER:
         if websocket:
             cookies = websocket.cookies
@@ -149,14 +151,16 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | No
             }
     elif agent_config.authentication == AuthenticationType.BASIC:
         mcp_url = agent_config.mcp_url
-        credentials = get_basic_auth_credentials(agent_config.authentication_secret)
-        headers = {
-            "Authorization": f"Basic {credentials}"
-        }
+        try:
+            credentials = get_basic_auth_credentials(agent_config.authentication_secret)
+            headers = {
+                "Authorization": f"Basic {credentials}"
+            }
+        except Exception as e:
+            logging.error(f"Failed to get basic auth credentials: {str(e)}")
 
     else:
         mcp_url = agent_config.mcp_url
-        headers = {}
 
     return mcp_url, headers
 

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import Command
 from app.services.agent.parent import ParentAgentBuilder, ChildAgent, create_parent_agent
+from app.services.agent.loader import AgentConfig
 
 
 @pytest.fixture
@@ -31,20 +32,41 @@ def mock_child_agent_graph():
 @pytest.fixture
 def mock_child_agents(mock_child_agent_graph):
     """Mock child agents for testing."""
+    rancher_config = AgentConfig(
+        name="Rancher",
+        displayName="Rancher Agent",
+        description="Expert in Rancher UI and Kubernetes management through Rancher",
+        system_prompt="You are a Rancher expert",
+        mcp_url="http://localhost:9092"
+    )
+    
+    fleet_config = AgentConfig(
+        name="Fleet",
+        displayName="Fleet Agent",
+        description="Expert in Fleet GitOps continuous delivery for Kubernetes",
+        system_prompt="You are a Fleet expert",
+        mcp_url="http://localhost:9092"
+    )
+    
+    harvester_config = AgentConfig(
+        name="Harvester",
+        displayName="Harvester Agent",
+        description="Expert in Harvester HCI and virtual machine management",
+        system_prompt="You are a Harvester expert",
+        mcp_url="http://localhost:9092"
+    )
+    
     return [
         ChildAgent(
-            name="Rancher",
-            description="Expert in Rancher UI and Kubernetes management through Rancher",
+            config=rancher_config,
             agent=mock_child_agent_graph
         ),
         ChildAgent(
-            name="Fleet",
-            description="Expert in Fleet GitOps continuous delivery for Kubernetes",
+            config=fleet_config,
             agent=mock_child_agent_graph
         ),
         ChildAgent(
-            name="Harvester",
-            description="Expert in Harvester HCI and virtual machine management",
+            config=harvester_config,
             agent=mock_child_agent_graph
         )
     ]
@@ -100,9 +122,9 @@ def test_parent_agent_builder_initialization(mock_llm, mock_child_agents, mock_c
     
     # Verify all child agents are stored correctly
     assert len(builder.child_agents) == 3
-    assert builder.child_agents[0].name == "Rancher"
-    assert builder.child_agents[1].name == "Fleet"
-    assert builder.child_agents[2].name == "Harvester"
+    assert builder.child_agents[0].config.name == "Rancher"
+    assert builder.child_agents[1].config.name == "Fleet"
+    assert builder.child_agents[2].config.name == "Harvester"
 
 
 # ============================================================================
@@ -344,10 +366,16 @@ def test_create_parent_agent_factory(mock_llm, mock_child_agents, mock_checkpoin
 
 def test_create_parent_agent_with_many_children(mock_llm, mock_child_agent_graph, mock_checkpointer):
     """Verify that create_parent_agent works with multiple child agents."""
-    many_children = [
-        ChildAgent(name=f"Agent{i}", description=f"Agent {i} description", agent=mock_child_agent_graph)
-        for i in range(5)
-    ]
+    many_children = []
+    for i in range(5):
+        config = AgentConfig(
+            name=f"Agent{i}",
+            displayName=f"Agent {i}",
+            description=f"Agent {i} description",
+            system_prompt=f"You are Agent {i}",
+            mcp_url="http://localhost:9092"
+        )
+        many_children.append(ChildAgent(config=config, agent=mock_child_agent_graph))
     
     graph = create_parent_agent(
         llm=mock_llm,

@@ -67,10 +67,16 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
             })      
             try:
                 tools = await client.get_tools()
-        
+                # Filter tools by toolset if specified in agent config
+                if agent_cfg.toolset:
+                    tools = [
+                        tool for tool in tools 
+                        if tool.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset
+                    ]
+                    logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
+
                 child_agents.append(ChildAgent(
-                    name=agent_cfg.name,
-                    description=agent_cfg.description,
+                    config=agent_cfg,
                     agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
                 ))
                 
@@ -100,7 +106,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         
         if len(child_agents) == 1:
             logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
-            return await _create_single_agent(llm, agents[0], checkpointer, websocket)
+            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket)
 
         parent_agent = create_parent_agent(llm, child_agents, checkpointer)
 

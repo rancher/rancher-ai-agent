@@ -13,7 +13,7 @@ from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from dataclasses import dataclass
 
-from .loader import DEFAULT_AGENT_NAME
+from .loader import DEFAULT_AGENT_NAME, AgentConfig
 from .base import BaseAgentBuilder, AgentState, build_agent_metadata
 
 SYSTEM_ROUTER_PROMPT = """You are a routing supervisor for a multi-agent system. Your job is to analyze the user's request and select the most appropriate child agent to handle it.
@@ -38,8 +38,7 @@ class ChildAgent:
         description: Description of the child agent's capabilities and use cases
         agent: The compiled LangGraph agent that handles the actual work
     """
-    name: str
-    description: str
+    config: AgentConfig
     agent: CompiledStateGraph
 
 
@@ -107,14 +106,14 @@ class ParentAgentBuilder(BaseAgentBuilder):
         # Build routing prompt with available child agents and their descriptions
         router_prompt = SYSTEM_ROUTER_PROMPT + "AVAILABLE CHILD AGENTS:\n"
         for child in self.child_agents:
-            router_prompt += f"- {child.name}: {child.description}\n"
+            router_prompt += f"- {child.config.name}: {child.config.description}\n"
         router_prompt += f"\nUSER'S REQUEST: {messages[-1].content}\n"
         
         user_and_ai_messages = [msg for msg in self._get_messages_from_last_summary(state) if isinstance(msg, (HumanMessage, AIMessage, SystemMessage))]
 
         # Use LLM to select the appropriate child agent
         child_agent = self.llm.invoke([SystemMessage(content=router_prompt)] + user_and_ai_messages).content
-        if child_agent not in [child.name for child in self.child_agents]:
+        if child_agent not in [child.config.name for child in self.child_agents]:
             # Fallback to default agent if the agent selection from LLM is invalid
             child_agent = DEFAULT_AGENT_NAME
 
@@ -160,9 +159,9 @@ class ParentAgentBuilder(BaseAgentBuilder):
 
         # Add a node for each child agent
         for child in self.child_agents:
-            workflow.add_node(child.name, child.agent)
+            workflow.add_node(child.config.name, child.agent)
             workflow.add_conditional_edges(
-                child.name,
+                child.config.name,
                 self.should_summarize_conversation,
                 {
                     "summarize_conversation": "summarize_conversation",

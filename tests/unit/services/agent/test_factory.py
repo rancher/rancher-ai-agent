@@ -117,14 +117,96 @@ async def test_create_agent_three_agents(mock_update_status, mock_get_headers, m
     assert call_args[0][0] == mock_llm
     child_agents = call_args[0][1]
     assert len(child_agents) == 3
-    assert child_agents[0].name == "RancherAgent"
-    assert child_agents[1].name == "FleetAgent"
-    assert child_agents[2].name == "HarvesterAgent"
+    assert child_agents[0].config.name == "RancherAgent"
+    assert child_agents[1].config.name == "FleetAgent"
+    assert child_agents[2].config.name == "HarvesterAgent"
     
     # Verify metadata includes all agents
     metadata = result[1]
     assert len(metadata) == 3
     assert all(agent["status"] == "active" for agent in metadata)
+
+
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.load_agent_configs')
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.create_child_agent')
+@patch('app.services.agent.factory.create_parent_agent')
+@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory._update_agent_status')
+async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_get_headers, mock_create_parent, mock_create_child, mock_mcp_client, mock_load_configs):
+    """Verify create_agent filters tools based on toolset configuration."""
+    # Setup mocks
+    mock_llm = MagicMock()
+    mock_websocket = MagicMock()
+    mock_memory_manager = MagicMock()
+    mock_checkpointer = MagicMock()
+    mock_memory_manager.get_checkpointer.return_value = mock_checkpointer
+    mock_websocket.app.memory_manager = mock_memory_manager
+    
+    mock_config1 = MagicMock()
+    mock_config1.name = "RancherAgent"
+    mock_config1.description = "Rancher agent with specific toolset"
+    mock_config1.system_prompt = "Prompt 1"
+    mock_config1.toolset = "rancher-core"  # Specify toolset filter
+    
+    mock_config2 = MagicMock()
+    mock_config2.name = "FleetAgent"
+    mock_config2.description = "Fleet agent without toolset filter"
+    mock_config2.system_prompt = "Prompt 2"
+    mock_config2.toolset = None  # No toolset filter
+    
+    mock_load_configs.return_value = [mock_config1, mock_config2]
+    
+    # Mock MCP client with tools that have different toolsets
+    mock_get_headers.return_value = ("http://test:8080", {})
+    
+    # Create mock tools with metadata
+    tool_rancher_core = MagicMock()
+    tool_rancher_core.name = "rancher_tool"
+    tool_rancher_core.metadata = {"_meta": {"toolset": "rancher-core"}}
+    
+    tool_rancher_extensions = MagicMock()
+    tool_rancher_extensions.name = "extensions_tool"
+    tool_rancher_extensions.metadata = {"_meta": {"toolset": "rancher-extensions"}}
+    
+    tool_fleet = MagicMock()
+    tool_fleet.name = "fleet_tool"
+    tool_fleet.metadata = {"_meta": {"toolset": "fleet"}}
+    
+    tool_no_toolset = MagicMock()
+    tool_no_toolset.name = "generic_tool"
+    tool_no_toolset.metadata = {}
+    
+    all_tools = [tool_rancher_core, tool_rancher_extensions, tool_fleet, tool_no_toolset]
+    
+    mock_client_instance = MagicMock()
+    mock_client_instance.get_tools = AsyncMock(return_value=all_tools)
+    mock_mcp_client.return_value = mock_client_instance
+    
+    mock_child_agent = MagicMock()
+    mock_create_child.return_value = mock_child_agent
+    
+    mock_parent_agent = MagicMock()
+    mock_create_parent.return_value = mock_parent_agent
+    
+    # Execute
+    result = await create_agent(mock_llm, mock_websocket)
+    
+    # Verify
+    assert result[0] == mock_parent_agent
+    assert mock_create_child.call_count == 2
+    
+    # Verify first agent (RancherAgent) received only tools matching "rancher-core" toolset
+    first_call_args = mock_create_child.call_args_list[0]
+    first_call_tools = first_call_args[0][1]  # Second positional argument is tools
+    assert len(first_call_tools) == 1
+    assert first_call_tools[0].name == "rancher_tool"
+    
+    # Verify second agent (FleetAgent) received all tools (no toolset filter)
+    second_call_args = mock_create_child.call_args_list[1]
+    second_call_tools = second_call_args[0][1]
+    assert len(second_call_tools) == 4  # All tools
 
 
 @pytest.mark.asyncio
@@ -202,8 +284,8 @@ async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_ge
     assert call_args[0][0] == mock_llm
     child_agents = call_args[0][1]
     assert len(child_agents) == 2
-    assert child_agents[0].name == "Agent2"
-    assert child_agents[1].name == "Agent3"
+    assert child_agents[0].config.name == "Agent2"
+    assert child_agents[1].config.name == "Agent3"
     
     # Verify metadata includes all three agents with correct status
     metadata = result[1]

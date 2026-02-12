@@ -1,11 +1,14 @@
 import asyncio
 import logging
 import os
+import signal
+import threading
 import certifi
 import kopf
 
 from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
+
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .routers import agent, chat, websocket, ui
@@ -48,6 +51,25 @@ class SimpleTruststore:
         else:
             logging.warning(f"Company cert not found at {company_cert_path}, skipping truststore setup.")
 
+
+def run_kopf(stop_flag):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(
+            kopf.operator(
+                standalone=True,
+                stop_flag=stop_flag,
+            )
+        )
+    except Exception as e:
+        logging.error("Kopf operator crashed", exc_info=e)
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+        
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -62,9 +84,14 @@ async def lifespan(app: FastAPI):
         app.memory_manager = await create_memory_manager()
 
         app.state.ready = True
-                
-        # Run kopf as a background task
-        kopf_task = asyncio.create_task(kopf.operator())
+        
+        app.kopf_stop_flag = threading.Event()
+        app.kopf_thread = threading.Thread(
+            target=run_kopf,
+            args=(app.kopf_stop_flag,),
+            daemon=True,
+        )
+        app.kopf_thread.start()
 
     except ValueError as e:
         app.state.ready = False
@@ -73,16 +100,12 @@ async def lifespan(app: FastAPI):
     
     yield
 
+    app.kopf_stop_flag.set()
+    if app.kopf_thread.is_alive():
+        app.kopf_thread.join()
+
     await app.memory_manager.destroy()
     
-    # Cancel the kopf task on shutdown
-    if kopf_task:
-        kopf_task.cancel()
-        try:
-            await kopf_task
-        except asyncio.CancelledError:
-            pass
-
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(websocket.router)

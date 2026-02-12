@@ -14,6 +14,7 @@ from langgraph.graph.state import Checkpointer
 
 NAMESPACE = "cattle-ai-agent-system"
 
+
 class NoAgentAvailableError(Exception):
     """Exception raised when loading MCP tools fails."""
     pass
@@ -93,7 +94,6 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                     "description": f"{error_message}"
                 })
 
-
         if len(child_agents) == 0:
             logging.error("Failed to create any child agents due to MCP connection issues")
             raise NoAgentAvailableError("No agents could be created. Please check the MCP server connections and configurations for each agent.")
@@ -107,6 +107,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         return parent_agent, agents_metadata
     else:
         return await _create_single_agent(llm, agents[0], checkpointer, websocket)
+
 
 def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | None = None) -> tuple[str, dict]:
     """
@@ -145,10 +146,10 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | No
             mcp_url = "http://" + mcp_url
         else:
             mcp_url = "https://" + mcp_url
-        headers={
-                "R_token": token,
-                "R_url": rancher_url
-            }
+        headers = {
+            "R_token": token,
+            "R_url": rancher_url
+        }
     elif agent_config.authentication == AuthenticationType.BASIC:
         mcp_url = agent_config.mcp_url
         try:
@@ -164,7 +165,13 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | No
 
     return mcp_url, headers
 
-async def _create_single_agent(llm: BaseLanguageModel, agent_cfg: AgentConfig, checkpointer: Checkpointer, websocket: WebSocket) -> ChildAgent:
+
+async def _create_single_agent(
+    llm: BaseLanguageModel,
+    agent_cfg: AgentConfig,
+    checkpointer: Checkpointer,
+    websocket: WebSocket
+) -> tuple:
     """
     Create a single child agent based on the provided agent configuration.
     
@@ -189,7 +196,6 @@ async def _create_single_agent(llm: BaseLanguageModel, agent_cfg: AgentConfig, c
     try:
         tools = await client.get_tools()
         _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
-    
     except* Exception as eg:
         error_message = ""
         for e in eg.exceptions:
@@ -199,13 +205,15 @@ async def _create_single_agent(llm: BaseLanguageModel, agent_cfg: AgentConfig, c
         _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
         
         raise NoAgentAvailableError(
-            f"Failed to load MCP tools for agent '{agent_cfg.name}'. Please check the MCP server connection and configuration. Error details: {error_message}"
+            f"Failed to load MCP tools for agent '{agent_cfg.name}'. "
+            f"Please check the MCP server connection and configuration. Error details: {error_message}"
         )
 
-    return create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg), [{
-            "name": agent_cfg.name,
-            "status": "active",
-        }]
+    return (
+        create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg),
+        [{"name": agent_cfg.name, "status": "active"}]
+    )
+
 
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
     """

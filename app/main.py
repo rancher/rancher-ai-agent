@@ -61,6 +61,7 @@ def run_kopf(stop_flag):
             kopf.operator(
                 standalone=True,
                 stop_flag=stop_flag,
+                namespaces=["cattle-ai-agent-system"]
             )
         )
     except Exception as e:

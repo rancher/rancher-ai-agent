@@ -57,14 +57,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         agents_metadata = []
 
         for agent_cfg in agents:
-            mcp_url, header = get_mcp_url_and_headers(agent_cfg, websocket)
-            client = MultiServerMCPClient({
-                agent_cfg.name: {
-                    "url": mcp_url,
-                    "transport": "streamable_http",
-                    "headers": header,
-                },
-            })      
+            client = create_mcp_client(agent_cfg, websocket)
             try:
                 tools = await client.get_tools()
                 # Filter tools by toolset if specified in agent config
@@ -115,12 +108,13 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         return await _create_single_agent(llm, agents[0], checkpointer, websocket)
 
 
-def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | None = None) -> tuple[str, dict]:
+def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
     """
-    Determine the MCP URL and headers for authentication based on the agent configuration.
+    Create an MCP client for the agent based on the agent configuration.
     
     This function checks the authentication type specified in the agent configuration and
-    constructs the appropriate MCP URL and headers for connecting to the MCP server.
+    constructs the appropriate MCP client with the correct URL and headers for connecting 
+    to the MCP server.
     
     Args:
         agent_config: The configuration object for the agent, containing authentication details.
@@ -128,13 +122,13 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | No
                    If not provided, falls back to environment variables only.
     
     Returns:
-        tuple: A tuple containing the MCP URL (str) and a dictionary of headers for authentication.
+        MultiServerMCPClient: A configured MCP client ready to connect to the server.
     
     Note:
         - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
         - Respects INSECURE_SKIP_TLS environment variable for HTTP/HTTPS selection
         - For BASIC authentication, encodes credentials in the Authorization header
-        - For NONE authentication, returns the MCP URL with no additional headers
+        - For NONE authentication, creates client with no additional headers
     """
     headers = {}
 
@@ -169,7 +163,13 @@ def get_mcp_url_and_headers(agent_config: AgentConfig, websocket: WebSocket | No
     else:
         mcp_url = agent_config.mcp_url
 
-    return mcp_url, headers
+    return MultiServerMCPClient({
+        agent_config.name: {
+            "url": mcp_url,
+            "transport": "streamable_http",
+            "headers": headers,
+        },
+    })
 
 
 async def _create_single_agent(
@@ -191,14 +191,7 @@ async def _create_single_agent(
         websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
     """
 
-    mcp_url, header = get_mcp_url_and_headers(agent_cfg, websocket)
-    client = MultiServerMCPClient({
-        agent_cfg.name: {
-            "url": mcp_url,
-            "transport": "streamable_http",
-            "headers": header,
-        },
-    })      
+    client = create_mcp_client(agent_cfg, websocket)
     try:
         tools = await client.get_tools()
         _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')

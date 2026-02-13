@@ -9,8 +9,7 @@ import kopf
 
 from datetime import datetime, timezone
 from ..services.agent.loader import AgentConfig
-from ..services.agent.factory import  get_mcp_url_and_headers
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from ..services.agent.factory import create_mcp_client
 
 def _set_status(patch, is_ready: bool, reason: str, message: str):
     """
@@ -47,14 +46,7 @@ async def _validate(agent_config: AgentConfig) -> None:
     Raises:
         Exception: If the MCP server connection fails or tools cannot be retrieved
     """
-    mcp_url, header = get_mcp_url_and_headers(agent_config)
-    client = MultiServerMCPClient({
-        agent_config.name: {
-            "url": mcp_url,
-            "transport": "streamable_http",
-            "headers": header,
-        },
-    })
+    client = create_mcp_client(agent_config)
 
     # Test the connection by fetching available tools
     await client.get_tools()

@@ -11,7 +11,7 @@ from contextlib import AsyncExitStack
 from app.services.agent.factory import (
     create_agent,
     NoAgentAvailableError,
-    get_mcp_url_and_headers,
+    create_mcp_client,
     _create_single_agent
 )
 from app.services.agent.loader import AuthenticationType
@@ -59,12 +59,11 @@ async def test_create_agent_single_agent(mock_create_single, mock_load_configs):
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_parent_agent')
-@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_three_agents(mock_update_status, mock_get_headers, mock_create_parent, mock_create_child, mock_mcp_client, mock_load_configs):
+async def test_create_agent_three_agents(mock_update_status, mock_create_client, mock_create_parent, mock_create_child, mock_load_configs):
     """Verify create_agent creates a parent agent when three configs are available."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -92,11 +91,10 @@ async def test_create_agent_three_agents(mock_update_status, mock_get_headers, m
     mock_load_configs.return_value = [mock_config1, mock_config2, mock_config3]
     
     # Mock MCP client
-    mock_get_headers.return_value = ("http://test:8080", {})
     mock_client_instance = MagicMock()
     mock_tools = [MagicMock()]
     mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
-    mock_mcp_client.return_value = mock_client_instance
+    mock_create_client.return_value = mock_client_instance
     
     mock_child_agent = MagicMock()
     mock_create_child.return_value = mock_child_agent
@@ -129,12 +127,11 @@ async def test_create_agent_three_agents(mock_update_status, mock_get_headers, m
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_parent_agent')
-@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_get_headers, mock_create_parent, mock_create_child, mock_mcp_client, mock_load_configs):
+async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_parent, mock_create_child, mock_load_configs):
     """Verify create_agent filters tools based on toolset configuration."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -159,8 +156,6 @@ async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_ge
     mock_load_configs.return_value = [mock_config1, mock_config2]
     
     # Mock MCP client with tools that have different toolsets
-    mock_get_headers.return_value = ("http://test:8080", {})
-    
     # Create mock tools with metadata
     tool_rancher_core = MagicMock()
     tool_rancher_core.name = "rancher_tool"
@@ -182,7 +177,7 @@ async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_ge
     
     mock_client_instance = MagicMock()
     mock_client_instance.get_tools = AsyncMock(return_value=all_tools)
-    mock_mcp_client.return_value = mock_client_instance
+    mock_create_client.return_value = mock_client_instance
     
     mock_child_agent = MagicMock()
     mock_create_child.return_value = mock_child_agent
@@ -211,12 +206,11 @@ async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_ge
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_parent_agent')
-@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_get_headers, mock_create_parent, mock_create_child, mock_mcp_client, mock_load_configs):
+async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_create_client, mock_create_parent, mock_create_child, mock_load_configs):
     """Verify create_agent handles MCP connection failure for one agent and continues with others."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -247,8 +241,6 @@ async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_ge
     mock_load_configs.return_value = [mock_config1, mock_config2, mock_config3]
     
     # Mock MCP client - first one fails, others succeed
-    mock_get_headers.return_value = ("http://test:8080", {})
-    
     # Create three different client instances
     mock_client_fail = MagicMock()
     mock_client_fail.get_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
@@ -261,7 +253,7 @@ async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_ge
     mock_client_success2.get_tools = AsyncMock(return_value=mock_tools)
     
     # Return different clients on each call
-    mock_mcp_client.side_effect = [mock_client_fail, mock_client_success1, mock_client_success2]
+    mock_create_client.side_effect = [mock_client_fail, mock_client_success1, mock_client_success2]
     
     mock_child_agent = MagicMock()
     mock_create_child.return_value = mock_child_agent
@@ -306,10 +298,9 @@ async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_ge
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.MultiServerMCPClient')
-@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_all_fail_mcp_connection(mock_update_status, mock_get_headers, mock_mcp_client, mock_load_configs):
+async def test_create_agent_all_fail_mcp_connection(mock_update_status, mock_create_client, mock_load_configs):
     """Verify create_agent raises NoAgentAvailableError when all agents fail MCP connection."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -332,12 +323,10 @@ async def test_create_agent_all_fail_mcp_connection(mock_update_status, mock_get
     mock_load_configs.return_value = [mock_config1, mock_config2]
     
     # Mock MCP client - all fail
-    mock_get_headers.return_value = ("http://invalid:8080", {})
-    
     mock_client_fail = MagicMock()
     mock_client_fail.get_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
     
-    mock_mcp_client.return_value = mock_client_fail
+    mock_create_client.return_value = mock_client_fail
     
     # Execute and verify exception
     with pytest.raises(NoAgentAvailableError) as exc_info:
@@ -367,65 +356,93 @@ async def test_create_agent_no_configs_raises_error(mock_load_configs):
 
 
 # ============================================================================
-# get_mcp_url_and_headers Tests
+# create_mcp_client Tests
 # ============================================================================
 
-def test_get_mcp_url_and_headers_none_auth():
-    """Verify get_mcp_url_and_headers with no authentication."""
+@patch('app.services.agent.factory.MultiServerMCPClient')
+def test_create_mcp_client_none_auth(mock_mcp_client):
+    """Verify create_mcp_client with no authentication."""
     mock_config = MagicMock()
+    mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.NONE
     mock_config.mcp_url = "http://test:8080"
     
-    url, headers = get_mcp_url_and_headers(mock_config)
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
     
-    assert url == "http://test:8080"
-    assert headers == {}
+    result = create_mcp_client(mock_config)
+    
+    assert result == mock_client_instance
+    mock_mcp_client.assert_called_once()
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["url"] == "http://test:8080"
+    assert call_args["TestAgent"]["headers"] == {}
 
 
+@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch.dict(os.environ, {'RANCHER_URL': 'https://rancher.example.com', 'RANCHER_API_TOKEN': 'test-token'})
-def test_get_mcp_url_and_headers_rancher_auth_with_websocket():
-    """Verify get_mcp_url_and_headers handles Rancher authentication correctly."""
+def test_create_mcp_client_rancher_auth_with_websocket(mock_mcp_client):
+    """Verify create_mcp_client handles Rancher authentication correctly."""
     mock_websocket = MagicMock()
     mock_websocket.cookies = {"R_SESS": "cookie-token"}
     mock_websocket.url.hostname = "rancher.local"
     
     mock_config = MagicMock()
+    mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.RANCHER
     mock_config.mcp_url = "mcp-service:8080"
     
-    url, headers = get_mcp_url_and_headers(mock_config, mock_websocket)
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
     
-    assert url == "https://mcp-service:8080"
-    assert headers['R_token'] == 'test-token'
-    assert headers['R_url'] == 'https://rancher.example.com'
+    result = create_mcp_client(mock_config, mock_websocket)
+    
+    assert result == mock_client_instance
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["url"] == "https://mcp-service:8080"
+    assert call_args["TestAgent"]["headers"]['R_token'] == 'test-token'
+    assert call_args["TestAgent"]["headers"]['R_url'] == 'https://rancher.example.com'
 
 
+@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch.dict(os.environ, {'INSECURE_SKIP_TLS': 'true', 'MCP_URL': 'mcp:8080'})
-def test_get_mcp_url_and_headers_insecure():
-    """Verify get_mcp_url_and_headers respects INSECURE_SKIP_TLS."""
+def test_create_mcp_client_insecure(mock_mcp_client):
+    """Verify create_mcp_client respects INSECURE_SKIP_TLS."""
     mock_config = MagicMock()
+    mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.RANCHER
     mock_config.mcp_url = "mcp-service:8080"
     
-    url, headers = get_mcp_url_and_headers(mock_config)
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
     
-    assert url.startswith("http://")
+    result = create_mcp_client(mock_config)
+    
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["url"].startswith("http://")
 
 
+@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch('app.services.agent.factory.get_basic_auth_credentials')
-def test_get_mcp_url_and_headers_basic_auth(mock_get_creds):
-    """Verify get_mcp_url_and_headers handles basic authentication."""
+def test_create_mcp_client_basic_auth(mock_get_creds, mock_mcp_client):
+    """Verify create_mcp_client handles basic authentication."""
     mock_config = MagicMock()
+    mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.BASIC
     mock_config.mcp_url = "http://test:8080"
     mock_config.authentication_secret = "my-secret"
     
     mock_get_creds.return_value = "dXNlcjpwYXNz"  # base64 encoded
     
-    url, headers = get_mcp_url_and_headers(mock_config)
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
     
-    assert url == "http://test:8080"
-    assert headers['Authorization'] == "Basic dXNlcjpwYXNz"
+    result = create_mcp_client(mock_config)
+    
+    assert result == mock_client_instance
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["url"] == "http://test:8080"
+    assert call_args["TestAgent"]["headers"]['Authorization'] == "Basic dXNlcjpwYXNz"
     mock_get_creds.assert_called_once_with("my-secret")
 
 
@@ -434,11 +451,10 @@ def test_get_mcp_url_and_headers_basic_auth(mock_get_creds):
 # ============================================================================
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
 @patch('app.services.agent.factory.create_root_agent')
-@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_single_agent_success(mock_update_status, mock_get_headers, mock_create_root, mock_mcp_client):
+async def test_create_single_agent_success(mock_update_status, mock_create_client, mock_create_root):
     """Verify _create_single_agent creates agent successfully."""
     mock_llm = MagicMock()
     mock_websocket = MagicMock()
@@ -449,11 +465,10 @@ async def test_create_single_agent_success(mock_update_status, mock_get_headers,
     mock_config.system_prompt = "Test prompt"
     
     # Mock MCP client
-    mock_get_headers.return_value = ("http://test:8080", {})
     mock_client_instance = MagicMock()
     mock_tools = [MagicMock()]
     mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
-    mock_mcp_client.return_value = mock_client_instance
+    mock_create_client.return_value = mock_client_instance
     
     mock_agent = MagicMock()
     mock_create_root.return_value = mock_agent
@@ -469,10 +484,9 @@ async def test_create_single_agent_success(mock_update_status, mock_get_headers,
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
-@patch('app.services.agent.factory.get_mcp_url_and_headers')
+@patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_single_agent_mcp_failure(mock_update_status, mock_get_headers, mock_mcp_client):
+async def test_create_single_agent_mcp_failure(mock_update_status, mock_create_client):
     """Verify _create_single_agent raises error when MCP connection fails."""
     mock_llm = MagicMock()
     mock_websocket = MagicMock()
@@ -482,10 +496,9 @@ async def test_create_single_agent_mcp_failure(mock_update_status, mock_get_head
     mock_config.name = "TestAgent"
     
     # Mock MCP client to fail
-    mock_get_headers.return_value = ("http://test:8080", {})
     mock_client_instance = MagicMock()
     mock_client_instance.get_tools = AsyncMock(side_effect=Exception("Connection failed"))
-    mock_mcp_client.return_value = mock_client_instance
+    mock_create_client.return_value = mock_client_instance
     
     # Execute and verify exception
     with pytest.raises(NoAgentAvailableError) as exc_info:

@@ -60,9 +60,9 @@ async def _validate(agent_config: AgentConfig) -> None:
     await client.get_tools()
 
 
-@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
-@kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
-@kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
+@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
+@kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
+@kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
 async def create_fn(spec, name, namespace, logger, patch, **kwargs):
     """
     Handle AIAgentConfig resource lifecycle events.
@@ -109,7 +109,7 @@ async def create_fn(spec, name, namespace, logger, patch, **kwargs):
         # Update status to reflect the failure
         _set_status(patch, False, 'ConfigurationFailed', error_msg)
         logger.warning(error_msg)
-        
+
         raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}") 
         
     

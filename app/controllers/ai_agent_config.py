@@ -5,11 +5,114 @@ This controller handles the lifecycle of AIAgentConfig CRDs, validating their
 MCP server connections and updating their status accordingly.
 """
 
+import asyncio
+import logging
+import threading
 import kopf
 
+from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
 from ..services.agent.loader import AgentConfig
 from ..services.agent.factory import create_mcp_client
+
+
+class KopfManager:
+    """
+    Manages the Kopf operator lifecycle.
+    
+    This class handles starting and stopping the Kopf operator in a separate
+    thread, similar to how MemoryManager handles database connections.
+    """
+    
+    def __init__(self):
+        self.stop_flag = None
+        self.thread = None
+        self.namespace = "cattle-ai-agent-system"
+        
+    def _run_operator(self, stop_flag):
+        """
+        Run the Kopf operator in a separate event loop.
+        
+        This method creates a new event loop and runs the Kopf operator
+        until the stop flag is set.
+        
+        Args:
+            stop_flag: Threading event to signal operator shutdown
+        """
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            loop.run_until_complete(
+                kopf.operator(
+                    standalone=True,
+                    stop_flag=stop_flag,
+                    namespaces=[self.namespace],
+                    settings=kopf.OperatorSettings(
+                        scanning=ScanningSettings(disabled=True),
+                        posting=PostingSettings(enabled=False)
+                    )
+                )
+            )
+        except Exception as e:
+            logging.error("Kopf operator crashed", exc_info=e)
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+    
+    def start(self):
+        """
+        Start the Kopf operator in a background thread.
+        
+        This method initializes the stop flag and starts a daemon thread
+        running the Kopf operator.
+        """
+        if self.thread is not None and self.thread.is_alive():
+            logging.warning("Kopf operator is already running")
+            return
+            
+        self.stop_flag = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run_operator,
+            args=(self.stop_flag,),
+            daemon=True,
+        )
+        self.thread.start()
+        logging.info("Kopf operator started")
+    
+    def stop(self):
+        """
+        Stop the Kopf operator gracefully.
+        
+        This method sets the stop flag and waits for the operator thread
+        to complete before returning.
+        """
+        if self.stop_flag is None or self.thread is None:
+            logging.warning("Kopf operator is not running")
+            return
+            
+        self.stop_flag.set()
+        if self.thread.is_alive():
+            self.thread.join(timeout=10)
+            if self.thread.is_alive():
+                logging.warning("Kopf operator thread did not stop within timeout")
+            else:
+                logging.info("Kopf operator stopped")
+        
+        self.stop_flag = None
+        self.thread = None
+
+
+def create_kopf_manager() -> KopfManager:
+    """
+    Factory function to create a KopfManager instance.
+    
+    Returns:
+        An instance of KopfManager.
+    """
+    manager = KopfManager()
+    logging.info("KopfManager created")
+    return manager
 
 def _set_status(patch, is_ready: bool, reason: str, message: str):
     """

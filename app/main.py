@@ -8,11 +8,11 @@ import kopf
 
 from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
-
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .routers import agent, chat, websocket, ui
 from .controllers import ai_agent_config  # Import to register kopf handlers
+from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -61,7 +61,11 @@ def run_kopf(stop_flag):
             kopf.operator(
                 standalone=True,
                 stop_flag=stop_flag,
-                namespaces=["cattle-ai-agent-system"]
+                namespaces=["cattle-ai-agent-system"],
+                settings=kopf.OperatorSettings(
+                    scanning=ScanningSettings(disabled=True),
+                    posting=PostingSettings(enabled=False)
+                )
             )
         )
     except Exception as e:

@@ -41,7 +41,7 @@ async def test_create_agent_single_agent(mock_create_single, mock_load_configs):
     
     mock_agent = MagicMock()
     mock_metadata = [{"name": "RancherAgent", "status": "active"}]
-    mock_create_single.return_value = (mock_agent, mock_metadata)
+    mock_create_single.return_value = mock_agent
     
     # Execute
     result = await create_agent(mock_llm, mock_websocket)
@@ -477,8 +477,7 @@ async def test_create_single_agent_success(mock_update_status, mock_create_clien
     result = await _create_single_agent(mock_llm, mock_config, mock_checkpointer, mock_websocket)
     
     # Verify
-    assert result[0] == mock_agent
-    assert result[1] == [{"name": "TestAgent", "status": "active"}]
+    assert result == mock_agent
     mock_create_root.assert_called_once_with(mock_llm, mock_tools, "Test prompt", mock_checkpointer, mock_config)
     mock_update_status.assert_called_once()
 

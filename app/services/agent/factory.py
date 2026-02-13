@@ -99,13 +99,14 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         
         if len(child_agents) == 1:
             logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
-            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket)
+            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket), agents_metadata
 
         parent_agent = create_parent_agent(llm, child_agents, checkpointer)
 
         return parent_agent, agents_metadata
     else:
-        return await _create_single_agent(llm, agents[0], checkpointer, websocket)
+        return await _create_single_agent(llm, agents[0], checkpointer, websocket), [{"name": agents[0].name, "status": "active"}]
+
 
 
 def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
@@ -208,11 +209,7 @@ async def _create_single_agent(
             f"Please check the MCP server connection and configuration. Error details: {error_message}"
         )
 
-    return (
-        create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg),
-        [{"name": agent_cfg.name, "status": "active"}]
-    )
-
+    return create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
 
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
     """

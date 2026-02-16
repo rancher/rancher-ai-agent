@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
-from app.services.agent.parent import SYSTEM_ROUTER_PROMPT
+from app.services.agent.parent import build_router_prompt
 from app.services.llm import LLMManager
 from langchain_core.language_models import FakeMessagesListChatModel
 from mcp.server.fastmcp import FastMCP
@@ -260,7 +260,7 @@ def test_single_prompt():
             
         assert messages == expected_messages_send_to_websocket
         assert len(fake_llm.all_calls) == 2, "Expected 2 LLM calls (routing + child agent)"
-        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt)), HumanMessage(content=fake_prompt)], "First call should be routing call with prompt"
+        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(fake_prompt)), HumanMessage(content=fake_prompt)], "First call should be routing call with prompt"
         assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt)], "Second call should be child agent call with prompt"
 
     finally:
@@ -307,12 +307,12 @@ def test_multiple_prompts():
         assert messages == expected_messages_send_to_websocket
         assert len(fake_llm.all_calls) == 4, "Expected 4 LLM calls (2 routing + 2 child agent)"
         # First routing call (only has the first prompt)
-        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_1)), HumanMessage(content=fake_prompt_1)], "First call should be routing call with prompt"
+        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(fake_prompt_1)), HumanMessage(content=fake_prompt_1)], "First call should be routing call with prompt"
         # First child agent call
         assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt_1)], "Second call should be child agent call with prompt"
         # Second routing call (includes conversation history)
         assert fake_llm.all_calls[2] == [
-            SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_2)), 
+            SystemMessage(content=_build_router_prompt(fake_prompt_2)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2)
@@ -369,7 +369,7 @@ def test_delegate_to_child_agent_with_tool():
         assert messages == expected_messages_send_to_websocket
         assert len(fake_llm.all_calls) == 3, "Expected 3 LLM calls (1 routing + 2 child agent)"
         # First routing call
-        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt)), HumanMessage(content=fake_prompt)], "First call should be routing call with prompt"
+        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(fake_prompt)), HumanMessage(content=fake_prompt)], "First call should be routing call with prompt"
         # First child agent call (requests tool)
         assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt)], "Second call should be child agent call with prompt"
         # Second child agent call (after tool execution, includes conversation history with tool result)
@@ -437,10 +437,10 @@ def test_summary():
         assert messages == expected_messages_send_to_websocket
         assert len(fake_llm.all_calls) == 11, "Expected 11 LLM calls (5 routing + 5 child agent + 1 summary)"
 
-        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_1)), HumanMessage(content=fake_prompt_1)], "First call should be routing call with prompt"
+        assert fake_llm.all_calls[0] == [SystemMessage(content=_build_router_prompt(fake_prompt_1)), HumanMessage(content=fake_prompt_1)], "First call should be routing call with prompt"
         assert fake_llm.all_calls[1] == [SystemMessage(content=_build_child_agent_prompt(MATH_AGENT_PROMPT, CALCULATOR_AGENT_NAME)), HumanMessage(content=fake_prompt_1)], "Second call should be child agent call with prompt"
         assert fake_llm.all_calls[2] == [
-            SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_2)), 
+            SystemMessage(content=_build_router_prompt(fake_prompt_2)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2)
@@ -452,7 +452,7 @@ def test_summary():
             HumanMessage(content=fake_prompt_2)
         ], "Fourth call should be child agent call with conversation history"
         assert fake_llm.all_calls[4] == [
-            SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_3)), 
+            SystemMessage(content=_build_router_prompt(fake_prompt_3)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2),
@@ -468,7 +468,7 @@ def test_summary():
             HumanMessage(content=fake_prompt_3)
         ], "Sixth call should be child agent call with conversation history"
         assert fake_llm.all_calls[6] == [
-            SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_4)), 
+            SystemMessage(content=_build_router_prompt(fake_prompt_4)), 
             HumanMessage(content=fake_prompt_1),
             AIMessage(content=fake_llm_response_1),
             HumanMessage(content=fake_prompt_2),
@@ -499,7 +499,7 @@ def test_summary():
             HumanMessage(content="Create a summary of the conversation above:")
         ], "Ninth call should be summary generation with full conversation history"
         assert fake_llm.all_calls[9] == [
-            SystemMessage(content=_build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_5)),
+            SystemMessage(content=_build_router_prompt(fake_prompt_5)),
             SystemMessage(content=f"Conversation summary: {fake_summary_response}"),
             HumanMessage(content=fake_prompt_5)
         ], "Tenth call should be routing call with summary (messages replaced by summary)"
@@ -513,7 +513,7 @@ def test_summary():
         # Note: If ParentAgent hasn't been updated with sliding window, it sends full history.
         # We check that at least the prompt is correct.
         tenth_call = fake_llm.all_calls[9]
-        assert tenth_call[0].content == _build_router_prompt(SYSTEM_ROUTER_PROMPT, fake_prompt_5)
+        assert tenth_call[0].content == _build_router_prompt(fake_prompt_5)
         assert tenth_call[-1].content == fake_prompt_5
 
         # Eleventh call - child agent call (Math Agent)
@@ -527,15 +527,16 @@ def test_summary():
     finally:
         LLMManager._instance = None
 
-def _build_router_prompt(system_router_prompt: str, user_request: str) -> str:
+def _build_router_prompt(user_request: str) -> str:
     """
     Builds the full router prompt by appending the available child agents
     and their descriptions to the base system router prompt.
     """
-    router_prompt = system_router_prompt + "AVAILABLE CHILD AGENTS:\n"
+    agent_names = [MATH_AGENT_NAME, CALCULATOR_AGENT_NAME]
+    router_prompt = build_router_prompt(agent_names) + "AVAILABLE CHILD AGENTS:\n"
     router_prompt += f"- {MATH_AGENT_NAME}: Agent that can perform addition operations\n"
     router_prompt += f"- {CALCULATOR_AGENT_NAME}: Agent that can perform multiplication operations\n"
-    router_prompt += f"\nUSER'S REQUEST: {user_request}\n"
+    router_prompt += f"\nUSER'S REQUEST: {user_request}"
     return router_prompt
 
 def _build_child_agent_prompt(base_prompt: str, excluded_agent: str) -> str:

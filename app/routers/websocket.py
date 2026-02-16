@@ -63,7 +63,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket) 
     except NoAgentAvailableError as e:
         logging.error(f"Error creating agent: {e}")
-        await websocket.send_text(f'<error>{{"message": "{str(e)}"}}</error>')
+        await websocket.send_text(f'<chat-error>{{"message": "{str(e)}"}}</chat-error>')
         await websocket.close()
         return
 

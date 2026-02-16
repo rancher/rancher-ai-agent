@@ -205,8 +205,8 @@ async def _create_single_agent(
         _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
         
         raise NoAgentAvailableError(
-            f"Failed to load MCP tools for agent '{agent_cfg.name}'. "
-            f"Please check the MCP server connection and configuration. Error details: {error_message}"
+            f"Failed to load MCP tools for all enabled agents.\\n"
+            f"Please check the AI Agents configuration and ensure the MCP server is accessible with the provided connection details."
         )
 
     return create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)

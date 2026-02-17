@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import RANCHER_AGENT_PROMPT, AgentConfig, AuthenticationType
 from app.services.llm import LLMManager
+from app.services.memory import StorageType
 from mcp.server.fastmcp import FastMCP
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from _pytest.monkeypatch import MonkeyPatch
@@ -47,6 +48,9 @@ def setup_mock_mcp_server(module_monkeypatch):
     module_monkeypatch.setenv("INSECURE_SKIP_TLS", "true")
 
     class MockMemoryManager:
+        def __init__(self):
+            self.storage_type = StorageType.IN_MEMORY
+        
         def get_checkpointer(self):
             from langgraph.checkpoint.memory import MemorySaver
             return MemorySaver()

@@ -1,12 +1,18 @@
 import os
 import re
 import logging
+from enum import Enum
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.base import CheckpointTuple
 
 from ..services.agent.loader import DEFAULT_AGENT_NAME
+
+class StorageType(str, Enum):
+    """Enum for different types of memory storage."""
+    IN_MEMORY = "in-memory"
+    POSTGRES = "postgres"
 
 class MemoryManager:
     """
@@ -17,7 +23,8 @@ class MemoryManager:
         self.db_url = os.environ.get("DB_CONNECTION_STRING", "")
         self.db_pool = None
         self.checkpointer = None
-        
+        self.storage_type = None
+
     async def initialize(self):
         if os.environ.get("DB_ENABLED", "false").lower() == "true":
             logging.info("Initializing PostgreSQL Checkpointer...")
@@ -34,11 +41,15 @@ class MemoryManager:
             self.checkpointer = AsyncPostgresSaver(self.db_pool)
 
             await self.checkpointer.setup()
-            logging.info("PostgreSQL Checkpointer ready.")
-        else:
-            logging.info("Using InMemorySaver for checkpoints.")
-            self.checkpointer = InMemorySaver()
+            self.storage_type = StorageType.POSTGRES
 
+            logging.info("Using PostgreSQL Checkpointer for checkpoints.")
+        else:
+            self.checkpointer = InMemorySaver()
+            self.storage_type = StorageType.IN_MEMORY
+            
+            logging.info("Using InMemorySaver for checkpoints.")
+                        
     async def destroy(self):
         if self.db_pool:
             await self.db_pool.close()

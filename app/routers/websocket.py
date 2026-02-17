@@ -30,6 +30,20 @@ async def get_user_id_from_websocket(websocket: WebSocket) -> str:
 
     return await get_user_id(rancher_url, token)
 
+def build_chat_metadata(thread_id: str, agents_metadata: list[dict], websocket: WebSocket) -> str:
+    """
+    Builds the chat metadata to be sent to the client upon WebSocket connection.
+    This can include information about available agents, tools, storage type or any other relevant data
+    that the client might need to know before starting the conversation.
+
+    Returns:
+        A dictionary containing the chat metadata.
+    """
+    storage_type = websocket.app.memory_manager.storage_type.value
+    agents = json.dumps(agents_metadata)
+
+    return f'<chat-metadata>{{"chatId": "{thread_id}", "agents": {agents}, "storageType": "{storage_type}"}}</chat-metadata>'
+
 @dataclass
 class WebSocketRequest:
     """Represents a parsed WebSocket request from the client."""
@@ -67,7 +81,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         await websocket.close()
         return
 
-    await websocket.send_text(f'<chat-metadata>{{"chatId": "{thread_id}", "agents": {json.dumps(agents_metadata)}}}</chat-metadata>')
+    await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
 
     base_config = {
         "configurable": {

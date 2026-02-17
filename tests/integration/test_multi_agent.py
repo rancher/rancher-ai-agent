@@ -3,6 +3,7 @@ from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
 from app.services.agent.parent import build_router_prompt
 from app.services.llm import LLMManager
+from app.services.memory import StorageType
 from langchain_core.language_models import FakeMessagesListChatModel
 from mcp.server.fastmcp import FastMCP
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
@@ -169,6 +170,9 @@ def setup_mock_mcp_servers(module_monkeypatch):
     module_monkeypatch.setenv("INSECURE_SKIP_TLS", "true")
 
     class MockMemoryManager:
+        def __init__(self):
+            self.storage_type = StorageType.IN_MEMORY
+        
         def get_checkpointer(self):
             from langgraph.checkpoint.memory import MemorySaver
             return MemorySaver()

@@ -1,0 +1,57 @@
+name: Run e2e Tests
+on:
+  push:
+    branches:
+      - main
+      - e2e-tests # TODO remove this branch after the e2e tests are stable and can be run on main
+  pull_request:
+    branches:
+      - main
+
+env:
+  RANCHER_VERSION: head
+  CATTLE_SERVER_URL: https://172.17.0.1
+  CATTLE_BOOTSTRAP_PASSWORD: password
+  KUBECONFIG_PATH: ${{ github.workspace }}/kubeconfig.yaml
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          
+      - name: Install uv
+        run: pip install uv
+        
+      - name: Install dependencies
+        run: uv sync --all-groups
+        
+      - name: Start Rancher
+        run: bash .github/scripts/install-rancher.sh ${{ env.RANCHER_VERSION }} ${{ env.CATTLE_SERVER_URL }} ${{ env.CATTLE_BOOTSTRAP_PASSWORD }}
+
+      - name: Execute e2e tests with AWS Bedrock
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: "eu-north-1"
+          CATTLE_SERVER_URL: ${{ env.CATTLE_SERVER_URL }}
+          KUBECONFIG: ${{ env.KUBECONFIG_PATH }}
+          MODEL: "eu.anthropic.claude-opus-4-5-20251101-v1:0"
+          INSECURE_SKIP_TLS: "true"
+        run: |
+          RANCHER_TOKEN=$(curl -vkL \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"'"$CATTLE_BOOTSTRAP_PASSWORD"'" ,"responseType":"cookie"}' \
+            -X POST \
+            ${CATTLE_SERVER_URL}/v3-public/localProviders/local?action=login 2>&1 | \
+            awk -F'[=;]' '/Set-Cookie/{gsub(" ","",$2);print $2;exit}')
+          RANCHER_TOKEN="$RANCHER_TOKEN" uv run pytest tests/e2e -vv
+
+
+

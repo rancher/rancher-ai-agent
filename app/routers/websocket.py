@@ -14,9 +14,7 @@ from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
-
 from ..services.auth import get_user_id
-from ..dependencies import get_llm
 
 router = APIRouter()
 

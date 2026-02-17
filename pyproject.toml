@@ -43,4 +43,5 @@ pythonpath = ["."]
 testpaths = ["tests"]
 filterwarnings = [
     "ignore:HTTPResponse.getheaders\\(\\) is deprecated:DeprecationWarning:kubernetes.client.rest",
+    "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning:testcontainers.core.waiting_utils",
 ]

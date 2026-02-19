@@ -19,6 +19,7 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 test_client = TestClient(app)
 
+# TODO get from chart!
 MCP_IMAGE_NAME = "ghcr.io/rancher/rancher-ai-mcp:v0.1.2-alpha.4" 
 JUDGE_SYSTEM_PROMPT = """## System Prompt: Semantic Judge
 
@@ -90,7 +91,12 @@ def setup_test_environment():
             raise
 
     # Set up MockMemoryManager
+    class MockStorageType:
+        value = "memory"
+
     class MockMemoryManager:
+        storage_type = MockStorageType()
+
         def get_checkpointer(self):
             from langgraph.checkpoint.memory import MemorySaver
             return MemorySaver()
@@ -121,64 +127,95 @@ expect_answer = """<message>A Pod is the smallest and simplest unit in the Kuber
   For more detailed information, you can refer to the official Kubernetes documentation on Pods: [https://kubernetes.io/docs/concepts/workloads/pods/](https://kubernetes.io/docs/concepts/workloads/pods/)
   <suggestion>List all pods in a cluster</suggestion><suggestion>Inspect a specific pod</suggestion><suggestion>What is a Deployment?</suggestion></message>"""
 
-def test_e2e():
-    with DockerContainer(MCP_IMAGE_NAME).with_command(["/mcp", "serve" ,"--insecure"]).with_exposed_ports("9092").waiting_for(LogMessageWaitStrategy("MCP Server started!")) as container:
+@pytest.fixture(scope="module")
+def agent_test_session():
+    """
+    Starts the MCP container and configures the LLM with tracking callbacks.
+    Scoped to the module so the container and LLM instance are reused across all tests.
+    """
+    with DockerContainer(MCP_IMAGE_NAME).with_command(["/mcp", "serve", "--insecure"]).with_exposed_ports("9092").waiting_for(LogMessageWaitStrategy("MCP Server started!")) as container:
         container.start()
         host_port = container.get_exposed_port("9092")
         host_ip = container.get_container_host_ip()
-        service_url = f"{host_ip}:{host_port}"
+        mcp_service_url = f"{host_ip}:{host_port}"
 
-        print(f"Custom Service is running at: {service_url}")
-        os.environ["MCP_URL"] = service_url
+        os.environ["MCP_URL"] = mcp_service_url
+        os.environ["INSECURE_SKIP_TLS"] = "true"
 
-        # Set up callback to track LLM messages
         message_tracking_callback = MessageTrackingCallback()
         usage_metadata_callback = UsageMetadataCallbackHandler()
         llm_instance = LLMManager.get_instance()
-        
-        # Configure LLM to use the callback
         llm_instance.callbacks = [message_tracking_callback, usage_metadata_callback]
+
+        yield {
+            "message_tracking_callback": message_tracking_callback,
+            "usage_metadata_callback": usage_metadata_callback,
+            "llm_instance": llm_instance,
+        }
+
+        llm_instance.callbacks = []
+
+        usage = usage_metadata_callback.usage_metadata
+        model = os.environ["MODEL"]
+        summary_md = f"""### 📊 LLM Token Consumption Summary (All Tests)
+| Metric | Count |
+| :--- | :--- |
+| **Input Tokens** | {usage[model].get('input_tokens', 0)} |
+| **Output Tokens** | {usage[model].get('output_tokens', 0)} |
+| **Total Tokens** | {usage[model].get('total_tokens', 0)} |
+"""
+        if "GITHUB_STEP_SUMMARY" in os.environ:
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                f.write(summary_md)
+
+
+def test_no_mcp_tools(agent_test_session):
+    message_tracking_callback = agent_test_session["message_tracking_callback"]
+    usage_metadata_callback = agent_test_session["usage_metadata_callback"]
+
+    with test_client.websocket_connect("/v1/ws/messages") as websocket:
+        # Consume any initial messages from the server (chat-metadata, etc.)
+        websocket.receive_text()
+        prompt = "what is a pod?"
         
-        try:
-            with test_client.websocket_connect("/v1/ws/messages") as websocket:
-                # Consume any initial messages from the server (chat-metadata, etc.)
-                websocket.receive_text()
-                messages = []
-                prompts = ["what is a pod?"]
-                for prompt in prompts:
-                    websocket.send_text(prompt)
-                    msg = ""
-                    while not msg.endswith("</message>"):
-                        msg += websocket.receive_text()
-                    messages.append(msg)
-                
-                #assert message_tracking_callback.messages == [[SystemMessage(content="You are a helpful assistant for Kubernetes-related questions. Answer the user's question based on your knowledge and provide suggestions for follow-up questions.")], [HumanMessage(content="what is a pod?")]]
+        msg = _ws_send_and_receive(websocket, prompt)
 
-                score = _assert_llm_as_judge(expected=expect_answer, actual=messages[0], prompt=prompts[0])
+        #assert message_tracking_callback.messages == [[SystemMessage(content="You are a helpful assistant for Kubernetes-related questions. Answer the user's question based on your knowledge and provide suggestions for follow-up questions.")], [HumanMessage(content="what is a pod?")]]
 
-                print(f"Final Consumption: {usage_metadata_callback.usage_metadata}")
-                
-                usage = usage_metadata_callback.usage_metadata
-                score_status = "FAIL" if score < 6 else "WARN" if score in (7, 8) else "PASS"
-                summary_md = f"""
-                ### 📊 LLM Token Consumption Summary
-                | Metric | Count |
-                | :--- | :--- |
-                | **Semantic Judge Score (1-10)** | {score} |
-                | **Semantic Judge Status** | {score_status} |
-                | **Input Tokens** | {usage[ os.environ["MODEL"] ].get('input_tokens', 0)} |
-                | **Output Tokens** | {usage[ os.environ["MODEL"] ].get('output_tokens', 0)} |
-                | **Total Tokens** | {usage[ os.environ["MODEL"] ].get('total_tokens', 0)} |
-                """
+        score = _assert_llm_as_judge(expected=expect_answer, actual=msg, prompt=prompt)
 
-                # Write to GitHub Actions Summary
-                if "GITHUB_STEP_SUMMARY" in os.environ:
-                    with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-                        f.write(summary_md)
-                                        
-        finally:
-            # Clear callbacks
-            llm_instance.callbacks = []
+        print(f"Consumption so far: {usage_metadata_callback.usage_metadata}")
+
+
+def test_create_and_update_pods(agent_test_session):
+    message_tracking_callback = agent_test_session["message_tracking_callback"]
+    usage_metadata_callback = agent_test_session["usage_metadata_callback"]
+
+    with test_client.websocket_connect("/v1/ws/messages") as websocket:
+        # Consume any initial messages from the server (chat-metadata, etc.)
+        websocket.receive_text()
+        prompt = "what is a pod?"
+        
+        msg = _ws_send_and_receive(websocket, prompt)
+
+        #assert message_tracking_callback.messages == [[SystemMessage(content="You are a helpful assistant for Kubernetes-related questions. Answer the user's question based on your knowledge and provide suggestions for follow-up questions.")], [HumanMessage(content="what is a pod?")]]
+
+        score = _assert_llm_as_judge(expected=expect_answer, actual=msg, prompt=prompt)
+
+        print(f"Consumption so far: {usage_metadata_callback.usage_metadata}")
+
+
+def _ws_send_and_receive(websocket, prompt: str) -> str:
+    """
+    Sends a prompt over the WebSocket and collects the full response,
+    reading until the closing </message> tag.
+    """
+    websocket.send_text(prompt)
+    msg = ""
+    while not msg.endswith("</message>"):
+        msg += websocket.receive_text()
+    return msg
+
 
 def _assert_llm_as_judge(expected, actual, prompt):
     llm = LLMManager.get_instance()

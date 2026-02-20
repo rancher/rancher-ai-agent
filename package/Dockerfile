@@ -41,7 +41,14 @@ RUN apk add --no-cache git && \
 # installs runtime dependencies, and copies the prepared documentation
 # artifact from the first stage.
 # =================================================================
-FROM registry.suse.com/bci/python:3.13
+FROM registry.suse.com/bci/bci-micro:15.7 AS target
+
+FROM registry.suse.com/bci/bci-base:15.7 as builder
+COPY --from=target / /target
+RUN zypper --non-interactive --installroot /target install --no-recommends python313 python313-pip
+
+FROM scratch
+COPY --from=builder /target /
 
 WORKDIR /app
 

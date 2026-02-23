@@ -38,7 +38,7 @@ class SimpleTruststore:
 
     def set_truststore(self):
         company_cert_path = "/etc/tls/tls.crt"
-        output_path = "/combined.crt"
+        output_path = "/cert/combined.crt"
 
         if os.path.exists(company_cert_path):
             truststore_path = self.create_combined(

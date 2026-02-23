@@ -27,17 +27,20 @@ class BaseAgentBuilder:
 
         Args:
             llm: The language model to use for the agent's decisions.
-            tools: A list of tools the agent can use.
+            tools: A list of all tools the agent can use. Tools whose names end with
+                '_plan' are automatically assigned to planning_tools; the rest to tools.
             system_prompt: The initial system-level instructions for the agent.
             checkpointer: The checkpointer for persisting agent state.
             agent_config: Configuration for the agent's behavior and settings.
             all_children_agents: List of all child agent configurations in the system.
         """
         self.llm = llm
-        self.tools = tools
+        self.planning_tools = [tool for tool in tools if tool.name.endswith("_plan")]
+        self.tools = [tool for tool in tools if not tool.name.endswith("_plan")]
         self.system_prompt = system_prompt
         self.checkpointer = checkpointer
         self.llm_with_tools = self.llm.bind_tools(self.tools)
+        self.planning_tools_by_name = {tool.name: tool for tool in self.planning_tools}
         self.tools_by_name = {tool.name: tool for tool in self.tools}
         self.agent_config = agent_config
         self.all_children_agents = all_children_agents
@@ -189,7 +192,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         request_id = config["configurable"]["request_id"]
 
         for tool_call in getattr(state["messages"][-1], "tool_calls", []):
-            should_continue, interrupt_message = handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call, state)
+            should_continue, interrupt_message = await self.handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call, state)
 
             additional_kwargs = {
                 "request_id": request_id,
@@ -306,6 +309,53 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
             return "end"
         
         return "continue"
+    
+    async def should_interrupt(self, human_validation_tools: list[HumanValidationTool], tool_call: any) -> str:
+        """
+        Checks if a tool call requires user confirmation and generates an interrupt message.
+
+        Args:
+            tool_call: The tool call dictionary from the LLM.
+
+        Returns:
+            A formatted string to trigger a langgraph.types.interrupt, or an empty string
+            if no interruption is needed.
+        """
+        for tools in human_validation_tools:
+            if tools.name == tool_call["name"]:
+                plan_tool_name = tool_call["name"] + "_plan"
+                plan_tool = self.planning_tools_by_name.get(plan_tool_name)
+                if plan_tool is None:
+                    raise ValueError(f"planning tool '{plan_tool_name}' not found for tool '{tool_call['name']}'")
+                plan_response = await plan_tool.ainvoke(tool_call["args"])
+                
+                return f'<confirmation-response>{plan_response}</confirmation-response>'
+
+        return ""
+
+    async def handle_interrupt(self, human_validation_tools: list[HumanValidationTool], tool_call: dict, state: AgentState) -> tuple[bool, str | None]:
+        """Handles the user confirmation interrupt for a tool call.
+        
+        Returns:
+            A tuple of (should_continue, interrupt_message) where:
+            - should_continue: True if execution should continue, False if cancelled
+            - interrupt_message: The interrupt message if one was triggered, None otherwise
+        """
+        if interrupt_message := await self.should_interrupt(human_validation_tools, tool_call):
+            response = langgraph.types.interrupt(interrupt_message)
+            if response != "yes":
+                return False, interrupt_message
+            
+            selected_agent = state.get("selected_agent", {})
+            if selected_agent:
+                dispatch_custom_event(
+                    "subagent_choice_event",
+                    build_agent_metadata(selected_agent.get("name"), selected_agent.get("mode")),
+                )
+            return True, interrupt_message
+            
+        return True, None 
+
 
 
 def build_agent_metadata(agent_name: str, selection_mode: str, extra_metadata : str = "") -> str:
@@ -342,55 +392,6 @@ def create_confirmation_response(payload: str, type: str, name: str, kind: str, 
     json_payload = json.dumps(payload_data)
 
     return f'<confirmation-response>{json_payload}</confirmation-response>'
-
-
-def should_interrupt(human_validation_tools: list[HumanValidationTool], tool_call: any) -> str:
-    """
-    Checks if a tool call requires user confirmation and generates an interrupt message.
-
-    Args:
-        tool_call: The tool call dictionary from the LLM.
-
-    Returns:
-        A formatted string to trigger a langgraph.types.interrupt, or an empty string
-        if no interruption is needed.
-    """
-    for tools in human_validation_tools:
-        if tools.name == tool_call["name"]:
-            if tools.type == "CREATE":
-                payload = tool_call['args']['resource']
-            elif tools.type == "UPDATE":
-                payload = tool_call['args']['patch']
-            else:
-                logging.error(f"unknown human validation tool type: {tools.type}")
-                return ""
-            return create_confirmation_response(payload, tools.type.lower(), tool_call['args']['name'], tool_call['args']['kind'], tool_call['args']['cluster'], tool_call['args']['namespace'])
-
-    return ""
-
-    
-def handle_interrupt(human_validation_tools: list[HumanValidationTool], tool_call: dict, state: AgentState) -> tuple[bool, str | None]:
-    """Handles the user confirmation interrupt for a tool call.
-    
-    Returns:
-        A tuple of (should_continue, interrupt_message) where:
-        - should_continue: True if execution should continue, False if cancelled
-        - interrupt_message: The interrupt message if one was triggered, None otherwise
-    """
-    if interrupt_message := should_interrupt(human_validation_tools, tool_call):
-        response = langgraph.types.interrupt(interrupt_message)
-        if response != "yes":
-            return False, interrupt_message
-        
-        selected_agent = state.get("selected_agent", {})
-        if selected_agent:
-            dispatch_custom_event(
-                "subagent_choice_event",
-                build_agent_metadata(selected_agent.get("name"), selected_agent.get("mode")),
-            )
-        return True, interrupt_message
-          
-    return True, None 
 
 
 def process_tool_result(tool_result: str | list, state: AgentState) -> tuple[str, str | None]:

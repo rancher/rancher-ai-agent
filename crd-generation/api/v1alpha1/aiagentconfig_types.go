@@ -54,11 +54,6 @@ type HumanValidationTool struct {
 	// Name of the tool
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
-
-	// Type of validation (CREATE, UPDATE, DELETE)
-	// +kubebuilder:validation:Enum=CREATE;UPDATE;DELETE
-	// +kubebuilder:validation:Required
-	Type string `json:"type"`
 }
 
 // AIAgentConfigStatus defines the observed state of AIAgentConfig

@@ -8,8 +8,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.agent.base import (
     create_confirmation_response,
-    should_interrupt,
-    handle_interrupt,
     process_tool_result,
     convert_to_string_if_needed,
     INTERRUPT_CANCEL_MESSAGE,
@@ -130,9 +128,10 @@ def test_builder_creates_tools_by_name_dict(mock_llm, mock_tools, mock_checkpoin
 @patch("langgraph.types.interrupt", new=MagicMock(return_value="no"))
 async def test_tool_node_human_verification_cancelled(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
     """Verify that tool execution is cancelled when user responds 'no' to confirmation."""
+    plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
     builder = BaseAgentBuilder(
         llm=mock_llm, 
-        tools=mock_tools, 
+        tools=mock_tools + [plan_tool], 
         system_prompt="system_prompt", 
         checkpointer=mock_checkpointer,
         agent_config=agent_config_with_validation
@@ -160,9 +159,10 @@ async def test_tool_node_human_verification_cancelled(mock_llm, mock_tools, mock
 @patch("langgraph.types.interrupt", new=MagicMock(return_value="yes"))
 async def test_tool_node_human_verification_approved(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
     """Verify that tool execution proceeds when user responds 'yes' to confirmation."""
+    plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
     builder = BaseAgentBuilder(
         llm=mock_llm, 
-        tools=mock_tools, 
+        tools=mock_tools + [plan_tool], 
         system_prompt="system_prompt", 
         checkpointer=mock_checkpointer,
         agent_config=agent_config_with_validation
@@ -188,35 +188,6 @@ async def test_tool_node_human_verification_approved(mock_llm, mock_tools, mock_
     assert result["messages"][0].content == "fake k8s resource patched"
     assert result["messages"][0].additional_kwargs["confirmation"] is True
 
-@pytest.mark.asyncio
-@patch("langgraph.types.interrupt", new=MagicMock(return_value="yes"))
-async def test_tool_node_human_verification_create_operation(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
-    """Verify that CREATE operations also trigger human validation correctly."""
-    create_tool = MockTool("createKubernetesResource", "resource created")
-    tools = [create_tool]
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=agent_config_with_validation
-    )
-    tool_call = {
-        "id": "456",
-        "name": "createKubernetesResource",
-        "args": {
-            "namespace": "default",
-            "name": "test-pod",
-            "kind": "Pod",
-            "cluster": "local",
-            "resource": '{"spec": {}}'
-        }
-    }
-    state = {"messages": [FakeMessage(tool_calls=[tool_call])]}
-    result = await builder.tool_node(state, mock_config)
-
-    assert result["messages"][0].content == "resource created"
-    assert result["messages"][0].additional_kwargs["confirmation"] is True
 
 # ============================================================================
 # Tool Execution Tests
@@ -654,9 +625,21 @@ def test_create_confirmation_response_formats_correctly():
     expected = '<confirmation-response>{"payload": "{\\"key\\": \\"value\\"}", "type": "update", "resource": {"name": "test-resource", "kind": "Deployment", "cluster": "local", "namespace": "default"}}</confirmation-response>'
     assert result == expected
 
-def test_should_interrupt_returns_message_for_update_tools():
+@pytest.mark.asyncio
+async def test_should_interrupt_returns_message_for_update_tools(mock_llm, mock_checkpointer):
     """Verify interrupt message is generated for UPDATE validation tools."""
     validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+    plan_tool = MockTool("patchKubernetesResource_plan", "plan response for patching")
+    regular_tool = MockTool("patchKubernetesResource", "patched")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[regular_tool, plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
     tool_call = {
         "name": "patchKubernetesResource",
         "args": {
@@ -668,26 +651,48 @@ def test_should_interrupt_returns_message_for_update_tools():
         }
     }
     
-    result = should_interrupt(validation_tools, tool_call)
+    result = await builder.should_interrupt(validation_tools, tool_call)
     
-    expected = '<confirmation-response>{"payload": "[]", "type": "update", "resource": {"name": "test", "kind": "Pod", "cluster": "local", "namespace": "default"}}</confirmation-response>'
-    assert result == expected
+    assert "<confirmation-response>" in result
+    assert "plan response for patching" in result
 
-def test_should_interrupt_returns_empty_for_non_validated_tools():
+@pytest.mark.asyncio
+async def test_should_interrupt_returns_empty_for_non_validated_tools(mock_llm, mock_checkpointer):
     """Verify no interrupt message for tools without validation."""
     validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[MockTool("getKubernetesResource", "fetched")],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
     tool_call = {
         "name": "getKubernetesResource",
         "args": {}
     }
     
-    result = should_interrupt(validation_tools, tool_call)
+    result = await builder.should_interrupt(validation_tools, tool_call)
     
     assert result == ""
 
-def test_handle_interrupt_cancels_on_no_response():
+@pytest.mark.asyncio
+async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpointer):
     """Verify handle_interrupt returns False when user says no."""
     validation_tools = [HumanValidationTool(name="testTool", type="UPDATE")]
+    plan_tool = MockTool("testTool_plan", "plan for test")
+    regular_tool = MockTool("testTool", "result")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[regular_tool, plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
     tool_call = {
         "name": "testTool",
         "args": {
@@ -700,14 +705,26 @@ def test_handle_interrupt_cancels_on_no_response():
     }
     
     with patch("langgraph.types.interrupt", return_value="no"):
-        should_continue, interrupt_msg = handle_interrupt(validation_tools, tool_call, {})
+        should_continue, interrupt_msg = await builder.handle_interrupt(validation_tools, tool_call, {})
     
     assert should_continue is False
     assert interrupt_msg is not None
 
-def test_handle_interrupt_continues_on_yes_response():
+@pytest.mark.asyncio
+async def test_handle_interrupt_continues_on_yes_response(mock_llm, mock_checkpointer):
     """Verify handle_interrupt returns True when user says yes."""
     validation_tools = [HumanValidationTool(name="testTool", type="UPDATE")]
+    plan_tool = MockTool("testTool_plan", "plan for test")
+    regular_tool = MockTool("testTool", "result")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[regular_tool, plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
     tool_call = {
         "name": "testTool",
         "args": {
@@ -720,7 +737,7 @@ def test_handle_interrupt_continues_on_yes_response():
     }
     
     with patch("langgraph.types.interrupt", return_value="yes"):
-        should_continue, interrupt_msg = handle_interrupt(validation_tools, tool_call, {})
+        should_continue, interrupt_msg = await builder.handle_interrupt(validation_tools, tool_call, {})
     
     assert should_continue is True
     assert interrupt_msg is not None
@@ -772,15 +789,27 @@ def test_process_tool_result_handles_doc_links():
         assert len(calls) == 1
         assert "https://docs.example.com" in calls[0][0][1]
         
+@pytest.mark.asyncio
 @patch("app.services.agent.base.dispatch_custom_event")
 @patch("langgraph.types.interrupt")
-def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt, mock_dispatch):
+async def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt, mock_dispatch, mock_llm, mock_checkpointer):
     """
     Verify that handle_interrupt dispatches subagent_choice_event with correct metadata
     when user approves tool execution.
     """
     # Tool requiring human validation
     validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+    plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
+    regular_tool = MockTool("patchKubernetesResource", "patched")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[regular_tool, plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
     tool_call = {
         "name": "patchKubernetesResource",
         "args": {
@@ -801,7 +830,7 @@ def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt, mock_
 
     mock_interrupt.return_value = "yes"
 
-    should_continue, _ = handle_interrupt(validation_tools, tool_call, state)
+    should_continue, _ = await builder.handle_interrupt(validation_tools, tool_call, state)
 
     assert should_continue is True
     

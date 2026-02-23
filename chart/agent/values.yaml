@@ -20,8 +20,6 @@ openaiApiKey:
 openaiUrl:
 awsBedrock:
   bearerToken:
-  accessKeyId:
-  secretAccessKey:
   region:
 activeLlm: # ollama, gemini, openai, bedrock
 # Enable RAG with embedded rancher documentation

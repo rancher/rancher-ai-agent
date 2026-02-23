@@ -151,6 +151,12 @@ async def get_models(request: Request, llm_name: str):
                             status_code=status.HTTP_502_BAD_GATEWAY,
                             detail=f"Failed to fetch Ollama models: Ollama server returned status {response.status_code}"
                         )
+            except httpx.InvalidURL as e:
+                logging.error(f"Invalid Ollama URL: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid Ollama URL: {ollama_url}"
+                )
             except httpx.RequestError as e:
                 logging.error(f"Failed to fetch Ollama models: {e}")
                 raise HTTPException(
@@ -160,9 +166,9 @@ async def get_models(request: Request, llm_name: str):
 
         elif llm_name == "bedrock":
             region = request.query_params.get("region")
-            bearer_token = request.query_params.get("bearer_token")
-            access_key_id = request.query_params.get("access_key_id")
-            secret_access_key = request.query_params.get("secret_access_key")
+            bearer_token = request.query_params.get("bearerToken")
+            access_key_id = request.query_params.get("accessKeyId")
+            secret_access_key = request.query_params.get("secretAccessKey")
             
             if not region:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AWS region is required for Bedrock")
@@ -194,6 +200,12 @@ async def get_models(request: Request, llm_name: str):
                 
                 logging.info(f"Retrieved {len(models)} Bedrock models from region {region}")
                 
+            except ValueError as e:
+                logging.error(f"Invalid Bedrock parameter: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid Bedrock configuration: {str(e)}"
+                )
             except ClientError as e:
                 logging.error(f"Bedrock API error: {e}")
                 error_code = e.response.get('Error', {}).get('Code', 'Unknown')

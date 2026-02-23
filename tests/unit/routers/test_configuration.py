@@ -144,9 +144,28 @@ async def test_get_models_ollama_bad_status(mock_request):
 
 
 @pytest.mark.asyncio
+async def test_get_models_ollama_malformed_url(mock_request):
+    """Test getting Ollama models with malformed URL."""
+    mock_request.query_params = {"url": "http://10.124.137.250:1invalid"}
+    
+    import httpx
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(side_effect=httpx.InvalidURL("Invalid port in URL"))
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+            with pytest.raises(HTTPException) as exc:
+                await config_router.get_models(mock_request, llm_name="ollama")
+            assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
+            assert "Invalid Ollama URL" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_get_models_bedrock_missing_region(mock_request):
     """Test getting Bedrock models without region parameter."""
-    mock_request.query_params = {"access_key_id": "test", "secret_access_key": "test"}
+    mock_request.query_params = {"accessKeyId": "test", "secretAccessKey": "test"}
     
     with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
         with pytest.raises(HTTPException) as exc:
@@ -170,8 +189,8 @@ async def test_get_models_bedrock_success(mock_request):
     """Test getting Bedrock models successfully."""
     mock_request.query_params = {
         "region": "us-east-1",
-        "access_key_id": "AKIA...",
-        "secret_access_key": "wJalrX..."
+        "accessKeyId": "TESTTESTTEST",
+        "secretAccessKey": "aBcDeF..."
     }
     
     mock_bedrock_client = MagicMock()
@@ -198,8 +217,8 @@ async def test_get_models_bedrock_invalid_credentials(mock_request):
     
     mock_request.query_params = {
         "region": "us-east-1",
-        "access_key_id": "invalid",
-        "secret_access_key": "invalid"
+        "accessKeyId": "invalid",
+        "secretAccessKey": "invalid"
     }
     
     mock_bedrock_client = MagicMock()
@@ -214,14 +233,31 @@ async def test_get_models_bedrock_invalid_credentials(mock_request):
 
 
 @pytest.mark.asyncio
+async def test_get_models_bedrock_invalid_region(mock_request):
+    """Test getting Bedrock models with invalid region format."""
+    mock_request.query_params = {
+        "region": "invalid-region!!!",
+        "accessKeyId": "TESTTESTTEST",
+        "secretAccessKey": "aBcDeF..."
+    }
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("app.routers.configuration.boto3.client", side_effect=ValueError("Invalid region format")):
+            with pytest.raises(HTTPException) as exc:
+                await config_router.get_models(mock_request, llm_name="bedrock")
+            assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
+            assert "Invalid Bedrock configuration" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_get_models_bedrock_api_error(mock_request):
     """Test getting Bedrock models with API error."""
     from botocore.exceptions import ClientError
     
     mock_request.query_params = {
         "region": "us-east-1",
-        "access_key_id": "AKIA...",
-        "secret_access_key": "wJalrX..."
+        "accessKeyId": "TESTTESTTEST",
+        "secretAccessKey": "aBcDeF..."
     }
     
     mock_bedrock_client = MagicMock()

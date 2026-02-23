@@ -20,7 +20,7 @@ RUN echo "ai-agent:x:${GID}:" >> /target/etc/group && \
     echo "ai-agent:x:${UID}:${GID}:rancher-ai-agent-user:/nonexistent:/usr/bin/false" >> /target/etc/passwd
 
 # Create /cert directory and grant ownership to ai-agent user.
-RUN mkdir -p /target/cert && chown ${UID}:${GID} /target/cert
+RUN mkdir -p /target/cert && chown ${UID}:${GID} /target/cert && chmod 700 /target/cert
 
 # Create python3 symlink.
 RUN ln -sf python${PYTHON_VERSION} /target/usr/bin/python3

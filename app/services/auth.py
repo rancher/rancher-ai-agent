@@ -1,5 +1,8 @@
 import logging
 import httpx
+import os
+from urllib.parse import urlparse
+from fastapi import Request
 
 async def get_user_id(host: str, token: str) -> str:
     """
@@ -28,3 +31,26 @@ async def get_user_id(host: str, token: str) -> str:
         logging.error("user API call failed: %s", e)
 
     return None
+
+async def get_user_id_from_request(request: Request) -> str:
+    """
+    Retrieves the user ID from the Rancher API using the session token from the request cookies.
+    """
+    rancher_url = os.environ.get("RANCHER_URL", "")
+    token = request.cookies.get("R_SESS")
+
+    host = ""
+    if not token:
+        logging.warning("R_SESS cookie not found")
+        return None
+
+    if rancher_url:
+        parsed = urlparse(rancher_url)
+        scheme = parsed.scheme or "https"
+        netloc = parsed.netloc
+        host = f"{scheme}://{netloc}"
+    else:
+        rancher_host = request.headers.get("Host", "localhost")
+        host = f"https://{rancher_host}"
+
+    return await get_user_id(host, token)

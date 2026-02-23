@@ -1,33 +1,8 @@
 import logging
-import os
-from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response, JSONResponse
 
-from ..services.auth import get_user_id
-
-async def get_user_id_from_request(request: Request) -> str:
-    """
-    Retrieves the user ID from the Rancher API using the session token from the request cookies.
-    """
-    rancher_url = os.environ.get("RANCHER_URL", "")
-    token = request.cookies.get("R_SESS")
-
-    host = ""
-    if not token:
-        logging.warning("R_SESS cookie not found")
-        return None
-
-    if rancher_url:
-        parsed = urlparse(rancher_url)
-        scheme = parsed.scheme or "https"
-        netloc = parsed.netloc
-        host = f"{scheme}://{netloc}"
-    else:
-        rancher_host = request.headers.get("Host", "localhost")
-        host = f"https://{rancher_host}"
-
-    return await get_user_id(host, token)
+from ..services.auth import get_user_id_from_request
 
 router = APIRouter(prefix="/v1/api", tags=["chats"])
 

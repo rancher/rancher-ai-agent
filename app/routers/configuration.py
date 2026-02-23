@@ -173,57 +173,91 @@ async def get_models(request: Request, llm_name: str):
             if not region:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AWS region is required for Bedrock")
             
-            # Check authentication method
             if bearer_token:
-                # Use bearer token (not standard AWS, but handle if provided)
-                logging.warning("Bearer token auth for Bedrock not standard AWS method")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please use access_key_id and secret_access_key for Bedrock")
-            
-            if not access_key_id or not secret_access_key:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Both access_key_id and secret_access_key are required for Bedrock")
-            
-            try:
-                # Create Bedrock client with provided credentials
-                bedrock_client = boto3.client(
-                    'bedrock',
-                    region_name=region,
-                    aws_access_key_id=access_key_id,
-                    aws_secret_access_key=secret_access_key
-                )
-                
-                # List foundation models
-                response = bedrock_client.list_foundation_models()
-                
-                # Extract model IDs
-                bedrock_models = [model['modelId'] for model in response.get('modelSummaries', [])]
-                models = bedrock_models
-                
-                logging.info(f"Retrieved {len(models)} Bedrock models from region {region}")
-                
-            except ValueError as e:
-                logging.error(f"Invalid Bedrock parameter: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid Bedrock configuration: {str(e)}"
-                )
-            except ClientError as e:
-                logging.error(f"Bedrock API error: {e}")
-                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-                if error_code == 'AccessDenied' or error_code == 'InvalidSignatureException':
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid AWS credentials for Bedrock"
+                # Use bearer token authentication
+                logging.info("Using bearer token authentication for Bedrock")
+                try:
+                    # Create Bedrock client with bearer token in headers
+                    bedrock_client = boto3.client(
+                        'bedrock',
+                        region_name=region,
                     )
-                else:
+                    
+                    # Override the client with custom headers for bearer token
+                    bedrock_client._client_config.s3 = {'addressing_style': 'virtual'}
+                    bedrock_client.meta.events._emitter._handlers = {}
+                    
+                    # Use direct HTTP request with bearer token
+                    async with httpx.AsyncClient(timeout=10.0) as http_client:
+                        headers = {"Authorization": f"Bearer {bearer_token}"}
+                        response = await http_client.get(
+                            f"https://bedrock.{region}.amazonaws.com/foundation-models",
+                            headers=headers
+                        )
+                        if response.status_code == 200:
+                            data = response.json()
+                            bedrock_models = [model['modelId'] for model in data.get('modelSummaries', [])]
+                            models = bedrock_models
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_401_UNAUTHORIZED if response.status_code == 401 else status.HTTP_502_BAD_GATEWAY,
+                                detail=f"Failed to fetch Bedrock models: {response.status_code}"
+                            )
+                except httpx.RequestError as e:
+                    logging.error(f"Failed to fetch Bedrock models with bearer token: {e}")
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail=f"Failed to fetch Bedrock models: {str(e)}"
                     )
-            except Exception as e:
-                logging.error(f"Failed to fetch Bedrock models: {e}")
+            
+            elif access_key_id and secret_access_key:
+                try:
+                    # Create Bedrock client with provided credentials
+                    bedrock_client = boto3.client(
+                        'bedrock',
+                        region_name=region,
+                        aws_access_key_id=access_key_id,
+                        aws_secret_access_key=secret_access_key
+                    )
+                    
+                    # List foundation models
+                    response = bedrock_client.list_foundation_models()
+                    
+                    # Extract model IDs
+                    bedrock_models = [model['modelId'] for model in response.get('modelSummaries', [])]
+                    models = bedrock_models
+                    
+                    logging.info(f"Retrieved {len(models)} Bedrock models from region {region}")
+                    
+                except ValueError as e:
+                    logging.error(f"Invalid Bedrock parameter: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid Bedrock configuration: {str(e)}"
+                    )
+                except ClientError as e:
+                    logging.error(f"Bedrock API error: {e}")
+                    error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+                    if error_code == 'AccessDenied' or error_code == 'InvalidSignatureException':
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid AWS credentials for Bedrock"
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"Failed to fetch Bedrock models: {str(e)}"
+                        )
+                except Exception as e:
+                    logging.error(f"Failed to fetch Bedrock models: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Failed to fetch Bedrock models: {str(e)}"
+                    )
+            else:
                 raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to fetch Bedrock models: {str(e)}"
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Either bearerToken or both accessKeyId and secretAccessKey are required for Bedrock"
                 )
         
         return JSONResponse(

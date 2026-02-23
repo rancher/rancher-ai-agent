@@ -250,6 +250,65 @@ async def test_get_models_bedrock_invalid_region(mock_request):
 
 
 @pytest.mark.asyncio
+async def test_get_models_bedrock_bearer_token_success(mock_request):
+    """Test getting Bedrock models with bearer token authentication."""
+    mock_request.query_params = {
+        "region": "us-east-1",
+        "bearerToken": "test-bearer-token-12345"
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "modelSummaries": [
+            {"modelId": "anthropic.claude-opus-4-5-20251101-v1:0"},
+            {"modelId": "anthropic.claude-3-sonnet-20240229-v1:0"}
+        ]
+    }
+    
+    mock_http_client = AsyncMock()
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+            resp = await config_router.get_models(mock_request, llm_name="bedrock")
+            assert resp.status_code == status.HTTP_200_OK
+            content = json.loads(resp.body)
+            assert "anthropic.claude-opus-4-5-20251101-v1:0" in content
+            assert "anthropic.claude-3-sonnet-20240229-v1:0" in content
+            # Verify bearer token was passed in header
+            call_args = mock_http_client.get.call_args
+            assert call_args is not None
+            assert "Authorization" in call_args.kwargs.get("headers", {})
+            assert call_args.kwargs["headers"]["Authorization"] == "Bearer test-bearer-token-12345"
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_bearer_token_invalid(mock_request):
+    """Test getting Bedrock models with invalid bearer token."""
+    mock_request.query_params = {
+        "region": "us-east-1",
+        "bearerToken": "invalid-token"
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    
+    mock_http_client = AsyncMock()
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+            with pytest.raises(HTTPException) as exc:
+                await config_router.get_models(mock_request, llm_name="bedrock")
+            assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
 async def test_get_models_bedrock_api_error(mock_request):
     """Test getting Bedrock models with API error."""
     from botocore.exceptions import ClientError

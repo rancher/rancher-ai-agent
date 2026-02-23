@@ -266,6 +266,145 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /llm/{llm_name}/models:
+    get:
+      summary: Get available models for an LLM provider
+      description: Retrieves the list of available models for a specific LLM provider (openai, gemini, bedrock, ollama)
+      operationId: get_models
+      tags:
+        - Configuration
+      parameters:
+        - name: llm_name
+          in: path
+          description: The name of the LLM provider
+          required: true
+          schema:
+            type: string
+            enum: [openai, gemini, bedrock, ollama]
+          example: openai
+        - name: url
+          in: query
+          description: Ollama server URL (required for ollama provider)
+          required: false
+          schema:
+            type: string
+          example: http://localhost:11434
+      responses:
+        '200':
+          description: List of available models
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+              example: ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"]
+        '400':
+          description: Invalid provider or missing Ollama URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Failed to fetch Ollama models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /settings:
+    get:
+      summary: Get current agent settings
+      description: Retrieves the current configuration settings for the AI agent
+      operationId: get_settings
+      tags:
+        - Configuration
+      responses:
+        '200':
+          description: Current agent settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  storageType:
+                    type: string
+                    description: Type of storage backend being used
+                    example: in-memory
+                required:
+                  - storageType
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: Update agent settings
+      description: Updates the agent settings stored in the llm-config Kubernetes secret
+      operationId: update_settings
+      tags:
+        - Configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsUpdate'
+      responses:
+        '200':
+          description: Settings updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Updated settings (secret data)
+                additionalProperties:
+                  type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden - user does not have permission to update settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   schemas:
     Chat:
@@ -392,6 +531,76 @@ components:
       example:
         message: userId not found
 
+    SettingsUpdate:
+      type: object
+      description: Configuration settings for the AI agent
+      properties:
+        OPENAI_API_KEY:
+          type: string
+          description: OpenAI API key
+        OPENAI_URL:
+          type: string
+          description: OpenAI API base URL
+        SYSTEM_PROMPT:
+          type: string
+          description: System prompt for the agent
+        MODEL:
+          type: string
+          description: Default model name
+        OLLAMA_MODEL:
+          type: string
+          description: Model to use with Ollama
+        GEMINI_MODEL:
+          type: string
+          description: Model to use with Gemini
+        OPENAI_MODEL:
+          type: string
+          description: Model to use with OpenAI
+        BEDROCK_MODEL:
+          type: string
+          description: Model to use with Bedrock
+        OLLAMA_URL:
+          type: string
+          description: URL to Ollama server
+        GOOGLE_API_KEY:
+          type: string
+          description: Google API key for Gemini
+        ACTIVE_LLM:
+          type: string
+          enum: [openai, gemini, bedrock, ollama]
+          description: Currently active LLM provider
+        ENABLE_RAG:
+          type: string
+          description: Enable RAG (true/false)
+        EMBEDDINGS_MODEL:
+          type: string
+          description: Model to use for embeddings
+        LANGFUSE_HOST:
+          type: string
+          description: Langfuse server host
+        LANGFUSE_PUBLIC_KEY:
+          type: string
+          description: Langfuse public key
+        LANGFUSE_SECRET_KEY:
+          type: string
+          description: Langfuse secret key
+        AWS_REGION:
+          type: string
+          description: AWS region for Bedrock
+        AWS_BEARER_TOKEN_BEDROCK:
+          type: string
+          description: AWS bearer token for Bedrock
+        AWS_SECRET_ACCESS_KEY:
+          type: string
+          description: AWS secret access key
+        AWS_ACCESS_KEY_ID:
+          type: string
+          description: AWS access key ID
+      example:
+        ACTIVE_LLM: openai
+        OPENAI_API_KEY: sk-...
+        OPENAI_MODEL: gpt-4o
+
   securitySchemes:
     cookieAuth:
       type: apiKey
@@ -407,3 +616,5 @@ tags:
     description: Chat management operations
   - name: Messages
     description: Message retrieval and filtering
+  - name: Configuration
+    description: LLM and agent configuration management

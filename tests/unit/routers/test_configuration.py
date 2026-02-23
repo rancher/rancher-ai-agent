@@ -144,6 +144,98 @@ async def test_get_models_ollama_bad_status(mock_request):
 
 
 @pytest.mark.asyncio
+async def test_get_models_bedrock_missing_region(mock_request):
+    """Test getting Bedrock models without region parameter."""
+    mock_request.query_params = {"access_key_id": "test", "secret_access_key": "test"}
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with pytest.raises(HTTPException) as exc:
+            await config_router.get_models(mock_request, llm_name="bedrock")
+        assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_missing_credentials(mock_request):
+    """Test getting Bedrock models without credentials."""
+    mock_request.query_params = {"region": "us-east-1"}
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with pytest.raises(HTTPException) as exc:
+            await config_router.get_models(mock_request, llm_name="bedrock")
+        assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_success(mock_request):
+    """Test getting Bedrock models successfully."""
+    mock_request.query_params = {
+        "region": "us-east-1",
+        "access_key_id": "AKIA...",
+        "secret_access_key": "wJalrX..."
+    }
+    
+    mock_bedrock_client = MagicMock()
+    mock_bedrock_client.list_foundation_models.return_value = {
+        "modelSummaries": [
+            {"modelId": "anthropic.claude-opus-4-5-20251101-v1:0"},
+            {"modelId": "anthropic.claude-3-sonnet-20240229-v1:0"}
+        ]
+    }
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("app.routers.configuration.boto3.client", return_value=mock_bedrock_client):
+            resp = await config_router.get_models(mock_request, llm_name="bedrock")
+            assert resp.status_code == status.HTTP_200_OK
+            content = json.loads(resp.body)
+            assert "anthropic.claude-opus-4-5-20251101-v1:0" in content
+            assert "anthropic.claude-3-sonnet-20240229-v1:0" in content
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_invalid_credentials(mock_request):
+    """Test getting Bedrock models with invalid credentials."""
+    from botocore.exceptions import ClientError
+    
+    mock_request.query_params = {
+        "region": "us-east-1",
+        "access_key_id": "invalid",
+        "secret_access_key": "invalid"
+    }
+    
+    mock_bedrock_client = MagicMock()
+    error_response = {'Error': {'Code': 'InvalidSignatureException', 'Message': 'The request signature we calculated does not match'}}
+    mock_bedrock_client.list_foundation_models.side_effect = ClientError(error_response, 'ListFoundationModels')
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("app.routers.configuration.boto3.client", return_value=mock_bedrock_client):
+            with pytest.raises(HTTPException) as exc:
+                await config_router.get_models(mock_request, llm_name="bedrock")
+            assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_api_error(mock_request):
+    """Test getting Bedrock models with API error."""
+    from botocore.exceptions import ClientError
+    
+    mock_request.query_params = {
+        "region": "us-east-1",
+        "access_key_id": "AKIA...",
+        "secret_access_key": "wJalrX..."
+    }
+    
+    mock_bedrock_client = MagicMock()
+    error_response = {'Error': {'Code': 'ServiceUnavailable', 'Message': 'Service is temporarily unavailable'}}
+    mock_bedrock_client.list_foundation_models.side_effect = ClientError(error_response, 'ListFoundationModels')
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("app.routers.configuration.boto3.client", return_value=mock_bedrock_client):
+            with pytest.raises(HTTPException) as exc:
+                await config_router.get_models(mock_request, llm_name="bedrock")
+            assert exc.value.status_code == status.HTTP_502_BAD_GATEWAY
+
+
+@pytest.mark.asyncio
 async def test_get_settings_success(mock_request):
     """Test getting settings successfully."""
     with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):

@@ -289,6 +289,27 @@ paths:
           schema:
             type: string
           example: http://localhost:11434
+        - name: region
+          in: query
+          description: AWS region (required for bedrock provider, e.g. us-east-1, us-west-2)
+          required: false
+          schema:
+            type: string
+          example: us-east-1
+        - name: access_key_id
+          in: query
+          description: AWS access key ID (required for bedrock provider)
+          required: false
+          schema:
+            type: string
+          example: AKIA...
+        - name: secret_access_key
+          in: query
+          description: AWS secret access key (required for bedrock provider)
+          required: false
+          schema:
+            type: string
+          example: wJalrX...
       responses:
         '200':
           description: List of available models
@@ -300,19 +321,19 @@ paths:
                   type: string
               example: ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"]
         '400':
-          description: Invalid provider or missing Ollama URL
+          description: Invalid provider or missing required parameters
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Unauthorized
+          description: Unauthorized or invalid credentials
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '502':
-          description: Failed to fetch Ollama models
+          description: Failed to fetch models from provider
           content:
             application/json:
               schema:

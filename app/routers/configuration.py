@@ -1,10 +1,11 @@
 import logging
-import os
 import base64
+import httpx
+import boto3
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import httpx
+from botocore.exceptions import ClientError
 from kubernetes import client, config as k8s_config
 from kubernetes.client.rest import ApiException
 
@@ -118,6 +119,8 @@ async def check_k8s_permission(
 async def get_models(request: Request, llm_name: str):
     """
     Endpoint to retrieve available LLM models.
+    For ollama: requires 'url' query parameter
+    For bedrock: requires 'region' and either ('access_key_id' + 'secret_access_key') or 'bearer_token'
     """
     try:
         user_id = await get_user_id_from_request(request)
@@ -153,6 +156,62 @@ async def get_models(request: Request, llm_name: str):
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Failed to fetch Ollama models: Ollama server is not available at {ollama_url}"
+                )
+
+        elif llm_name == "bedrock":
+            region = request.query_params.get("region")
+            bearer_token = request.query_params.get("bearer_token")
+            access_key_id = request.query_params.get("access_key_id")
+            secret_access_key = request.query_params.get("secret_access_key")
+            
+            if not region:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AWS region is required for Bedrock")
+            
+            # Check authentication method
+            if bearer_token:
+                # Use bearer token (not standard AWS, but handle if provided)
+                logging.warning("Bearer token auth for Bedrock not standard AWS method")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please use access_key_id and secret_access_key for Bedrock")
+            
+            if not access_key_id or not secret_access_key:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Both access_key_id and secret_access_key are required for Bedrock")
+            
+            try:
+                # Create Bedrock client with provided credentials
+                bedrock_client = boto3.client(
+                    'bedrock',
+                    region_name=region,
+                    aws_access_key_id=access_key_id,
+                    aws_secret_access_key=secret_access_key
+                )
+                
+                # List foundation models
+                response = bedrock_client.list_foundation_models()
+                
+                # Extract model IDs
+                bedrock_models = [model['modelId'] for model in response.get('modelSummaries', [])]
+                models = bedrock_models
+                
+                logging.info(f"Retrieved {len(models)} Bedrock models from region {region}")
+                
+            except ClientError as e:
+                logging.error(f"Bedrock API error: {e}")
+                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+                if error_code == 'AccessDenied' or error_code == 'InvalidSignatureException':
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid AWS credentials for Bedrock"
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Failed to fetch Bedrock models: {str(e)}"
+                    )
+            except Exception as e:
+                logging.error(f"Failed to fetch Bedrock models: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to fetch Bedrock models: {str(e)}"
                 )
         
         return JSONResponse(

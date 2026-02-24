@@ -296,20 +296,13 @@ paths:
           schema:
             type: string
           example: us-east-1
-        - name: access_key_id
+        - name: bearerToken
           in: query
-          description: AWS access key ID (required for bedrock provider)
+          description: AWS bearer token (required for bedrock provider)
           required: false
           schema:
             type: string
-          example: AKIA...
-        - name: secret_access_key
-          in: query
-          description: AWS secret access key (required for bedrock provider)
-          required: false
-          schema:
-            type: string
-          example: wJalrX...
+          example: token_example...
       responses:
         '200':
           description: List of available models
@@ -608,12 +601,6 @@ components:
         AWS_BEARER_TOKEN_BEDROCK:
           type: string
           description: AWS bearer token for Bedrock
-        AWS_SECRET_ACCESS_KEY:
-          type: string
-          description: AWS secret access key
-        AWS_ACCESS_KEY_ID:
-          type: string
-          description: AWS access key ID
       example:
         ACTIVE_LLM: openai
         OPENAI_API_KEY: sk-...

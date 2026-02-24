@@ -37,9 +37,7 @@ AVAILABLE_MODELS = {
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
     ],
-    "bedrock": [
-        "global.anthropic.claude-opus-4-5-20251101-v1:0",
-    ],
+    "bedrock": [],
     "ollama": []
 }
 
@@ -62,8 +60,6 @@ class SettingsUpdate(BaseModel):
     LANGFUSE_SECRET_KEY: str = None
     AWS_REGION: str = None
     AWS_BEARER_TOKEN_BEDROCK: str = None
-    AWS_SECRET_ACCESS_KEY: str = None
-    AWS_ACCESS_KEY_ID: str = None
 
 async def check_k8s_permission(
     user_id: str,
@@ -106,7 +102,7 @@ async def check_k8s_permission(
         # Send SubjectAccessReview to Kubernetes API
         response = auth_api.create_subject_access_review(sar)
         
-        logging.info(f"Permission check for user {user_id}: {verb} {resource} in {namespace} - Allowed: {response.status.allowed}")
+        logging.debug(f"Permission check for user: {verb} {resource} in {namespace} - Allowed: {response.status.allowed}")
         return response.status.allowed
     
     except ApiException as e:
@@ -168,109 +164,49 @@ async def get_models(request: Request, llm_name: str):
         elif llm_name == "bedrock":
             region = request.query_params.get("region")
             bearer_token = request.query_params.get("bearerToken")
-            access_key_id = request.query_params.get("accessKeyId")
-            secret_access_key = request.query_params.get("secretAccessKey")
             
             if not region:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AWS region is required for Bedrock")
             
-            if bearer_token:
-                # Use bearer token authentication
-                logging.info("Using bearer token authentication for Bedrock")
-                try:
-                    # Create Bedrock client with bearer token in headers
-                    bedrock_client = boto3.client(
-                        'bedrock',
-                        region_name=region,
-                    )
-                    
-                    # Override the client with custom headers for bearer token
-                    bedrock_client._client_config.s3 = {'addressing_style': 'virtual'}
-                    bedrock_client.meta.events._emitter._handlers = {}
-                    
-                    # Use direct HTTP request with bearer token
-                    async with httpx.AsyncClient(timeout=2.0) as http_client:
-                        headers = {"Authorization": f"Bearer {bearer_token}"}
-                        response = await http_client.get(
-                            f"https://bedrock.{region}.amazonaws.com/foundation-models",
-                            headers=headers
-                        )
-                        if response.status_code == 200:
-                            data = response.json()
-                            bedrock_models = [model['modelId'] for model in data.get('modelSummaries', [])]
-                            models = bedrock_models
-                        else:
-                            raise HTTPException(
-                                status_code=status.HTTP_401_UNAUTHORIZED if response.status_code == 401 else status.HTTP_502_BAD_GATEWAY,
-                                detail=f"Failed to fetch Bedrock models: {response.status_code}"
-                            )
-                except InvalidRegionError as e:
-                    logging.error(f"Invalid AWS region: {e}")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Invalid AWS region: {region}"
-                    )
-                except httpx.InvalidURL as e:
-                    logging.error(f"Invalid region format for Bedrock URL: {e}")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Invalid AWS region: {region}"
-                    )
-                except httpx.RequestError as e:
-                    logging.error(f"Failed to fetch Bedrock models with bearer token: {e}")
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Failed to fetch Bedrock models: {str(e)}"
-                    )
+            if not bearer_token:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="bearerToken is required for Bedrock")
             
-            elif access_key_id and secret_access_key:
-                try:
-                    # Create Bedrock client with provided credentials
-                    bedrock_client = boto3.client(
-                        'bedrock',
-                        region_name=region,
-                        aws_access_key_id=access_key_id,
-                        aws_secret_access_key=secret_access_key
+            # Use bearer token authentication
+            logging.info("Using bearer token authentication for Bedrock")
+            try:
+                # Use direct HTTP request with bearer token
+                async with httpx.AsyncClient(timeout=2.0) as http_client:
+                    headers = {"Authorization": f"Bearer {bearer_token}"}
+                    response = await http_client.get(
+                        f"https://bedrock.{region}.amazonaws.com/foundation-models",
+                        headers=headers
                     )
-                    
-                    # List foundation models
-                    response = bedrock_client.list_foundation_models()
-                    
-                    # Extract model IDs
-                    bedrock_models = [model['modelId'] for model in response.get('modelSummaries', [])]
-                    models = bedrock_models
-                    
-                    logging.info(f"Retrieved {len(models)} Bedrock models from region {region}")
-                    
-                except ValueError as e:
-                    logging.error(f"Invalid Bedrock parameter: {e}")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Invalid Bedrock configuration: {str(e)}"
-                    )
-                except ClientError as e:
-                    logging.error(f"Bedrock API error: {e}")
-                    error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-                    if error_code == 'AccessDenied' or error_code == 'InvalidSignatureException':
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid AWS credentials for Bedrock"
-                        )
+                    if response.status_code == 200:
+                        data = response.json()
+                        bedrock_models = [model['modelId'] for model in data.get('modelSummaries', [])]
+                        models = bedrock_models
                     else:
                         raise HTTPException(
-                            status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail=f"Failed to fetch Bedrock models: {str(e)}"
+                            status_code=status.HTTP_401_UNAUTHORIZED if response.status_code == 401 else status.HTTP_502_BAD_GATEWAY,
+                            detail=f"Failed to fetch Bedrock models: {response.status_code}"
                         )
-                except Exception as e:
-                    logging.error(f"Failed to fetch Bedrock models: {e}")
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Failed to fetch Bedrock models: {str(e)}"
-                    )
-            else:
+            except InvalidRegionError as e:
+                logging.error(f"Invalid AWS region: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Either bearerToken or both accessKeyId and secretAccessKey are required for Bedrock"
+                    detail=f"Invalid AWS region: {region}"
+                )
+            except httpx.InvalidURL as e:
+                logging.error(f"Invalid region format for Bedrock URL: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid AWS region: {region}"
+                )
+            except httpx.RequestError as e:
+                logging.error(f"Failed to fetch Bedrock models with bearer token: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to fetch Bedrock models: {str(e)}"
                 )
         
         return JSONResponse(
@@ -337,13 +273,13 @@ async def update_settings(settings: SettingsUpdate, request: Request):
         )
 
         if not has_permission:
-            logging.warning(f"User {user_id} attempted to update settings without permission")
+            logging.warning(f"User attempted to update settings without permission")
             return JSONResponse(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": f"User does not have permission to update settings in namespace {AGENT_NAMESPACE}"}
             )
 
-        logging.info(f"User {user_id} is updating settings: {settings}")
+        logging.debug(f"User is updating settings: {settings}")
 
         # Validate settings based on ACTIVE_CHATBOT
         updated_fields = settings.model_dump(exclude_none=True)
@@ -373,12 +309,11 @@ async def update_settings(settings: SettingsUpdate, request: Request):
                 
                 # Check for authentication method
                 has_bearer = updated_fields.get("AWS_BEARER_TOKEN_BEDROCK")
-                has_access_key = updated_fields.get("AWS_ACCESS_KEY_ID") and updated_fields.get("AWS_SECRET_ACCESS_KEY")
                 
-                if not has_bearer and not has_access_key:
+                if not has_bearer:
                     return JSONResponse(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        content={"detail": "Either AWS_BEARER_TOKEN_BEDROCK or both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required when ACTIVE_LLM is 'bedrock'"}
+                        content={"detail": "AWS_BEARER_TOKEN_BEDROCK is required when ACTIVE_LLM is 'bedrock'"}
                     )
             
             elif active_chatbot.lower() == "openai":

@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import END
 from app.services.agent.base import BaseAgentBuilder
 from app.services.agent.child import ChildAgentBuilder, create_child_agent
-from app.services.agent.loader import AgentConfig, HumanValidationTool, ToolActionType, AuthenticationType
+from app.services.agent.loader import AgentConfig, AuthenticationType
 
 
 class MockTool:
@@ -54,9 +54,7 @@ def agent_config():
         system_prompt="You are a test child agent",
         mcp_url="http://test:8080",
         authentication=AuthenticationType.NONE,
-        human_validation_tools=[
-            HumanValidationTool(name="patchKubernetesResource", type=ToolActionType.UPDATE)
-        ]
+        human_validation_tools=["patchKubernetesResource"]
     )
 
 

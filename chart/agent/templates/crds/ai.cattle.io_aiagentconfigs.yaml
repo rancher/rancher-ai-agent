@@ -67,27 +67,19 @@ spec:
               description:
                 description: Description provides details about the agent's purpose
                 type: string
+              displayName:
+                description: DisplayName is the name of the AI agent
+                type: string
               enabled:
                 description: Enabled indicates if this agent configuration is enabled
                 type: boolean
               humanValidationTools:
                 description: HumanValidationTools lists tools requiring human validation
                 items:
-                  description: HumanValidationTool defines a tool that requires human
-                    confirmation
-                  properties:
-                    name:
-                      description: Name of the tool
-                      type: string
-                  required:
-                  - name
-                  type: object
+                  type: string
                 type: array
               mcpURL:
                 description: MCPURL is the Model Context Protocol server URL
-                type: string
-              name:
-                description: Name is the name of the AI agent
                 type: string
               systemPrompt:
                 description: SystemPrompt is the initial system-level instructions
@@ -97,7 +89,7 @@ spec:
                 description: ToolSet specifies a predefined set of tools for the agent
                 type: string
             required:
-            - name
+            - displayName
             type: object
           status:
             description: AIAgentConfigStatus defines the observed state of AIAgentConfig

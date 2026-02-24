@@ -15,7 +15,6 @@ from app.services.agent.base import (
 )
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage, SystemMessage
 from langchain_core.tools import ToolException
-from app.services.agent.loader import HumanValidationTool
 from ollama import ResponseError
 
 class FakeMessage:
@@ -75,8 +74,8 @@ def agent_config_with_validation():
     """Mock agent configuration with human validation enabled."""
     config = MagicMock()
     config.human_validation_tools = [
-        HumanValidationTool(name="patchKubernetesResource", type="UPDATE"),
-        HumanValidationTool(name="createKubernetesResource", type="CREATE")
+        "patchKubernetesResource",
+        "createKubernetesResource"
     ]
     return config
 
@@ -628,7 +627,7 @@ def test_create_confirmation_response_formats_correctly():
 @pytest.mark.asyncio
 async def test_should_interrupt_returns_message_for_update_tools(mock_llm, mock_checkpointer):
     """Verify interrupt message is generated for UPDATE validation tools."""
-    validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+    validation_tools = ["patchKubernetesResource"]
     plan_tool = MockTool("patchKubernetesResource_plan", "plan response for patching")
     regular_tool = MockTool("patchKubernetesResource", "patched")
 
@@ -659,7 +658,7 @@ async def test_should_interrupt_returns_message_for_update_tools(mock_llm, mock_
 @pytest.mark.asyncio
 async def test_should_interrupt_returns_empty_for_non_validated_tools(mock_llm, mock_checkpointer):
     """Verify no interrupt message for tools without validation."""
-    validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+    validation_tools = ["patchKubernetesResource"]
 
     builder = BaseAgentBuilder(
         llm=mock_llm,
@@ -681,7 +680,7 @@ async def test_should_interrupt_returns_empty_for_non_validated_tools(mock_llm, 
 @pytest.mark.asyncio
 async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpointer):
     """Verify handle_interrupt returns False when user says no."""
-    validation_tools = [HumanValidationTool(name="testTool", type="UPDATE")]
+    validation_tools = ["testTool"]
     plan_tool = MockTool("testTool_plan", "plan for test")
     regular_tool = MockTool("testTool", "result")
 
@@ -713,7 +712,7 @@ async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpoint
 @pytest.mark.asyncio
 async def test_handle_interrupt_continues_on_yes_response(mock_llm, mock_checkpointer):
     """Verify handle_interrupt returns True when user says yes."""
-    validation_tools = [HumanValidationTool(name="testTool", type="UPDATE")]
+    validation_tools = ["testTool"]
     plan_tool = MockTool("testTool_plan", "plan for test")
     regular_tool = MockTool("testTool", "result")
 
@@ -798,7 +797,7 @@ async def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt,
     when user approves tool execution.
     """
     # Tool requiring human validation
-    validation_tools = [HumanValidationTool(name="patchKubernetesResource", type="UPDATE")]
+    validation_tools = ["patchKubernetesResource"]
     plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
     regular_tool = MockTool("patchKubernetesResource", "patched")
 

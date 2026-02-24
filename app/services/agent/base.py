@@ -13,7 +13,7 @@ from langgraph.graph.state import Checkpointer
 from langchain_core.language_models.chat_models import BaseChatModel
 from ollama import ResponseError
 from langchain_core.callbacks.manager import dispatch_custom_event
-from .loader import AgentConfig, HumanValidationTool
+from .loader import AgentConfig
 from .state import AgentState
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
@@ -310,7 +310,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         
         return "continue"
     
-    async def should_interrupt(self, human_validation_tools: list[HumanValidationTool], tool_call: any) -> str:
+    async def should_interrupt(self, human_validation_tools: list[str], tool_call: any) -> str:
         """
         Checks if a tool call requires user confirmation and generates an interrupt message.
 
@@ -321,8 +321,8 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
             A formatted string to trigger a langgraph.types.interrupt, or an empty string
             if no interruption is needed.
         """
-        for tools in human_validation_tools:
-            if tools.name == tool_call["name"]:
+        for tool_name in human_validation_tools:
+            if tool_name == tool_call["name"]:
                 plan_tool_name = tool_call["name"] + "_plan"
                 plan_tool = self.planning_tools_by_name.get(plan_tool_name)
                 if plan_tool is None:
@@ -333,7 +333,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
 
         return ""
 
-    async def handle_interrupt(self, human_validation_tools: list[HumanValidationTool], tool_call: dict, state: AgentState) -> tuple[bool, str | None]:
+    async def handle_interrupt(self, human_validation_tools: list[str], tool_call: dict, state: AgentState) -> tuple[bool, str | None]:
         """Handles the user confirmation interrupt for a tool call.
         
         Returns:

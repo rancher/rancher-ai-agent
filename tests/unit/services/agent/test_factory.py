@@ -463,6 +463,7 @@ async def test_create_single_agent_success(mock_update_status, mock_create_clien
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.system_prompt = "Test prompt"
+    mock_config.toolset = None
     
     # Mock MCP client
     mock_client_instance = MagicMock()
@@ -505,3 +506,45 @@ async def test_create_single_agent_mcp_failure(mock_update_status, mock_create_c
     
     assert "Failed to load MCP tools" in str(exc_info.value)
     mock_update_status.assert_called()
+
+
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.create_root_agent')
+@patch('app.services.agent.factory.create_mcp_client')
+@patch('app.services.agent.factory._update_agent_status')
+async def test_create_single_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_root):
+    """Verify _create_single_agent filters tools by toolset when toolset is configured."""
+    mock_llm = MagicMock()
+    mock_websocket = MagicMock()
+    mock_checkpointer = MagicMock()
+
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.system_prompt = "Test prompt"
+    mock_config.toolset = "rancher-core"
+
+    tool_matching = MagicMock()
+    tool_matching.name = "matching_tool"
+    tool_matching.metadata = {"_meta": {"toolset": "rancher-core"}}
+
+    tool_other = MagicMock()
+    tool_other.name = "other_tool"
+    tool_other.metadata = {"_meta": {"toolset": "fleet"}}
+
+    tool_no_meta = MagicMock()
+    tool_no_meta.name = "generic_tool"
+    tool_no_meta.metadata = {}
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.get_tools = AsyncMock(return_value=[tool_matching, tool_other, tool_no_meta])
+    mock_create_client.return_value = mock_client_instance
+
+    mock_agent = MagicMock()
+    mock_create_root.return_value = mock_agent
+
+    result = await _create_single_agent(mock_llm, mock_config, mock_checkpointer, mock_websocket)
+
+    assert result == mock_agent
+    filtered_tools = mock_create_root.call_args[0][1]
+    assert len(filtered_tools) == 1
+    assert filtered_tools[0].name == "matching_tool"

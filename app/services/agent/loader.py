@@ -92,11 +92,6 @@ Examples: <suggestion>How do I scale a deployment?</suggestion><suggestion>Check
 """
 
 
-class HumanValidationTool(BaseModel):
-    name: str
-    type: ToolActionType
-
-
 class AgentConfig(BaseModel):
     """Configuration for a single agent."""
     name: str 
@@ -107,7 +102,7 @@ class AgentConfig(BaseModel):
     authentication: AuthenticationType = AuthenticationType.NONE
     authentication_secret: Optional[str] = None
     toolset: Optional[str] = None
-    human_validation_tools: list[HumanValidationTool] = []
+    human_validation_tools: list[str] = []
     ready: bool = False
 
 
@@ -173,12 +168,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
     # Convert human validation tools
     human_validation_tools = []
     for tool in spec.get("humanValidationTools", []):
-        human_validation_tools.append(
-            HumanValidationTool(
-                name=tool["name"],
-                type=ToolActionType[tool["type"]]
-            )
-        )
+        human_validation_tools.append(tool)
     
     return AgentConfig(
         name=metadata.get("name", ""),
@@ -214,8 +204,8 @@ def _create_default_ai_agent_config_crds(api: client.CustomObjectsApi):
                 "enabled": True,
                 "toolSet": "rancher",
                 "humanValidationTools": [
-                    {"name": "createKubernetesResource", "type": "CREATE"},
-                    {"name": "patchKubernetesResource", "type": "UPDATE"},
+                    "createKubernetesResource", 
+                    "patchKubernetesResource"
                 ]
             }
         },

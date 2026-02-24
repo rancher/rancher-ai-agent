@@ -195,6 +195,13 @@ async def _create_single_agent(
     client = create_mcp_client(agent_cfg, websocket)
     try:
         tools = await client.get_tools()
+        # Filter tools by toolset if specified in agent config
+        if agent_cfg.toolset:
+            tools = [
+                tool for tool in tools 
+                if tool.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset
+            ]
+            logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
         _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
     except* Exception as eg:
         error_message = ""

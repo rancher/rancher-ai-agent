@@ -140,7 +140,7 @@ async def get_models(request: Request, llm_name: str):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ollama URL is required")
 
             try:
-                async with httpx.AsyncClient(timeout=3.0) as http_client:
+                async with httpx.AsyncClient(timeout=2.0) as http_client:
                     response = await http_client.get(f"{ollama_url}/api/tags")
                     if response.status_code == 200:
                         ollama_data = response.json()
@@ -188,7 +188,7 @@ async def get_models(request: Request, llm_name: str):
                     bedrock_client.meta.events._emitter._handlers = {}
                     
                     # Use direct HTTP request with bearer token
-                    async with httpx.AsyncClient(timeout=10.0) as http_client:
+                    async with httpx.AsyncClient(timeout=2.0) as http_client:
                         headers = {"Authorization": f"Bearer {bearer_token}"}
                         response = await http_client.get(
                             f"https://bedrock.{region}.amazonaws.com/foundation-models",

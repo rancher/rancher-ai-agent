@@ -127,7 +127,7 @@ def test_builder_creates_tools_by_name_dict(mock_llm, mock_tools, mock_checkpoin
 @patch("langgraph.types.interrupt", new=MagicMock(return_value="no"))
 async def test_tool_node_human_verification_cancelled(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
     """Verify that tool execution is cancelled when user responds 'no' to confirmation."""
-    plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan for patching")
     builder = BaseAgentBuilder(
         llm=mock_llm, 
         tools=mock_tools + [plan_tool], 
@@ -158,7 +158,7 @@ async def test_tool_node_human_verification_cancelled(mock_llm, mock_tools, mock
 @patch("langgraph.types.interrupt", new=MagicMock(return_value="yes"))
 async def test_tool_node_human_verification_approved(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
     """Verify that tool execution proceeds when user responds 'yes' to confirmation."""
-    plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan for patching")
     builder = BaseAgentBuilder(
         llm=mock_llm, 
         tools=mock_tools + [plan_tool], 
@@ -628,7 +628,7 @@ def test_create_confirmation_response_formats_correctly():
 async def test_should_interrupt_returns_message_for_update_tools(mock_llm, mock_checkpointer):
     """Verify interrupt message is generated for UPDATE validation tools."""
     validation_tools = ["patchKubernetesResource"]
-    plan_tool = MockTool("patchKubernetesResource_plan", "plan response for patching")
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan response for patching")
     regular_tool = MockTool("patchKubernetesResource", "patched")
 
     builder = BaseAgentBuilder(
@@ -681,7 +681,7 @@ async def test_should_interrupt_returns_empty_for_non_validated_tools(mock_llm, 
 async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpointer):
     """Verify handle_interrupt returns False when user says no."""
     validation_tools = ["testTool"]
-    plan_tool = MockTool("testTool_plan", "plan for test")
+    plan_tool = MockTool("testToolPlan", "plan for test")
     regular_tool = MockTool("testTool", "result")
 
     builder = BaseAgentBuilder(
@@ -713,7 +713,7 @@ async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpoint
 async def test_handle_interrupt_continues_on_yes_response(mock_llm, mock_checkpointer):
     """Verify handle_interrupt returns True when user says yes."""
     validation_tools = ["testTool"]
-    plan_tool = MockTool("testTool_plan", "plan for test")
+    plan_tool = MockTool("testToolPlan", "plan for test")
     regular_tool = MockTool("testTool", "result")
 
     builder = BaseAgentBuilder(
@@ -798,7 +798,7 @@ async def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt,
     """
     # Tool requiring human validation
     validation_tools = ["patchKubernetesResource"]
-    plan_tool = MockTool("patchKubernetesResource_plan", "plan for patching")
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan for patching")
     regular_tool = MockTool("patchKubernetesResource", "patched")
 
     builder = BaseAgentBuilder(

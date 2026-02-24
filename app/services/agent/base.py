@@ -28,15 +28,15 @@ class BaseAgentBuilder:
         Args:
             llm: The language model to use for the agent's decisions.
             tools: A list of all tools the agent can use. Tools whose names end with
-                '_plan' are automatically assigned to planning_tools; the rest to tools.
+                'Plan' are automatically assigned to planning_tools; the rest to tools.
             system_prompt: The initial system-level instructions for the agent.
             checkpointer: The checkpointer for persisting agent state.
             agent_config: Configuration for the agent's behavior and settings.
             all_children_agents: List of all child agent configurations in the system.
         """
         self.llm = llm
-        self.planning_tools = [tool for tool in tools if tool.name.endswith("_plan")]
-        self.tools = [tool for tool in tools if not tool.name.endswith("_plan")]
+        self.planning_tools = [tool for tool in tools if tool.name.endswith("Plan")]
+        self.tools = [tool for tool in tools if not tool.name.endswith("Plan")]
         self.system_prompt = system_prompt
         self.checkpointer = checkpointer
         self.llm_with_tools = self.llm.bind_tools(self.tools)
@@ -323,7 +323,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         """
         for tool_name in human_validation_tools:
             if tool_name == tool_call["name"]:
-                plan_tool_name = tool_call["name"] + "_plan"
+                plan_tool_name = tool_call["name"] + "Plan"
                 plan_tool = self.planning_tools_by_name.get(plan_tool_name)
                 if plan_tool is None:
                     raise ValueError(f"planning tool '{plan_tool_name}' not found for tool '{tool_call['name']}'")

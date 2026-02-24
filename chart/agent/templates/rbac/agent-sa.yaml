@@ -5,6 +5,28 @@ metadata:
   namespace: cattle-ai-agent-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agent-subjectaccessreview-role
+rules:
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-subjectaccessreview-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agent-subjectaccessreview-role
+subjects:
+- kind: ServiceAccount
+  name: agent-sa
+  namespace: cattle-ai-agent-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: agent-role
@@ -12,7 +34,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "list"]
+  verbs: ["get", "list", "patch", "update"]
 - apiGroups: ["apps"]
   resources: ["deployments"]
   verbs: ["get", "update", "patch"]

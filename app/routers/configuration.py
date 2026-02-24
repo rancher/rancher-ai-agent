@@ -17,6 +17,8 @@ router = APIRouter(prefix="/v1/api", tags=["configuration"])
 AGENT_NAMESPACE = "cattle-ai-agent-system"
 SETTINGS_SECRET_NAME = "llm-config"
 
+AVAILABLE_LLM_PROVIDERS = {"ollama", "openai", "gemini", "bedrock"}
+
 # Hardcoded models
 AVAILABLE_MODELS = {
     "openai": [
@@ -343,6 +345,56 @@ async def update_settings(settings: SettingsUpdate, request: Request):
             )
 
         logging.info(f"User {user_id} is updating settings: {settings}")
+
+        # Validate settings based on ACTIVE_CHATBOT
+        updated_fields = settings.model_dump(exclude_none=True)
+        active_chatbot = updated_fields.get("ACTIVE_LLM")
+        
+        if active_chatbot:
+            if active_chatbot.lower() not in AVAILABLE_LLM_PROVIDERS:
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"detail": f"ACTIVE_LLM must be one of: {', '.join(sorted(AVAILABLE_LLM_PROVIDERS))}. Got: {active_chatbot}"}
+                )
+            
+            # Validate based on the active chatbot type
+            if active_chatbot.lower() == "ollama":
+                if not updated_fields.get("OLLAMA_URL") or not updated_fields.get("OLLAMA_MODEL"):
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "OLLAMA_URL and OLLAMA_MODEL are required when ACTIVE_LLM is 'ollama'"}
+                    )
+            
+            elif active_chatbot.lower() == "bedrock":
+                if not updated_fields.get("AWS_REGION") or not updated_fields.get("BEDROCK_MODEL"):
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "AWS_REGION and BEDROCK_MODEL are required when ACTIVE_LLM is 'bedrock'"}
+                    )
+                
+                # Check for authentication method
+                has_bearer = updated_fields.get("AWS_BEARER_TOKEN_BEDROCK")
+                has_access_key = updated_fields.get("AWS_ACCESS_KEY_ID") and updated_fields.get("AWS_SECRET_ACCESS_KEY")
+                
+                if not has_bearer and not has_access_key:
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "Either AWS_BEARER_TOKEN_BEDROCK or both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required when ACTIVE_LLM is 'bedrock'"}
+                    )
+            
+            elif active_chatbot.lower() == "openai":
+                if not updated_fields.get("OPENAI_API_KEY") or not updated_fields.get("OPENAI_MODEL"):
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "OPENAI_API_KEY and OPENAI_MODEL are required when ACTIVE_LLM is 'openai'"}
+                    )
+            
+            elif active_chatbot.lower() == "gemini":
+                if not updated_fields.get("GOOGLE_API_KEY") or not updated_fields.get("GEMINI_MODEL"):
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "GOOGLE_API_KEY and GEMINI_MODEL are required when ACTIVE_LLM is 'gemini'"}
+                    )
 
         try:
             try:

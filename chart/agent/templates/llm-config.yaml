@@ -8,7 +8,6 @@ stringData:
   OPENAI_API_KEY: "{{ .Values.openaiApiKey }}"
   OPENAI_URL: "{{ .Values.openaiUrl }}"
   SYSTEM_PROMPT: {{ .Values.systemPrompt | quote }}
-  MODEL: "{{ .Values.llmModel }}"
   OLLAMA_MODEL: "{{ .Values.ollamaLlmModel }}"
   GEMINI_MODEL: "{{ .Values.geminiLlmModel }}"
   OPENAI_MODEL: "{{ .Values.openaiLlmModel }}"

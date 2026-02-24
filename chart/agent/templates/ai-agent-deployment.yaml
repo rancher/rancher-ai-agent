@@ -50,12 +50,6 @@ spec:
                 name: llm-config
                 key: OPENAI_URL
                 optional: true
-          - name: MODEL
-            valueFrom:
-              secretKeyRef:
-                name: llm-config
-                key: MODEL
-                optional: true
           - name: OLLAMA_MODEL
             valueFrom:
               secretKeyRef:

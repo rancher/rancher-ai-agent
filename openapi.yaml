@@ -565,9 +565,6 @@ components:
         SYSTEM_PROMPT:
           type: string
           description: System prompt for the agent
-        MODEL:
-          type: string
-          description: Default model name
         OLLAMA_MODEL:
           type: string
           description: Model to use with Ollama

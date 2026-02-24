@@ -377,14 +377,15 @@ async def test_update_settings_success(mock_request):
     """Test updating settings successfully."""
     settings = SettingsUpdate(
         OPENAI_API_KEY="test-key",
-        OPENAI_URL="https://api.openai.com"
+        OPENAI_URL="https://api.openai.com",
+        OPENAI_MODEL="gpt-4"
     )
     
     mock_secret = MagicMock()
     mock_secret.data = {
         "OPENAI_API_KEY": "old-key",
         "OPENAI_URL": "old-url",
-        "MODEL": "gpt-4"
+        "OPENAI_MODEL": "gpt-3.5-turbo"
     }
     
     with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
@@ -401,7 +402,7 @@ async def test_update_settings_success(mock_request):
                     content = json.loads(resp.body)
                     assert "OPENAI_API_KEY" in content
                     assert "OPENAI_URL" in content
-                    assert "MODEL" in content
+                    assert "OPENAI_MODEL" in content
 
 
 @pytest.mark.asyncio

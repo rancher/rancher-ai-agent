@@ -9,7 +9,6 @@ mcp:
     tag: v0.1.2-alpha.5
     pullPolicy: IfNotPresent
 
-llmModel: ""
 ollamaLlmModel: ""
 geminiLlmModel: ""
 openaiLlmModel: ""

@@ -48,7 +48,6 @@ class SettingsUpdate(BaseModel):
     OPENAI_API_KEY: str = None
     OPENAI_URL: str = None
     SYSTEM_PROMPT: str = None
-    MODEL: str = None
     OLLAMA_MODEL: str = None
     GEMINI_MODEL: str = None
     OPENAI_MODEL: str = None

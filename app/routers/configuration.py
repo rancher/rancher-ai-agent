@@ -5,7 +5,7 @@ import boto3
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, InvalidRegionError
 from kubernetes import client, config as k8s_config
 from kubernetes.client.rest import ApiException
 
@@ -203,6 +203,18 @@ async def get_models(request: Request, llm_name: str):
                                 status_code=status.HTTP_401_UNAUTHORIZED if response.status_code == 401 else status.HTTP_502_BAD_GATEWAY,
                                 detail=f"Failed to fetch Bedrock models: {response.status_code}"
                             )
+                except InvalidRegionError as e:
+                    logging.error(f"Invalid AWS region: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid AWS region: {region}"
+                    )
+                except httpx.InvalidURL as e:
+                    logging.error(f"Invalid region format for Bedrock URL: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid AWS region: {region}"
+                    )
                 except httpx.RequestError as e:
                     logging.error(f"Failed to fetch Bedrock models with bearer token: {e}")
                     raise HTTPException(

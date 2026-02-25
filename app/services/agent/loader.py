@@ -212,29 +212,10 @@ def _create_default_ai_agent_config_crds(api: client.CustomObjectsApi):
                 "authenticationType": "RANCHER",
                 "builtIn": True,
                 "enabled": True,
-                "toolSet": "rancher",
                 "humanValidationTools": [
                     {"name": "createKubernetesResource", "type": "CREATE"},
                     {"name": "patchKubernetesResource", "type": "UPDATE"},
                 ]
-            }
-        },
-         {
-            "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
-            "kind": "AIAgentConfig",
-            "metadata": {
-                "name": "fleet",
-                "namespace": NAMESPACE,
-            },
-            "spec": {
-                "displayName": "Fleet",
-                "description": "Manages Fleet resources such as GitRepos and Bundles",
-                "systemPrompt": "You are an AI assistant specialized in managing Fleet resources such as GitRepos and Bundles.",
-                "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
-                "authenticationType": "RANCHER",
-                "builtIn": True,
-                "enabled": False,
-                "toolSet": "fleet",
             }
         }
     ]

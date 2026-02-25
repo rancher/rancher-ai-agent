@@ -41,103 +41,85 @@ spec:
           - name: OPENAI_API_KEY
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: OPENAI_API_KEY
                 optional: true
           - name: OPENAI_URL
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: OPENAI_URL
                 optional: true
           - name: OLLAMA_MODEL
             valueFrom:
-              secretKeyRef:
+              configMapKeyRef:
                 name: llm-config
                 key: OLLAMA_MODEL
                 optional: true
           - name: GEMINI_MODEL
             valueFrom:
-              secretKeyRef:
+              configMapKeyRef:
                 name: llm-config
                 key: GEMINI_MODEL
                 optional: true
           - name: OPENAI_MODEL
             valueFrom:
-              secretKeyRef:
+              configMapKeyRef:
                 name: llm-config
                 key: OPENAI_MODEL
                 optional: true
           - name: BEDROCK_MODEL
             valueFrom:
-              secretKeyRef:
+              configMapKeyRef:
                 name: llm-config
                 key: BEDROCK_MODEL
                 optional: true
           - name: OLLAMA_URL
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: OLLAMA_URL
                 optional: true
           - name: GOOGLE_API_KEY
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: GOOGLE_API_KEY
                 optional: true
           - name: ACTIVE_LLM
             valueFrom:
-              secretKeyRef:
+              configMapKeyRef:
                 name: llm-config
                 key: ACTIVE_LLM
-                optional: true
-          - name: SYSTEM_PROMPT
-            valueFrom:
-              secretKeyRef:
-                name: llm-config
-                key: SYSTEM_PROMPT
-                optional: true
-          - name: ENABLE_RAG
-            valueFrom:
-              secretKeyRef:
-                name: llm-config
-                key: ENABLE_RAG
-                optional: true
-          - name: EMBEDDINGS_MODEL
-            valueFrom:
-              secretKeyRef:
-                name: llm-config
-                key: EMBEDDINGS_MODEL
                 optional: true
           - name: LANGFUSE_PUBLIC_KEY
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: LANGFUSE_PUBLIC_KEY
                 optional: true
           - name: LANGFUSE_SECRET_KEY
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: LANGFUSE_SECRET_KEY
                 optional: true
           - name: LANGFUSE_HOST
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: LANGFUSE_HOST
                 optional: true
           - name: AWS_BEARER_TOKEN_BEDROCK
             valueFrom:
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: AWS_BEARER_TOKEN_BEDROCK
                 optional: true
           - name: AWS_REGION
             valueFrom: 
               secretKeyRef:
-                name: llm-config
+                name: llm-secret
                 key: AWS_REGION
                 optional: true
           - name: DB_ENABLED

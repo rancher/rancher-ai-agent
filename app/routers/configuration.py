@@ -15,7 +15,10 @@ from ..services.auth import get_user_id_from_request
 router = APIRouter(prefix="/v1/api", tags=["configuration"])
 
 AGENT_NAMESPACE = "cattle-ai-agent-system"
-SETTINGS_SECRET_NAME = "llm-config"
+SETTINGS_SECRET_NAME = "llm-secret"
+SETTINGS_CONFIGMAP_NAME = "llm-config"
+# Fields stored in the ConfigMap (plain text) rather than the Secret
+CONFIGMAP_FIELDS = {"OLLAMA_MODEL", "BEDROCK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ACTIVE_LLM"}
 
 AVAILABLE_LLM_PROVIDERS = {"ollama", "openai", "gemini", "bedrock"}
 
@@ -340,41 +343,56 @@ async def update_settings(settings: SettingsUpdate, request: Request):
             
             v1 = client.CoreV1Api()
             
-            # Get the llm-config secret
-            secret = v1.read_namespaced_secret(SETTINGS_SECRET_NAME, AGENT_NAMESPACE)
+            # Split fields into configmap vs secret groups
+            all_fields = settings.model_dump(exclude_none=True)
+            configmap_updates = {k: v for k, v in all_fields.items() if k in CONFIGMAP_FIELDS}
+            secret_updates = {k: v for k, v in all_fields.items() if k not in CONFIGMAP_FIELDS}
+
+            response_data = {}
+
+            # Update ConfigMap fields
+            if configmap_updates:
+                configmap = v1.read_namespaced_config_map(SETTINGS_CONFIGMAP_NAME, AGENT_NAMESPACE)
+                cm_data = configmap.data or {}
+                existing_cm_keys = set(cm_data.keys())
+                for field_name, value in configmap_updates.items():
+                    if field_name in existing_cm_keys:
+                        cm_data[field_name] = str(value)
+                        logging.debug(f"Updated {field_name} in configmap")
+                configmap.data = cm_data
+                v1.patch_namespaced_config_map(SETTINGS_CONFIGMAP_NAME, AGENT_NAMESPACE, configmap)
+
+            # Update Secret fields
+            if secret_updates:
+                secret = v1.read_namespaced_secret(SETTINGS_SECRET_NAME, AGENT_NAMESPACE)
+                secret_data = secret.data or {}
+                existing_secret_keys = set(secret_data.keys())
+                for field_name, value in secret_updates.items():
+                    if field_name in existing_secret_keys:
+                        secret_data[field_name] = base64.b64encode(str(value).encode()).decode()
+                        logging.debug(f"Updated {field_name} in secret")
+                secret.data = secret_data
+                v1.patch_namespaced_secret(SETTINGS_SECRET_NAME, AGENT_NAMESPACE, secret)
             
-            # Update secret data with new values
-            secret_data = secret.data or {}
-            
-            # Build set of existing secret keys
-            existing_secret_keys = set(secret_data.keys())
-            
-            # Update each field that was provided (only non-None values)
-            for field_name, value in settings.model_dump(exclude_none=True).items():
-                if field_name in existing_secret_keys:
-                    secret_data[field_name] = base64.b64encode(str(value).encode()).decode()
-                    logging.info(f"Updated {field_name} in secret")
-            
-            # Patch the secret with new data
-            secret.data = secret_data
-            v1.patch_namespaced_secret(SETTINGS_SECRET_NAME, AGENT_NAMESPACE, secret)
-            
-            # Reset LLMManager singleton to force reinitialization for consistency, but as of now we are dedeploying the agent...
+            # Reset LLMManager singleton to force reinitialization for consistency, but as of now we are redeploying the agent...
             LLMManager._instance = None
 
-            # Re-fetch the secret to return the updated content
+            # Re-fetch both resources to return the updated content
+            updated_cm = v1.read_namespaced_config_map(SETTINGS_CONFIGMAP_NAME, AGENT_NAMESPACE)
             updated_secret = v1.read_namespaced_secret(SETTINGS_SECRET_NAME, AGENT_NAMESPACE)
+            response_data.update(updated_cm.data or {})
+            response_data.update(updated_secret.data or {})
 
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content=updated_secret.data
+                content=response_data
             )
 
         except ApiException as e:
-            logging.error(f"Kubernetes API error updating {SETTINGS_SECRET_NAME} secret: {e}")
+            logging.error(f"Kubernetes API error updating settings: {e}")
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content={"detail": f"Failed to update {SETTINGS_SECRET_NAME} secret: {str(e)}"}
+                content={"detail": f"Failed to update settings: {str(e)}"}
             )
 
     except HTTPException:

@@ -291,7 +291,11 @@ async def test_update_settings_success(mock_request):
     mock_secret.data = {
         "OPENAI_API_KEY": "old-key",
         "OPENAI_URL": "old-url",
-        "OPENAI_MODEL": "gpt-3.5-turbo"
+    }
+    
+    mock_configmap = MagicMock()
+    mock_configmap.data = {
+        "OPENAI_MODEL": "gpt-3.5-turbo",
     }
     
     with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
@@ -301,6 +305,7 @@ async def test_update_settings_success(mock_request):
                     mock_instance = MagicMock()
                     mock_api.return_value = mock_instance
                     mock_instance.read_namespaced_secret.return_value = mock_secret
+                    mock_instance.read_namespaced_config_map.return_value = mock_configmap
                     
                     resp = await config_router.update_settings(settings, mock_request)
                     
@@ -328,7 +333,7 @@ async def test_update_settings_k8s_error(mock_request):
                     
                     assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
                     content = json.loads(resp.body)
-                    assert "Failed to update llm-config secret" in content["detail"]
+                    assert "Failed to update settings" in content["detail"]
 
 
 @pytest.mark.asyncio
@@ -343,9 +348,13 @@ async def test_update_settings_partial_fields(mock_request):
     mock_secret = MagicMock()
     mock_secret.data = {
         "OPENAI_API_KEY": "old-key",
+        "OLLAMA_URL": "http://localhost:11434"
+    }
+    
+    mock_configmap = MagicMock()
+    mock_configmap.data = {
         "OPENAI_MODEL": "gpt-3.5",
         "ACTIVE_LLM": "gemini",
-        "OLLAMA_URL": "http://localhost:11434"
     }
     
     with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
@@ -355,6 +364,7 @@ async def test_update_settings_partial_fields(mock_request):
                     mock_instance = MagicMock()
                     mock_api.return_value = mock_instance
                     mock_instance.read_namespaced_secret.return_value = mock_secret
+                    mock_instance.read_namespaced_config_map.return_value = mock_configmap
                     
                     resp = await config_router.update_settings(settings, mock_request)
                     
@@ -368,13 +378,16 @@ async def test_update_settings_partial_fields(mock_request):
 
 @pytest.mark.asyncio
 async def test_update_settings_nonexistent_field(mock_request):
-    """Test updating a field that doesn't exist in the secret."""
+    """Test updating a field that doesn't exist in the secret or configmap."""
     settings = SettingsUpdate(OPENAI_API_KEY="new-key")
     
     mock_secret = MagicMock()
     mock_secret.data = {
         "OLLAMA_URL": "http://localhost:11434"
     }
+    
+    mock_configmap = MagicMock()
+    mock_configmap.data = {}
     
     with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
@@ -383,12 +396,13 @@ async def test_update_settings_nonexistent_field(mock_request):
                     mock_instance = MagicMock()
                     mock_api.return_value = mock_instance
                     mock_instance.read_namespaced_secret.return_value = mock_secret
+                    mock_instance.read_namespaced_config_map.return_value = mock_configmap
                     
                     resp = await config_router.update_settings(settings, mock_request)
                     
                     assert resp.status_code == status.HTTP_200_OK
                     content = json.loads(resp.body)
-                    # Should return the secret data as-is
+                    # Should return the data as-is
                     assert "OLLAMA_URL" in content
                     assert content["OLLAMA_URL"] == "http://localhost:11434"
 
@@ -431,6 +445,10 @@ async def test_update_settings_validate_ollama_success(mock_request):
     mock_secret = MagicMock()
     mock_secret.data = {
         "OLLAMA_URL": "old-url",
+    }
+    
+    mock_configmap = MagicMock()
+    mock_configmap.data = {
         "OLLAMA_MODEL": "old-model",
         "ACTIVE_LLM": "gemini"
     }
@@ -442,6 +460,7 @@ async def test_update_settings_validate_ollama_success(mock_request):
                     mock_instance = MagicMock()
                     mock_api.return_value = mock_instance
                     mock_instance.read_namespaced_secret.return_value = mock_secret
+                    mock_instance.read_namespaced_config_map.return_value = mock_configmap
                     
                     resp = await config_router.update_settings(settings, mock_request)
                     assert resp.status_code == status.HTTP_200_OK
@@ -490,6 +509,11 @@ async def test_update_settings_validate_bedrock_with_bearer_token(mock_request):
     mock_secret = MagicMock()
     mock_secret.data = {
         "AWS_REGION": "us-west-2",
+        "AWS_BEARER_TOKEN_BEDROCK": "old-token"
+    }
+    
+    mock_configmap = MagicMock()
+    mock_configmap.data = {
         "BEDROCK_MODEL": "old-model",
         "ACTIVE_LLM": "openai"
     }
@@ -501,6 +525,7 @@ async def test_update_settings_validate_bedrock_with_bearer_token(mock_request):
                     mock_instance = MagicMock()
                     mock_api.return_value = mock_instance
                     mock_instance.read_namespaced_secret.return_value = mock_secret
+                    mock_instance.read_namespaced_config_map.return_value = mock_configmap
                     
                     resp = await config_router.update_settings(settings, mock_request)
                     assert resp.status_code == status.HTTP_200_OK

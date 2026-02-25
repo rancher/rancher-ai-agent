@@ -3,7 +3,6 @@ kind: ConfigMap
 metadata:
   name: llm-config
   namespace: cattle-ai-agent-system
-type: Opaque
 data:
   OLLAMA_MODEL: "{{ .Values.ollamaLlmModel }}"
   GEMINI_MODEL: "{{ .Values.geminiLlmModel }}"

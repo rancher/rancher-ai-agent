@@ -328,6 +328,11 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                 if plan_tool is None:
                     raise ValueError(f"planning tool '{plan_tool_name}' not found for tool '{tool_call['name']}'")
                 plan_response = await plan_tool.ainvoke(tool_call["args"])
+
+                # Normalize list response from MCP tools: [{"type": "text", "text": "..."}]
+                if isinstance(plan_response, list) and len(plan_response) > 0:
+                    if isinstance(plan_response[0], dict) and "text" in plan_response[0]:
+                        plan_response = plan_response[0]["text"]
                 
                 return f'<confirmation-response>{plan_response}</confirmation-response>'
 

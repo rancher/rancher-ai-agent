@@ -201,8 +201,8 @@ async def test_get_models_bedrock_bearer_token_success(mock_request):
             resp = await config_router.get_models(mock_request, llm_name="bedrock")
             assert resp.status_code == status.HTTP_200_OK
             content = json.loads(resp.body)
-            assert "anthropic.claude-opus-4-5-20251101-v1:0" in content
-            assert "anthropic.claude-3-sonnet-20240229-v1:0" in content
+            assert "us.anthropic.claude-opus-4-5-20251101-v1:0" in content
+            assert "us.anthropic.claude-3-sonnet-20240229-v1:0" in content
             # Verify bearer token was passed in header
             call_args = mock_http_client.get.call_args
             assert call_args is not None

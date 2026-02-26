@@ -1,11 +1,10 @@
 import logging
 import base64
 import httpx
-import boto3
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from botocore.exceptions import ClientError, InvalidRegionError
+from botocore.exceptions import InvalidRegionError
 from kubernetes import client, config as k8s_config
 from kubernetes.client.rest import ApiException
 
@@ -48,7 +47,6 @@ class SettingsUpdate(BaseModel):
     """Model for updating agent settings."""
     OPENAI_API_KEY: str = None
     OPENAI_URL: str = None
-    SYSTEM_PROMPT: str = None
     OLLAMA_MODEL: str = None
     GEMINI_MODEL: str = None
     OPENAI_MODEL: str = None
@@ -187,6 +185,20 @@ async def get_models(request: Request, llm_name: str):
                     if response.status_code == 200:
                         data = response.json()
                         bedrock_models = [model['modelId'] for model in data.get('modelSummaries', [])]
+                        
+                        # Extract regional prefix from region and ensure model IDs are prefixed with the region if not already
+                        # e.g. 'eu-west-1' -> 'eu.{modelId}', 'us-east-1' -> 'us.{modelId}'
+                        region_prefix = region.split('-')[0]
+                        if region_prefix not in ['us', 'eu', 'ap', 'ca']:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"Invalid Bedrock region format: {region}"
+                            )
+                        bedrock_models = [
+                            model if model.startswith(f"{region_prefix}.") else f"{region_prefix}.{model}"
+                            for model in bedrock_models
+                        ]
+                        
                         models = bedrock_models
                     else:
                         raise HTTPException(

@@ -203,7 +203,7 @@ async def get_models(request: Request, llm_name: str):
                     else:
                         raise HTTPException(
                             status_code=status.HTTP_401_UNAUTHORIZED if response.status_code == 401 else status.HTTP_502_BAD_GATEWAY,
-                            detail=f"Failed to fetch Bedrock models: {response.status_code}"
+                            detail=f"Failed to fetch Bedrock models. Check if the Bearer Token is correct and has the necessary permissions."
                         )
             except InvalidRegionError as e:
                 logging.error(f"Invalid AWS region: {e}")
@@ -218,7 +218,7 @@ async def get_models(request: Request, llm_name: str):
                     detail=f"Invalid AWS region: {region}"
                 )
             except httpx.RequestError as e:
-                logging.error(f"Failed to fetch Bedrock models with bearer token: {e}")
+                logging.error(f"Failed to fetch Bedrock models with Bearer Token: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Failed to fetch Bedrock models: {str(e)}"

@@ -118,7 +118,7 @@ async def get_models(request: Request, llm_name: str):
     """
     Endpoint to retrieve available LLM models.
     For ollama: requires 'url' query parameter
-    For bedrock: requires 'region' and either ('access_key_id' + 'secret_access_key') or 'bearer_token'
+    For bedrock: requires 'region' and 'bearer_token'
     """
     try:
         user_id = await get_user_id_from_request(request)

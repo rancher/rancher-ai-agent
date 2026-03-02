@@ -13,6 +13,16 @@ from .controllers.ai_agent_config import create_kopf_manager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+class _ProbeEndpointFilter(logging.Filter):
+    """Suppress uvicorn access log entries for probe endpoints."""
+    _PROBE_PATHS = ("/v1/api/health", "/v1/api/readiness")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(path in msg for path in self._PROBE_PATHS)
+
+logging.getLogger("uvicorn.access").addFilter(_ProbeEndpointFilter())
+
 # This will be removed once https://github.com/modelcontextprotocol/python-sdk/pull/1177 is merged
 class SimpleTruststore:
     def get_default(self):

@@ -2,6 +2,16 @@ apiVersion: v1
 entries:
   agent:
   - apiVersion: v2
+    appVersion: 0.1.2-alpha.27
+    created: "2026-03-03T11:15:15.13265029Z"
+    description: Rancher AI Agent
+    digest: 25b7a4e1616eaa17e8dd92c9402bbd1dba1d0cb860c53a45e5e868a0de71a3e0
+    name: agent
+    type: application
+    urls:
+    - https://github.com/rancher/rancher-ai-agent/releases/download/agent-0.1.2-alpha.27/agent-0.1.2-alpha.27.tgz
+    version: 0.1.2-alpha.27
+  - apiVersion: v2
     appVersion: 0.1.2-alpha.26
     created: "2026-02-27T11:31:58.971033802Z"
     description: Rancher AI Agent
@@ -681,4 +691,4 @@ entries:
     urls:
     - https://github.com/rancher-sandbox/rancher-ai-agent/releases/download/agent-0.0.1-alpha.12/agent-0.0.1-alpha.12.tgz
     version: 0.0.1-alpha.12
-generated: "2026-02-27T11:31:58.971546918Z"
+generated: "2026-03-03T11:15:15.133170191Z"

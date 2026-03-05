@@ -17,6 +17,7 @@ from .loader import AgentConfig
 from .state import AgentState
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
+INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
 
 class BaseAgentBuilder:
     """Base class for agent builders with shared logic."""
@@ -195,28 +196,49 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         
         request_id = config["configurable"]["request_id"]
 
-        for tool_call in getattr(state["messages"][-1], "tool_calls", []):
-            should_continue, interrupt_message = await self.handle_interrupt(getattr(self.agent_config, "human_validation_tools", []), tool_call, state)
+        tool_calls = getattr(state["messages"][-1], "tool_calls", [])
+        human_validation_tools = getattr(self.agent_config, "human_validation_tools", [])
 
+        # Phase 1: Resolve all interrupt decisions before executing any tools.
+        # langgraph replays the entire node on resume after an interrupt, so if
+        # interrupts and tool executions are interleaved, tools that ran before a
+        # later interrupt would be re-invoked on replay.  Collecting all interrupt
+        # responses first ensures every tool is executed exactly once.
+        interrupt_messages = {}
+        for idx, tool_call in enumerate(tool_calls):
+            should_continue, interrupt_message = await self.handle_interrupt(human_validation_tools, tool_call, state)
+            if not should_continue:
+                # Cancel ALL tool calls: previously approved ones, the rejected one,
+                # and any remaining unevaluated ones — no tools will be executed.
+                outputs = self._cancel_remaining_tool_calls(tool_calls[:idx], request_id, state, INTERRUPT_CANCEL_MESSAGE)
+                cancel_kwargs = {
+                    "request_id": request_id,
+                    "selected_agent": state.get("selected_agent", {}),
+                    "interrupt_message": interrupt_message,
+                    "confirmation": False
+                }
+                outputs.append(ToolMessage(
+                    content=INTERRUPT_CANCEL_MESSAGE,
+                    name=tool_call["name"],
+                    tool_call_id=tool_call["id"],
+                    additional_kwargs=cancel_kwargs
+                ))
+                outputs.extend(self._cancel_remaining_tool_calls(tool_calls[idx + 1:], request_id, state, INTERRUPT_CANCEL_MESSAGE))
+                return {"messages": outputs}
+            if interrupt_message:
+                interrupt_messages[tool_call["id"]] = interrupt_message
+
+        # Phase 2: Execute tools (all interrupts were approved if we reach here).
+        for idx, tool_call in enumerate(tool_calls):
             additional_kwargs = {
                 "request_id": request_id,
                 "selected_agent": state.get("selected_agent", {})
             }
 
+            interrupt_message = interrupt_messages.get(tool_call["id"])
             if interrupt_message:
                 additional_kwargs["interrupt_message"] = interrupt_message
                 additional_kwargs["confirmation"] = True
-
-            if not should_continue:
-                additional_kwargs["confirmation"] = False
-                return {
-                    "messages": [ToolMessage(
-                        content=INTERRUPT_CANCEL_MESSAGE,
-                        name=tool_call["name"],
-                        tool_call_id=tool_call["id"],
-                        additional_kwargs=additional_kwargs
-                    )]
-                }
             
             try:
                 logging.debug("calling tool")
@@ -236,28 +258,41 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                         additional_kwargs=additional_kwargs
                     )
                 )
-            except ToolException as e:
-                return {
-                    "messages": [ToolMessage(
-                        content=str(e),
-                        name=tool_call["name"],
-                        tool_call_id=tool_call["id"],
-                        additional_kwargs=additional_kwargs
-                    )]
-                }
             except Exception as e:
                 logging.error(f"unexpected error during tool call: {e}")
-                return {
-                    "messages": [ToolMessage(
-                        content=f"unexpected error during tool call: {e}",
-                        name=tool_call["name"],
-                        tool_call_id=tool_call["id"],
-                        additional_kwargs=additional_kwargs
-                    )]
-                }
+                outputs.append(ToolMessage(
+                    content=f"unexpected error during tool call: {e}",
+                    name=tool_call["name"],
+                    tool_call_id=tool_call["id"],
+                    additional_kwargs=additional_kwargs
+                ))
+                outputs.extend(self._cancel_remaining_tool_calls(tool_calls[idx + 1:], request_id, state, INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE))
+                return {"messages": outputs}
 
         return {"messages": outputs}
     
+    def _cancel_remaining_tool_calls(self, remaining_tool_calls: list[dict], request_id: str, state: AgentState, message: str) -> list[ToolMessage]:
+        """Creates cancel ToolMessages for tool calls that will not be executed.
+
+        When a tool call is cancelled or fails, LangGraph still expects a
+        ToolMessage for every tool_call_id in the AIMessage.  This helper
+        produces the missing messages for any tool calls that come after the
+        one that stopped execution.
+        """
+        messages = []
+        for tc in remaining_tool_calls:
+            messages.append(ToolMessage(
+                content=message,
+                name=tc["name"],
+                tool_call_id=tc["id"],
+                additional_kwargs={
+                    "request_id": request_id,
+                    "selected_agent": state.get("selected_agent", {}),
+                    "confirmation": False
+                }
+            ))
+        return messages
+
     def should_summarize_conversation(self, state: AgentState):
         """
         Determines the next step in the agent's workflow.
@@ -429,7 +464,8 @@ def process_tool_result(tool_result: str | list, state: AgentState) -> tuple[str
                 f"<mcp-doclink>{link}</mcp-doclink>")
 
         # Return the value for the LLM, or the full object if 'llm' key is not present
-        return convert_to_string_if_needed(json_result.get("llm", json_result)), mcp_response
+        llm_result = json_result.get("llm", json_result) if isinstance(json_result, dict) else json_result
+        return convert_to_string_if_needed(llm_result), mcp_response
     except (json.JSONDecodeError, TypeError):
         # If it's not a valid JSON, return the raw string result
         return tool_result, mcp_response

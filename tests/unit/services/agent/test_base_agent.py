@@ -187,6 +187,129 @@ async def test_tool_node_human_verification_approved(mock_llm, mock_tools, mock_
     assert result["messages"][0].content == "fake k8s resource patched"
     assert result["messages"][0].additional_kwargs["confirmation"] is True
 
+@pytest.mark.asyncio
+@patch("langgraph.types.interrupt", new=MagicMock(return_value="yes"))
+async def test_tool_node_multiple_interrupts_executes_each_tool_once(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
+    """Verify that when multiple tool calls require human validation, each tool is executed exactly once."""
+    
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan for patching")
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools + [plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config_with_validation
+    )
+    tool_calls = [
+        {
+            "id": "call_1",
+            "name": "patchKubernetesResource",
+            "args": {"namespace": "ns1", "name": "res1", "kind": "Deployment", "cluster": "local", "patch": "[]"}
+        },
+        {
+            "id": "call_2",
+            "name": "patchKubernetesResource",
+            "args": {"namespace": "ns2", "name": "res2", "kind": "Deployment", "cluster": "local", "patch": "[]"}
+        }
+    ]
+    state = {"messages": [FakeMessage(tool_calls=tool_calls)]}
+
+    result = await builder.tool_node(state, mock_config)
+
+    # Both tool calls should have been executed
+    assert len(result["messages"]) == 2
+    assert result["messages"][0].tool_call_id == "call_1"
+    assert result["messages"][1].tool_call_id == "call_2"
+    assert result["messages"][0].content == "fake k8s resource patched"
+    assert result["messages"][1].content == "fake k8s resource patched"
+    # Both should be marked as confirmed
+    assert result["messages"][0].additional_kwargs["confirmation"] is True
+    assert result["messages"][1].additional_kwargs["confirmation"] is True
+    # The underlying tool should have been invoked exactly once per call
+    patch_tool = builder.tools_by_name["patchKubernetesResource"]
+    assert patch_tool.ainvoke.call_count == 2
+
+@pytest.mark.asyncio
+@patch("langgraph.types.interrupt", new=MagicMock(return_value="no"))
+async def test_tool_node_multiple_interrupts_cancel_stops_all(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
+    """Verify that cancelling an interrupt prevents execution of all tool calls."""
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan for patching")
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools + [plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config_with_validation
+    )
+    tool_calls = [
+        {
+            "id": "call_1",
+            "name": "patchKubernetesResource",
+            "args": {"namespace": "ns1", "name": "res1", "kind": "Deployment", "cluster": "local", "patch": "[]"}
+        },
+        {
+            "id": "call_2",
+            "name": "patchKubernetesResource",
+            "args": {"namespace": "ns2", "name": "res2", "kind": "Deployment", "cluster": "local", "patch": "[]"}
+        }
+    ]
+    state = {"messages": [FakeMessage(tool_calls=tool_calls)]}
+
+    result = await builder.tool_node(state, mock_config)
+
+    # Should return cancel messages for all tool calls
+    assert len(result["messages"]) == 2
+    assert result["messages"][0].content == INTERRUPT_CANCEL_MESSAGE
+    assert result["messages"][0].tool_call_id == "call_1"
+    assert result["messages"][0].additional_kwargs["confirmation"] is False
+    assert result["messages"][1].tool_call_id == "call_2"
+    assert result["messages"][1].additional_kwargs["confirmation"] is False
+    # No tool should have been invoked
+    patch_tool = builder.tools_by_name["patchKubernetesResource"]
+    assert patch_tool.ainvoke.call_count == 0
+
+@pytest.mark.asyncio
+async def test_tool_node_second_interrupt_cancelled_also_cancels_first(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
+    """Verify that when the second interrupt is cancelled, the first (approved) tool is also cancelled."""
+    plan_tool = MockTool("patchKubernetesResourcePlan", "plan for patching")
+    # First call returns "yes", second returns "no"
+    interrupt_responses = iter(["yes", "no"])
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools + [plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config_with_validation
+    )
+    tool_calls = [
+        {
+            "id": "call_1",
+            "name": "patchKubernetesResource",
+            "args": {"namespace": "ns1", "name": "res1", "kind": "Deployment", "cluster": "local", "patch": "[]"}
+        },
+        {
+            "id": "call_2",
+            "name": "patchKubernetesResource",
+            "args": {"namespace": "ns2", "name": "res2", "kind": "Deployment", "cluster": "local", "patch": "[]"}
+        }
+    ]
+    state = {"messages": [FakeMessage(tool_calls=tool_calls)]}
+
+    with patch("langgraph.types.interrupt", side_effect=lambda msg: next(interrupt_responses)):
+        result = await builder.tool_node(state, mock_config)
+
+    # Both tool calls should be cancelled
+    assert len(result["messages"]) == 2
+    assert result["messages"][0].tool_call_id == "call_1"
+    assert result["messages"][0].content == INTERRUPT_CANCEL_MESSAGE
+    assert result["messages"][0].additional_kwargs["confirmation"] is False
+    assert result["messages"][1].tool_call_id == "call_2"
+    assert result["messages"][1].content == INTERRUPT_CANCEL_MESSAGE
+    assert result["messages"][1].additional_kwargs["confirmation"] is False
+    # No tool should have been invoked
+    patch_tool = builder.tools_by_name["patchKubernetesResource"]
+    assert patch_tool.ainvoke.call_count == 0
+
 
 # ============================================================================
 # Tool Execution Tests
@@ -245,7 +368,7 @@ async def test_tool_node_handles_tool_exception(mock_llm, mock_checkpointer, moc
 
     result = await builder.tool_node(state, mock_config)
 
-    assert result["messages"][0].content == "Tool error occurred"
+    assert "Tool error occurred" in result["messages"][0].content
     assert result["messages"][0].tool_call_id == "error_123"
 
 @pytest.mark.asyncio
@@ -272,6 +395,38 @@ async def test_tool_node_handles_unexpected_exception(mock_llm, mock_checkpointe
 
     assert "unexpected error during tool call" in result["messages"][0].content
     assert "Unexpected error" in result["messages"][0].content
+
+@pytest.mark.asyncio
+async def test_tool_node_exception_cancels_remaining_tools(mock_llm, mock_checkpointer, mock_config, agent_config_without_validation):
+    """Verify that when a tool raises an exception, remaining tool calls get cancel messages."""
+    error_tool = MockTool("errorTool", "success")
+    error_tool.ainvoke = AsyncMock(side_effect=ToolException("Tool error occurred"))
+    ok_tool = MockTool("okTool", "ok result")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[error_tool, ok_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config_without_validation
+    )
+    tool_calls = [
+        {"id": "call_err", "name": "errorTool", "args": {}},
+        {"id": "call_ok", "name": "okTool", "args": {}}
+    ]
+    state = {"messages": [FakeMessage(tool_calls=tool_calls)]}
+
+    result = await builder.tool_node(state, mock_config)
+
+    assert len(result["messages"]) == 2
+    # First message is the error
+    assert result["messages"][0].tool_call_id == "call_err"
+    assert "Tool error occurred" in result["messages"][0].content
+    # Second message is a cancel for the remaining tool
+    assert result["messages"][1].tool_call_id == "call_ok"
+    assert result["messages"][1].additional_kwargs["confirmation"] is False
+    # The second tool should never have been invoked
+    assert ok_tool.ainvoke.call_count == 0
 
 @pytest.mark.asyncio
 async def test_tool_node_handles_multiple_tool_calls(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_without_validation):

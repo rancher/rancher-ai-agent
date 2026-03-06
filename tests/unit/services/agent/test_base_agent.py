@@ -7,7 +7,6 @@ import json
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.agent.base import (
-    create_confirmation_response,
     process_tool_result,
     convert_to_string_if_needed,
     INTERRUPT_CANCEL_MESSAGE,
@@ -609,20 +608,6 @@ def test_should_continue_after_interrupt_continues_on_success(mock_llm, mock_too
 # ============================================================================
 # Helper Function Tests
 # ============================================================================
-
-def test_create_confirmation_response_formats_correctly():
-    """Verify confirmation response JSON structure."""
-    result = create_confirmation_response(
-        payload='{"key": "value"}',
-        type="update",
-        name="test-resource",
-        kind="Deployment",
-        cluster="local",
-        namespace="default"
-    )
-    
-    expected = '<confirmation-response>{"payload": "{\\"key\\": \\"value\\"}", "type": "update", "resource": {"name": "test-resource", "kind": "Deployment", "cluster": "local", "namespace": "default"}}</confirmation-response>'
-    assert result == expected
 
 @pytest.mark.asyncio
 async def test_should_interrupt_returns_message_for_update_tools(mock_llm, mock_checkpointer):

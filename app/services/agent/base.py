@@ -338,7 +338,11 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     if isinstance(plan_response[0], dict) and "text" in plan_response[0]:
                         plan_response = plan_response[0]["text"]
                 
-                return f'<confirmation-response>{plan_response}</confirmation-response>'
+                try:
+                    safe_response = json.dumps(json.loads(plan_response))
+                except (json.JSONDecodeError, TypeError):
+                    safe_response = json.dumps(plan_response)
+                return f'<confirmation-response>{safe_response}</confirmation-response>'
 
         return ""
 
@@ -370,37 +374,6 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
 def build_agent_metadata(agent_name: str, selection_mode: str, extra_metadata : str = "") -> str:
     """Builds a structured agent metadata string for custom events."""
     return f'<agent-metadata>{{"agentName": "{agent_name}", "selectionMode": "{selection_mode}"{extra_metadata}}}</agent-metadata>'
-
-
-def create_confirmation_response(payload: str, type: str, name: str, kind: str, cluster: str, namespace: str):
-    """
-    Creates a structured confirmation response for the UI.
-
-    This function formats a JSON payload that the UI can use to prompt the user
-    for confirmation before executing a sensitive operation.
-
-    Args:
-        payload: The data for the operation (e.g., a patch or a resource definition).
-        type: The type of operation (e.g., "patch").
-        name: The name of the resource.
-        kind: The kind of the resource (e.g., "Deployment").
-        cluster: The target cluster.
-        namespace: The target namespace.
-    """
-    payload_data = {
-        "payload": payload,
-        "type": type,
-        "resource": {
-            "name": name,
-            "kind": kind,
-            "cluster": cluster,
-            "namespace": namespace
-        }
-    }
-
-    json_payload = json.dumps(payload_data)
-
-    return f'<confirmation-response>{json_payload}</confirmation-response>'
 
 
 def process_tool_result(tool_result: str | list, state: AgentState) -> tuple[str, str | None]:

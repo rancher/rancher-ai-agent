@@ -24,11 +24,17 @@ AVAILABLE_LLM_PROVIDERS = {"ollama", "openai", "gemini", "bedrock"}
 # Hardcoded models
 AVAILABLE_MODELS = {
     "openai": [
+        "gpt-5",
+        "gpt-5-turbo",
+        "gpt-5-mini",
+        "o3",
+        "o3-mini",
+        "o1",
+        "o1-preview",
         "gpt-4o",
         "gpt-4o-mini",
-        "o3-mini",
-        "o3",
         "gpt-4.1",
+        "gpt-4-turbo",
         "gpt-4",
         "gpt-3.5-turbo",
     ],

@@ -201,6 +201,7 @@ async def test_get_models_bedrock_bearer_token_success(mock_request):
             resp = await config_router.get_models(mock_request, llm_name="bedrock")
             assert resp.status_code == status.HTTP_200_OK
             content = json.loads(resp.body)
+            # Models should be prefixed with region prefix (us, eu, ap, etc.)
             assert "us.anthropic.claude-opus-4-5-20251101-v1:0" in content
             assert "us.anthropic.claude-3-sonnet-20240229-v1:0" in content
             # Verify bearer token was passed in header
@@ -233,7 +234,76 @@ async def test_get_models_bedrock_bearer_token_invalid(mock_request):
             assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
 
 
+@pytest.mark.asyncio
+async def test_get_models_bedrock_with_openai_models(mock_request):
+    """Test getting Bedrock models that include OpenAI models (should not be prefixed)."""
+    mock_request.query_params = {
+        "region": "us-east-1",
+        "bearerToken": "test-bearer-token-12345"
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "modelSummaries": [
+            {"modelId": "anthropic.claude-opus-4-5-20251101-v1:0"},
+            {"modelId": "openai.gpt-4"},
+            {"modelId": "openai.gpt-4-turbo"}
+        ]
+    }
+    
+    mock_http_client = AsyncMock()
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+            resp = await config_router.get_models(mock_request, llm_name="bedrock")
+            assert resp.status_code == status.HTTP_200_OK
+            content = json.loads(resp.body)
+            # Anthropic models should be prefixed
+            assert "us.anthropic.claude-opus-4-5-20251101-v1:0" in content
+            # OpenAI models should NOT be prefixed
+            assert "openai.gpt-4" in content
+            assert "openai.gpt-4-turbo" in content
+            # Ensure we don't have double-prefixed versions
+            assert "us.openai.gpt-4" not in content
 
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_with_already_prefixed_models(mock_request):
+    """Test getting Bedrock models that are already prefixed with region (should not double-prefix)."""
+    mock_request.query_params = {
+        "region": "eu-west-1",
+        "bearerToken": "test-bearer-token-12345"
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "modelSummaries": [
+            {"modelId": "anthropic.claude-3-sonnet-20240229-v1:0"},
+            {"modelId": "eu.meta.llama2-70b-chat-v1"},  # Already prefixed
+        ]
+    }
+    
+    mock_http_client = AsyncMock()
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
+            mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+            resp = await config_router.get_models(mock_request, llm_name="bedrock")
+            assert resp.status_code == status.HTTP_200_OK
+            content = json.loads(resp.body)
+            # Unprefixed model should get prefixed
+            assert "eu.anthropic.claude-3-sonnet-20240229-v1:0" in content
+            # Already prefixed model should remain unchanged
+            assert "eu.meta.llama2-70b-chat-v1" in content
+            # Ensure we don't have double-prefixed version
+            assert "eu.eu.meta.llama2-70b-chat-v1" not in content
 
 
 @pytest.mark.asyncio

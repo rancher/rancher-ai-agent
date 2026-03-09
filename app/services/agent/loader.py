@@ -208,7 +208,8 @@ def _create_default_ai_agent_config_crds(api: client.CustomObjectsApi):
                     "createProject",
                     "createImportedCluster",
                     "createImportedCluster",
-                    "scaleClusterNodePool"
+                    "scaleClusterNodePool",
+                    "createK3kCluster",
                 ]
             }
         }

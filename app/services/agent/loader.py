@@ -315,6 +315,7 @@ def _get_default_ai_agent_config_crds() -> list:
                 "displayName": "Rancher",
                 "description": RANCHER_DESCRIPTION,
                 "systemPrompt": RANCHER_AGENT_PROMPT,
+                "toolSet": "rancher",
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
                 "authenticationType": "RANCHER",
                 "builtIn": True,
@@ -337,6 +338,7 @@ def _get_default_ai_agent_config_crds() -> list:
                 "displayName": "Fleet",
                 "description": FLEET_DESCRIPTION,
                 "systemPrompt": FLEET_SYSTEM_PROMPT,
+                "toolSet": "fleet",
                 "mcpURL": "rancher-mcp-server.cattle-ai-agent-system.svc",
                 "authenticationType": "RANCHER",
                 "builtIn": True,
@@ -358,6 +360,7 @@ def _get_default_ai_agent_config_crds() -> list:
                 "authenticationType": "RANCHER",
                 "builtIn": True,
                 "enabled": True,
+                "toolSet": "provisioning",
                 "humanValidationTools": [
                     "createImportedCluster",
                     "scaleClusterNodePool",

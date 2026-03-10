@@ -30,3 +30,10 @@ namespacedRules:
         - get
         - watch
         - list
+    - apiGroups:
+        - ai.cattle.io
+      resources:
+        - aiagentconfigs
+      verbs:
+        - watch
+        - list

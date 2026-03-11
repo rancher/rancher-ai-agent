@@ -67,6 +67,10 @@ def get_llm() -> BaseLanguageModel:
                 base_url=llm_mock_url,
                 transport="rest"
             )
+        if model == "gemini-2.5-flash":
+             # Disable thinking budget for gemini-2.5-flash to avoid empty responses due to all tokens being used for thinking budget
+             return ChatGoogleGenerativeAI(model=model, thinking_budget=0)
+        
         return ChatGoogleGenerativeAI(model=model)
     if activeLlm == "openai":
         if llm_mock_enabled:

@@ -36,6 +36,9 @@ spec:
         {{- if .Values.insecureSkipTls }}
           - "--insecure"
         {{- end }}
+        {{- if .Values.mcp.readOnly }}
+          - "--read-only"
+        {{- end }}
         {{- if .Values.log.level }}
           - "--log-level"
           - "{{ .Values.log.level }}"

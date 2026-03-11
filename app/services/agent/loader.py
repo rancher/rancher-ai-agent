@@ -425,6 +425,8 @@ def _update_default_ai_agent_config_crds(api: client.CustomObjectsApi, existing_
 
         needs_update = False
         for key, desired_value in desired_spec.items():
+            if key == "enabled":
+                continue
             if current_spec.get(key) != desired_value:
                 needs_update = True
                 break

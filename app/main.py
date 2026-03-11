@@ -1,7 +1,6 @@
-import asyncio
+import re
 import logging
 import os
-import signal
 import certifi
 
 from fastapi import FastAPI
@@ -21,6 +20,43 @@ class _ProbeEndpointFilter(logging.Filter):
         msg = record.getMessage()
         return not any(path in msg for path in self._PROBE_PATHS)
 
+
+class _SensitiveHeaderFilter(logging.Filter):
+    """Redact sensitive HTTP headers (e.g. Authorization, X-Api-Key) from log messages.
+
+    Attached to root logger handlers so it intercepts records propagated from
+    any child logger (e.g. botocore.endpoint) that may emit raw HTTP requests
+    containing bearer tokens or API keys at DEBUG level.
+    """
+    _HEADER_PATTERNS = [
+        re.compile(
+            r"""('Authorization'\s*:\s*b?['"])(.*?)(['"])""",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"""('X-Api-Key'\s*:\s*b?['"])(.*?)(['"])""",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"""(Authorization:\s*)(Bearer\s+)?\S+""",
+            re.IGNORECASE,
+        ),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.msg = record.getMessage()
+            record.args = None
+        msg = record.msg
+        if isinstance(msg, str) and ("authorization" in msg.lower() or "x-api-key" in msg.lower()):
+            for pattern in self._HEADER_PATTERNS:
+                msg = pattern.sub(r"\1[REDACTED]\3" if pattern.groups >= 3 else r"\1[REDACTED]", msg)
+            record.msg = msg
+        return True
+
+_sensitive_filter = _SensitiveHeaderFilter()
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_sensitive_filter)
 logging.getLogger("uvicorn.access").addFilter(_ProbeEndpointFilter())
 
 # This will be removed once https://github.com/modelcontextprotocol/python-sdk/pull/1177 is merged

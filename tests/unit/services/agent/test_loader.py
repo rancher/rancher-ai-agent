@@ -310,3 +310,25 @@ def test_update_detects_drift_in_system_prompt():
 
     mock_api.patch_namespaced_custom_object.assert_called_once()
     assert mock_api.patch_namespaced_custom_object.call_args.kwargs["name"] == "fleet"
+
+
+def test_update_ignores_enabled_field_change():
+    """Verify that a change to spec.enabled does not trigger a patch."""
+    mock_api = MagicMock()
+
+    defaults = _get_default_ai_agent_config_crds()
+    existing_items = []
+    for d in defaults:
+        spec = {**d["spec"]}
+        # Simulate user disabling all agents
+        spec["enabled"] = False
+        existing_items.append({
+            "metadata": {"name": d["metadata"]["name"]},
+            "spec": spec,
+        })
+
+    _update_default_ai_agent_config_crds(mock_api, existing_items)
+
+    # enabled change must not cause any patch or create
+    mock_api.patch_namespaced_custom_object.assert_not_called()
+    mock_api.create_namespaced_custom_object.assert_not_called()

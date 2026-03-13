@@ -570,6 +570,130 @@ def test_call_model_node_uses_sliding_window_with_summary(mock_llm, mock_tools, 
     assert len(call_args) == 5
 
 # ============================================================================
+# Consecutive Tool Call Limit Tests
+# ============================================================================
+
+def test_count_consecutive_tool_rounds_no_tool_calls(mock_llm, mock_tools, mock_checkpointer):
+    """Verify that counting returns 0 when there are no tool call rounds."""
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+    state = {"messages": [HumanMessage(content="Hello")]}
+    assert builder._count_consecutive_tool_rounds(state) == 0
+
+def test_count_consecutive_tool_rounds_counts_correctly(mock_llm, mock_tools, mock_checkpointer):
+    """Verify that consecutive tool call rounds are counted correctly."""
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+    state = {
+        "messages": [
+            HumanMessage(content="Hello"),
+            AIMessage(content="", tool_calls=[{"id": "1", "name": "tool1", "args": {}}]),
+            ToolMessage(content="result1", tool_call_id="1"),
+            AIMessage(content="", tool_calls=[{"id": "2", "name": "tool2", "args": {}}]),
+            ToolMessage(content="result2", tool_call_id="2"),
+            AIMessage(content="", tool_calls=[{"id": "3", "name": "tool3", "args": {}}]),
+            ToolMessage(content="result3", tool_call_id="3"),
+        ]
+    }
+    assert builder._count_consecutive_tool_rounds(state) == 3
+
+def test_count_consecutive_tool_rounds_resets_on_human_message(mock_llm, mock_tools, mock_checkpointer):
+    """Verify that the count resets when a HumanMessage is encountered."""
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+    state = {
+        "messages": [
+            HumanMessage(content="First question"),
+            AIMessage(content="", tool_calls=[{"id": "1", "name": "tool1", "args": {}}]),
+            ToolMessage(content="result1", tool_call_id="1"),
+            AIMessage(content="", tool_calls=[{"id": "2", "name": "tool2", "args": {}}]),
+            ToolMessage(content="result2", tool_call_id="2"),
+            HumanMessage(content="Second question"),
+            AIMessage(content="", tool_calls=[{"id": "3", "name": "tool3", "args": {}}]),
+            ToolMessage(content="result3", tool_call_id="3"),
+        ]
+    }
+    assert builder._count_consecutive_tool_rounds(state) == 1
+
+def test_call_model_node_forces_answer_at_tool_call_limit(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that the LLM is called without tools when the consecutive tool call limit is reached."""
+    from app.services.agent.base import MAX_CONSECUTIVE_TOOL_CALLS
+
+    # Create a separate mock for llm (no tools) vs llm_with_tools
+    llm_no_tools = MagicMock()
+    llm_no_tools.invoke = MagicMock(return_value=AIMessage(content="final answer based on gathered info"))
+    llm_no_tools.bind_tools = MagicMock(return_value=MagicMock())
+
+    builder = BaseAgentBuilder(
+        llm=llm_no_tools,
+        tools=mock_tools,
+        system_prompt="You are a helpful assistant",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
+    # Build messages with MAX_CONSECUTIVE_TOOL_CALLS tool call rounds
+    messages = [HumanMessage(content="Analyze the app")]
+    for i in range(MAX_CONSECUTIVE_TOOL_CALLS):
+        messages.append(AIMessage(content="", tool_calls=[{"id": str(i), "name": "getKubernetesResource", "args": {}}]))
+        messages.append(ToolMessage(content=f"result{i}", tool_call_id=str(i)))
+
+    state = {"messages": messages}
+    result = builder.call_model_node(state, mock_config)
+
+    # The LLM (without tools) should have been called, not llm_with_tools
+    llm_no_tools.invoke.assert_called_once()
+    call_args = llm_no_tools.invoke.call_args[0][0]
+    # The last message should be the system message forcing a final answer
+    assert "maximum number of consecutive tool calls" in call_args[-1].content
+    assert result["messages"][0].content == "final answer based on gathered info"
+
+def test_call_model_node_allows_tools_below_limit(mock_llm, mock_tools, mock_checkpointer, mock_config):
+    """Verify that tools are still available when under the consecutive tool call limit."""
+    from app.services.agent.base import MAX_CONSECUTIVE_TOOL_CALLS
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools,
+        system_prompt="You are a helpful assistant",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
+    # Build messages with fewer tool call rounds than the limit
+    messages = [HumanMessage(content="Analyze the app")]
+    for i in range(MAX_CONSECUTIVE_TOOL_CALLS - 1):
+        messages.append(AIMessage(content="", tool_calls=[{"id": str(i), "name": "getKubernetesResource", "args": {}}]))
+        messages.append(ToolMessage(content=f"result{i}", tool_call_id=str(i)))
+
+    state = {"messages": messages}
+    builder.call_model_node(state, mock_config)
+
+    # llm_with_tools (which is mock_llm after bind_tools) should have been called
+    mock_llm.invoke.assert_called_once()
+    call_args = mock_llm.invoke.call_args[0][0]
+    # No forced-answer system message should be present
+    assert not any(
+        hasattr(m, "content") and "maximum number of consecutive tool calls" in str(m.content)
+        for m in call_args
+    )
+
+# ============================================================================
 # Conversation Summarization Tests
 # ============================================================================
 

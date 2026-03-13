@@ -18,6 +18,7 @@ from .state import AgentState
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
+MAX_CONSECUTIVE_TOOL_CALLS = 5
 
 class BaseAgentBuilder:
     """Base class for agent builders with shared logic."""
@@ -103,6 +104,26 @@ class BaseAgentBuilder:
             }
         }
 
+    def _count_consecutive_tool_rounds(self, state: AgentState) -> int:
+        """Count the number of consecutive tool call rounds since the last HumanMessage.
+        
+        A tool call round is counted for each AIMessage that contains tool_calls.
+        Counting stops when a HumanMessage is encountered.
+        
+        Args:
+            state: The current state of the agent.
+
+        Returns:
+            The number of consecutive tool call rounds.
+        """
+        count = 0
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                break
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                count += 1
+        return count
+
     def _invoke_llm_with_retry(self, messages: list, config: RunnableConfig):
         """
         Invokes the LLM, with a single retry for a tool call parsing error.
@@ -165,7 +186,24 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         
         messages.extend(base_messages)
 
-        response = self._invoke_llm_with_retry(messages, config)
+        # Check if consecutive tool call limit has been reached
+        consecutive_rounds = self._count_consecutive_tool_rounds(state)
+        if consecutive_rounds >= MAX_CONSECUTIVE_TOOL_CALLS:
+            logging.warning(
+                f"Reached maximum consecutive tool calls ({MAX_CONSECUTIVE_TOOL_CALLS}). "
+                "Forcing LLM to respond without tools."
+            )
+            forced_answer_messages = messages + [HumanMessage(
+                content=(
+                    "You have reached the maximum number of consecutive tool calls. "
+                    "You MUST now provide a final answer based on the information gathered so far. "
+                    "Do NOT request any more tool calls. "
+                    "If you need more information, ask the user to provide it."
+                )
+            )]
+            response = self.llm.invoke(forced_answer_messages, config)
+        else:
+            response = self._invoke_llm_with_retry(messages, config)
 
         response.additional_kwargs["request_id"] = config["configurable"]["request_id"]
         response.additional_kwargs["selected_agent"] = state.get("selected_agent", {})

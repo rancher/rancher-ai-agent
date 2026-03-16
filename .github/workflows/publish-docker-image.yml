@@ -10,14 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      id-token: write 
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Retrieve tag name (tag)
-        run: |
-          echo TAG_NAME=$(echo $GITHUB_REF | sed -e "s|refs/tags/||") >> $GITHUB_ENV
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name : "Read vault secrets"
         uses : rancher-eio/read-vault-secrets@main
         with:
@@ -30,9 +28,10 @@ jobs:
       - name: Build and push image
         uses: rancher/ecm-distro-tools/actions/publish-image@master
         with:
-          image: "rancher-ai-agent"
-          tag: ${{ env.TAG_NAME }}
+          image: rancher-ai-agent
+          tag: ${{ github.ref_name }}
           push-to-prime: true
+          push-to-public: false
           prime-registry: ${{ env.STAGING_PRIME_REGISTRY }}
           prime-repo: rancher
           prime-username: ${{ env.STAGING_PRIME_REGISTRY_USERNAME }}

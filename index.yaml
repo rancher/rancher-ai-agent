@@ -742,6 +742,25 @@ entries:
     - https://github.com/rancher-sandbox/rancher-ai-agent/releases/download/agent-0.0.1-alpha.12/agent-0.0.1-alpha.12.tgz
     version: 0.0.1-alpha.12
   rancher-ai-agent:
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/display-name: Rancher AI Agent
+      catalog.cattle.io/hidden: "true"
+      catalog.cattle.io/kube-version: '>= 1.31.4-0 < 1.35.0-0'
+      catalog.cattle.io/os: linux
+      catalog.cattle.io/permits-os: linux
+      catalog.cattle.io/rancher-version: '>= 2.13.0-0 < 2.14.0-0'
+      catalog.cattle.io/release-name: cattle-ai-agent-system
+    apiVersion: v2
+    appVersion: 1.0.0-rc.5
+    created: "2026-03-17T17:12:28.178146183Z"
+    description: Rancher AI Agent
+    digest: 52f2660e3125e6e36aa15a14dbf5ee7af94fb94fdd8a06d927adb03a145b8adf
+    name: rancher-ai-agent
+    type: application
+    urls:
+    - https://github.com/rancher/rancher-ai-agent/releases/download/rancher-ai-agent-1.0.0-rc.5/rancher-ai-agent-1.0.0-rc.5.tgz
+    version: 1.0.0-rc.5
   - apiVersion: v2
     appVersion: 1.0.0-rc.4
     created: "2026-03-17T10:28:30.197957241Z"
@@ -762,4 +781,4 @@ entries:
     urls:
     - https://github.com/rancher/rancher-ai-agent/releases/download/rancher-ai-agent-1.0.0-rc.3/rancher-ai-agent-1.0.0-rc.3.tgz
     version: 1.0.0-rc.3
-generated: "2026-03-17T10:28:30.198280016Z"
+generated: "2026-03-17T17:12:28.17847143Z"

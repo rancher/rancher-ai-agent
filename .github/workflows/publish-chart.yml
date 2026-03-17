@@ -5,11 +5,16 @@ on:
     tags:
       - "v*"
 
+env:
+  REGISTRY: ghcr.io
+  CHART_PATH: ./chart/agent
+
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-          contents: write
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,24 +26,23 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Update Chart.yaml with new version
-        # Use sed to replace the version and appVersion.
         run: |
           echo "Updating chart to version ${{ env.VERSION }}"
-          sed -i "s/^version: .*/version: ${{ env.VERSION }}/" ./chart/agent/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"${{ env.VERSION }}\"/" ./chart/agent/Chart.yaml
-          
+          sed -i "s/^version: .*/version: ${{ env.VERSION }}/" ${{ env.CHART_PATH }}/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"${{ env.VERSION }}\"/" ${{ env.CHART_PATH }}/Chart.yaml
+
           echo "--- Chart.yaml after update ---"
-          cat ./chart/agent/Chart.yaml
+          cat ${{ env.CHART_PATH }}/Chart.yaml
           echo "------------------------------"
 
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Install Helm
+        uses: azure/setup-helm@v4
 
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.6.0
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-        with:
-          charts_dir: chart
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Package Helm chart
+        run: helm package ${{ env.CHART_PATH }} --destination .helm-packages
+
+      - name: Push chart to GHCR OCI registry
+        run: helm push .helm-packages/rancher-ai-agent-${{ env.VERSION }}.tgz oci://${{ env.REGISTRY }}/${{ github.repository }}/charts

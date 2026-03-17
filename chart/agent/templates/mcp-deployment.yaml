@@ -23,7 +23,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-      - image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
+      - image: "{{ template "system_default_registry" . }}{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
         imagePullPolicy: "{{ .Values.mcp.image.pullPolicy }}"
         name: mcp-server
         ports:

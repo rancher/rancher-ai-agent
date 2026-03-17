@@ -1,3 +1,7 @@
+global:
+  cattle:
+    systemDefaultRegistry: ""
+
 aiAgent:
   image:
     repository: rancher/rancher-ai-agent

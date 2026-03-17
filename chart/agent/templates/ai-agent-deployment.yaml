@@ -34,7 +34,7 @@ spec:
       {{- end }}
       {{- end }}
       containers:
-      - image: "{{ .Values.aiAgent.image.repository }}:{{ .Values.aiAgent.image.tag }}"
+      - image: "{{ template "system_default_registry" . }}{{ .Values.aiAgent.image.repository }}:{{ .Values.aiAgent.image.tag }}"
         imagePullPolicy: "{{ .Values.aiAgent.image.pullPolicy }}"
         name: agent
         env:

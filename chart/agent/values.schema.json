@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "cattle": {
+          "type": "object",
+          "properties": {
+            "systemDefaultRegistry": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "aiAgent": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "readOnly": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ollamaLlmModel": {
+      "type": "string"
+    },
+    "geminiLlmModel": {
+      "type": "string"
+    },
+    "openaiLlmModel": {
+      "type": "string"
+    },
+    "bedrockLlmModel": {
+      "type": "string"
+    },
+    "ollamaUrl": {
+      "type": "string"
+    },
+    "googleApiKey": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "openaiApiKey": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "openaiUrl": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "awsBedrock": {
+      "type": "object",
+      "properties": {
+        "bearerToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "activeLlm": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "ollama",
+        "gemini",
+        "openai",
+        "bedrock",
+        "",
+        null
+      ]
+    },
+    "rag": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "embeddings_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pvc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "langfuseSecretKey": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "langfusePublicKey": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "langfuseHost": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "connectionString": {
+          "type": "string"
+        }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "startup": {
+          "type": "object",
+          "properties": {
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "liveness": {
+          "type": "object",
+          "properties": {
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "readiness": {
+          "type": "object",
+          "properties": {
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "insecureSkipTls": {
+      "type": "boolean"
+    },
+    "llmMock": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "log": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

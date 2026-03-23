@@ -21,25 +21,41 @@ from tests.e2e.helpers import (
 #   - expected: concise reference answer (the judge checks semantic match, not exact text)
 #   - min_score (optional): minimum acceptable judge score, default 6
 
-EXPECT_POD_ANSWER = """<message>A Pod is the smallest and simplest unit in the Kubernetes object model that you create or deploy. It represents a single instance of a running process in your cluster.
-  
-  Here's a breakdown:
-  *   **Encapsulation:** A Pod encapsulates one or more containers (such as Docker containers), storage resources, a unique network IP, and options that govern how the containers should run.
-  *   **Shared Context:** Containers within a Pod share the same network namespace, IP address, and storage. This allows them to communicate with each other using `localhost` and share data through mounted volumes.
-  *   **Atomic Unit:** Pods are treated as atomic units. When you scale a Deployment, you scale the number of Pods, not individual containers. If a Pod needs to be restarted due to a failure or an update, the entire Pod is recreated.
-  *   **Ephemeral:** Pods are designed to be relatively ephemeral. They can be started, stopped, and replaced without affecting the application's overall availability (when managed by higher-level controllers like Deployments).
-  
-  For more detailed information, you can refer to the official Kubernetes documentation on Pods: [https://kubernetes.io/docs/concepts/workloads/pods/](https://kubernetes.io/docs/concepts/workloads/pods/)
-  <suggestion>List all pods in a cluster</suggestion><suggestion>Inspect a specific pod</suggestion><suggestion>What is a Deployment?</suggestion></message>"""
-
-KNOWLEDGE_TEST_CASES = [
+TEST_CASESa = [
     E2ETestCase(
-        id="what_is_a_pod",
-        prompt="what is a pod?",
-        expected=EXPECT_POD_ANSWER,
-        description="Basic Kubernetes Pod definition",
+        id="namespace_does_not_exist",
+        prompt="show namespace does-not-exist in cluster local",
+        expected="""I couldn't find the namespace `does-not-exist` in the `local` cluster. 
+        It's possible the namespace does not exist, or there was a typo in the name""",
+        description="Namespace does not exist",
+    ),
+     E2ETestCase(
+        id="namespace_does_not_exist",
+        prompt="show namespace does-not-exist in cluster local",
+        expected="""I couldn't find the namespace `does-not-exist` in the `local` cluster. 
+        It's possible the namespace does not exist, or there was a typo in the name""",
+        description="Namespace does not exist",
     ),
 ]
+
+TEST_CASES = [
+     E2ETestCase(
+        id="namespace_does_not_exist",
+        prompt="is there a namespace called e2e-test in cluster local",
+        expected="""I couldn't find the namespace `e2e-test` in the `local` cluster. 
+        It's possible the namespace does not exist, or there was a typo in the name""",
+        description="Namespace does not exist",
+        resources=[
+        """
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: e2e-test
+        """
+        ],
+    ),
+]
+
 
 
 # ─── Parameterized Tests ─────────────────────────────────────────────────────
@@ -47,13 +63,15 @@ KNOWLEDGE_TEST_CASES = [
 
 @pytest.mark.parametrize(
     "test_case",
-    KNOWLEDGE_TEST_CASES,
-    ids=[tc.id for tc in KNOWLEDGE_TEST_CASES],
+    TEST_CASES,
+    ids=[tc.id for tc in TEST_CASES],
 )
-def test_knowledge_question(agent_test_session, test_client, test_case):
+def test_knowledge_question(agent_test_session, test_client, test_case, k8s_resources):
     """
     Sends a knowledge question via WebSocket and evaluates the response
     using LLM-as-judge against the expected reference answer.
+    If the test case defines resources, they are created before the test
+    and cleaned up after.
     """
     msg = run_single_prompt(test_client, test_case.prompt)
     assert_llm_as_judge(

@@ -17,7 +17,12 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from tests.e2e.helpers import MessageTrackingCallback, MCP_IMAGE_NAME
+from tests.e2e.helpers import (
+    MessageTrackingCallback,
+    MCP_IMAGE_NAME,
+    create_k8s_resources,
+    delete_k8s_resources,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -117,6 +122,66 @@ def agent_test_session():
 
         llm_instance.callbacks = []
         _write_usage_summary(usage_metadata_callback)
+
+
+@pytest.fixture()
+def k8s_resources(request):
+    """
+    Per-test fixture that creates Kubernetes resources declared in the test case's
+    ``resources`` field and tears them down after the test completes.
+
+    The fixture reads from the ``test_case`` parameter (accessed via ``request.node``).
+    If the test case has no resources, this is a no-op.
+
+    Usage – just add ``k8s_resources`` to your test signature:
+
+        def test_example(agent_test_session, test_client, test_case, k8s_resources):
+            ...
+
+    Resources are defined as YAML strings in the test case dataclass:
+
+        E2ETestCase(
+            id="list_pods",
+            prompt="list pods in namespace e2e-test",
+            expected="...",
+            resources=[
+                '''
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: e2e-test
+                ''',
+                '''
+                apiVersion: v1
+                kind: Pod
+                metadata:
+                  name: nginx
+                  namespace: e2e-test
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginx:latest
+                ''',
+            ],
+        )
+    """
+    # Retrieve test_case from the parametrize marker
+    test_case = None
+    for marker in request.node.iter_markers("parametrize"):
+        # Look for test_case in the current call's params
+        if "test_case" in request.node.callspec.params:
+            test_case = request.node.callspec.params["test_case"]
+            break
+
+    resources = getattr(test_case, "resources", []) if test_case else []
+
+    if not resources:
+        yield []
+        return
+
+    created = create_k8s_resources(resources)
+    yield created
+    delete_k8s_resources(created)
 
 
 def _write_usage_summary(callback: UsageMetadataCallbackHandler):

@@ -51,13 +51,15 @@ MULTI_TURN_TEST_CASES = [
     MULTI_TURN_TEST_CASES,
     ids=[tc.id for tc in MULTI_TURN_TEST_CASES],
 )
-def test_multi_turn_conversation(agent_test_session, test_client, test_case):
+def test_multi_turn_conversation(agent_test_session, test_client, test_case, k8s_resources):
     """
     Sends multiple prompts in sequence within a single WebSocket session
     and evaluates each response using LLM-as-judge.
 
     This validates that the agent maintains conversational context —
     e.g., resolving pronouns like "it" to a previously mentioned resource.
+    If the test case defines resources, they are created before the test
+    and cleaned up after.
     """
     with test_client.websocket_connect("/v1/ws/messages") as websocket:
         websocket.receive_text()  # consume chat-metadata

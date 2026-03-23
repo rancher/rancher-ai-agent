@@ -6,11 +6,14 @@ MultiTurnTestCase dataclasses.
 """
 
 import json
+import logging
 import re
 import warnings
+import yaml
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from kubernetes import client as k8s_client
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.services.llm import LLMManager
@@ -53,12 +56,15 @@ class E2ETestCase:
         expected: Reference answer for semantic comparison.
         description: Human-readable description of what the test validates.
         min_score: Minimum acceptable semantic similarity score (1-10, default 6).
+        resources: Optional list of Kubernetes resource YAML strings to create before
+                   the test and delete after.
     """
     id: str
     prompt: str
     expected: str
     description: str = ""
     min_score: int = 6
+    resources: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -83,10 +89,13 @@ class MultiTurnTestCase:
         id: Unique identifier used as the pytest test ID.
         turns: Ordered list of conversation turns to execute.
         description: Human-readable description of what the test validates.
+        resources: Optional list of Kubernetes resource YAML strings to create before
+                   the test and delete after.
     """
     id: str
     turns: List[ConversationTurn]
     description: str = ""
+    resources: List[str] = field(default_factory=list)
 
 
 # ─── Callback Handlers ───────────────────────────────────────────────────────
@@ -228,3 +237,89 @@ def assert_llm_as_judge(
     )
 
     return score
+
+
+# ─── Kubernetes Resource Helpers ──────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
+
+def create_k8s_resources(resource_yamls: List[str]) -> List[dict]:
+    """
+    Creates Kubernetes resources from a list of YAML strings.
+
+    Each YAML string is a standard Kubernetes resource manifest (Namespace,
+    Pod, Deployment, Service, ConfigMap, etc.).  Resources are created via
+    the dynamic client so *any* resource kind works without hard-coding APIs.
+
+    Args:
+        resource_yamls: List of YAML-formatted Kubernetes resource manifests.
+
+    Returns:
+        List of parsed resource dicts (useful for teardown).
+    """
+    from kubernetes import dynamic
+    from kubernetes import client as k8s_client
+
+    dyn = dynamic.DynamicClient(k8s_client.ApiClient())
+    created: List[dict] = []
+
+    for resource_yaml in resource_yamls:
+        body = yaml.safe_load(resource_yaml)
+        api_version = body.get("apiVersion", "v1")
+        kind = body["kind"]
+        metadata = body.get("metadata", {})
+        namespace = metadata.get("namespace")
+
+        api = dyn.resources.get(api_version=api_version, kind=kind)
+        try:
+            if namespace:
+                api.create(body=body, namespace=namespace)
+            else:
+                api.create(body=body)
+            logger.info(f"Created {kind} '{metadata.get('name')}'"
+                        f"{f' in namespace {namespace}' if namespace else ''}")
+            created.append(body)
+        except k8s_client.rest.ApiException as e:
+            if e.status == 409:  # Already exists
+                logger.info(f"{kind} '{metadata.get('name')}' already exists, skipping")
+                created.append(body)
+            else:
+                raise
+
+    return created
+
+
+def delete_k8s_resources(resource_dicts: List[dict]) -> None:
+    """
+    Deletes Kubernetes resources previously created by create_k8s_resources.
+
+    Resources are deleted in reverse order (LIFO) so dependent resources
+    (e.g. Pods inside a Namespace) are removed before the Namespace itself.
+
+    Args:
+        resource_dicts: List of parsed resource dicts as returned by
+                        create_k8s_resources.
+    """
+    from kubernetes import dynamic
+    from kubernetes import client as k8s_client
+
+    dyn = dynamic.DynamicClient(k8s_client.ApiClient())
+
+    for body in reversed(resource_dicts):
+        api_version = body.get("apiVersion", "v1")
+        kind = body["kind"]
+        metadata = body.get("metadata", {})
+        name = metadata.get("name")
+        namespace = metadata.get("namespace")
+
+        try:
+            api = dyn.resources.get(api_version=api_version, kind=kind)
+            if namespace:
+                api.delete(name=name, namespace=namespace)
+            else:
+                api.delete(name=name)
+            logger.info(f"Deleted {kind} '{name}'"
+                        f"{f' from namespace {namespace}' if namespace else ''}")
+        except k8s_client.rest.ApiException:
+            logger.warning(f"Failed to delete {kind} '{name}', ignoring")

@@ -1,122 +1,27 @@
-import os
-import pathlib
+"""E2E tests for single-turn knowledge questions.
+
+Tests general Kubernetes knowledge without requiring MCP tool calls.
+Add new test cases to KNOWLEDGE_TEST_CASES below — each only needs a prompt
+and a concise reference answer for the LLM-as-judge evaluation.
+"""
+
 import pytest
-import requests
-import re
-import warnings
-import yaml
 
-from unittest.mock import patch
-from typing import Any, Dict, List
-from kubernetes import client, config
-from fastapi.testclient import TestClient
-from app.main import app
-from app.services.llm import LLMManager
-from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
-from testcontainers.core.container import DockerContainer
-from testcontainers.core.wait_strategies import LogMessageWaitStrategy
-
-test_client = TestClient(app)
-
-# TODO get from chart!
-MCP_IMAGE_NAME = "ghcr.io/rancher/rancher-ai-mcp:v0.1.2-alpha.4" 
-JUDGE_SYSTEM_PROMPT = """## System Prompt: Semantic Judge
-
-You are a precise Quality Assurance Judge evaluating the output of an AI agent against a Ground Truth reference. 
-
-### Your Task:
-Compare the **Actual Response** to the **Expected Reference**. Determine if the Actual Response accurately conveys the same core information, facts, and intent as the Reference.
-
-### Decision Criteria:
-Score the similarity from 1 to 10, where:
-* **1-3:** Poor match, major contradictions or missing critical facts.
-* **4-5:** Partial match but important information is missing or incorrect.
-* **6:** Adequate match on core meaning with minor issues.
-* **7-8:** Strong match with mostly correct meaning and details.
-* **9-10:** Excellent semantic match with equivalent meaning and facts.
-
-* **Ignore:** Differences in tone, word choice, sentence structure, or the presence of polite filler (e.g., "Sure, I can help with that").
-* Penalize contradictions, omissions of critical information, and hallucinated facts that change meaning.
-
-### Output Format:
-You must output exactly one integer from 1 to 10."""
-
-class MessageTrackingCallback(BaseCallbackHandler):
-    """Custom callback handler to track LLM messages."""
-    
-    def __init__(self):
-        self.messages = []
-        self.responses = []
-    
-    def on_chat_model_start(self, serialized: Dict[str, Any], messages: List[List], **kwargs: Any) -> None:
-        """Called when chat model starts."""
-        self.messages.extend(messages)
-    
-    def on_llm_end(self, response, **kwargs: Any) -> None:
-        """Called when LLM ends running."""
-        self.responses.append(response)
+from tests.e2e.helpers import (
+    E2ETestCase,
+    run_single_prompt,
+    assert_llm_as_judge,
+)
 
 
-@pytest.fixture(scope="module", autouse=True)
-def setup_test_environment():
-    """Set up test environment once for all tests in this module."""
-    # Initialize Kubernetes client
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
-    
-    v1 = client.CoreV1Api()
-    ext_v1 = client.ApiextensionsV1Api()
+# ─── Test Case Definitions ───────────────────────────────────────────────────
+# Add new test cases here. Each needs:
+#   - id:       unique pytest test ID
+#   - prompt:   the question sent to the agent
+#   - expected: concise reference answer (the judge checks semantic match, not exact text)
+#   - min_score (optional): minimum acceptable judge score, default 6
 
-    # Create CRD from chart
-    crd_path = pathlib.Path(__file__).parents[2] / "chart" / "agent" / "templates" / "crds" / "ai.cattle.io_aiagentconfigs.yaml"
-    with open(crd_path) as f:
-        crd_body = yaml.safe_load(f)
-    try:
-        ext_v1.create_custom_resource_definition(body=crd_body)
-    except client.rest.ApiException as e:
-        if e.status != 409:  # Ignore if already exists
-            raise
-
-    # Create namespace cattle-ai-agent-system
-    namespace_body = client.V1Namespace(
-        metadata=client.V1ObjectMeta(name="cattle-ai-agent-system")
-    )
-    try:
-        v1.create_namespace(body=namespace_body)
-    except client.rest.ApiException as e:
-        if e.status != 409:  # Ignore if already exists
-            raise
-
-    # Set up MockMemoryManager
-    class MockStorageType:
-        value = "memory"
-
-    class MockMemoryManager:
-        storage_type = MockStorageType()
-
-        def get_checkpointer(self):
-            from langgraph.checkpoint.memory import MemorySaver
-            return MemorySaver()
-
-    app.memory_manager = MockMemoryManager()
-    
-    yield
-    
-    # Cleanup after all tests
-    try:
-        v1.delete_namespace(name="cattle-ai-agent-system")
-    except client.rest.ApiException:
-        pass  # Ignore errors during cleanup
-
-    try:
-        ext_v1.delete_custom_resource_definition(name="aiagentconfigs.ai.cattle.io")
-    except client.rest.ApiException:
-        pass  # Ignore errors during cleanup
-
-expect_answer = """<message>A Pod is the smallest and simplest unit in the Kubernetes object model that you create or deploy. It represents a single instance of a running process in your cluster.
+EXPECT_POD_ANSWER = """<message>A Pod is the smallest and simplest unit in the Kubernetes object model that you create or deploy. It represents a single instance of a running process in your cluster.
   
   Here's a breakdown:
   *   **Encapsulation:** A Pod encapsulates one or more containers (such as Docker containers), storage resources, a unique network IP, and options that govern how the containers should run.
@@ -127,111 +32,33 @@ expect_answer = """<message>A Pod is the smallest and simplest unit in the Kuber
   For more detailed information, you can refer to the official Kubernetes documentation on Pods: [https://kubernetes.io/docs/concepts/workloads/pods/](https://kubernetes.io/docs/concepts/workloads/pods/)
   <suggestion>List all pods in a cluster</suggestion><suggestion>Inspect a specific pod</suggestion><suggestion>What is a Deployment?</suggestion></message>"""
 
-@pytest.fixture(scope="module")
-def agent_test_session():
+KNOWLEDGE_TEST_CASES = [
+    E2ETestCase(
+        id="what_is_a_pod",
+        prompt="what is a pod?",
+        expected=EXPECT_POD_ANSWER,
+        description="Basic Kubernetes Pod definition",
+    ),
+]
+
+
+# ─── Parameterized Tests ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    KNOWLEDGE_TEST_CASES,
+    ids=[tc.id for tc in KNOWLEDGE_TEST_CASES],
+)
+def test_knowledge_question(agent_test_session, test_client, test_case):
     """
-    Starts the MCP container and configures the LLM with tracking callbacks.
-    Scoped to the module so the container and LLM instance are reused across all tests.
+    Sends a knowledge question via WebSocket and evaluates the response
+    using LLM-as-judge against the expected reference answer.
     """
-    with DockerContainer(MCP_IMAGE_NAME).with_command(["/mcp", "serve", "--insecure"]).with_exposed_ports("9092").waiting_for(LogMessageWaitStrategy("MCP Server started!")) as container:
-        container.start()
-        host_port = container.get_exposed_port("9092")
-        host_ip = container.get_container_host_ip()
-        mcp_service_url = f"{host_ip}:{host_port}"
-
-        os.environ["MCP_URL"] = mcp_service_url
-        os.environ["INSECURE_SKIP_TLS"] = "true"
-
-        message_tracking_callback = MessageTrackingCallback()
-        usage_metadata_callback = UsageMetadataCallbackHandler()
-        llm_instance = LLMManager.get_instance()
-        llm_instance.callbacks = [message_tracking_callback, usage_metadata_callback]
-
-        yield {
-            "message_tracking_callback": message_tracking_callback,
-            "usage_metadata_callback": usage_metadata_callback,
-            "llm_instance": llm_instance,
-        }
-
-        llm_instance.callbacks = []
-
-        usage = usage_metadata_callback.usage_metadata
-        model = os.environ["MODEL"]
-        summary_md = f"""### 📊 LLM Token Consumption Summary (All Tests)
-| Metric | Count |
-| :--- | :--- |
-| **Input Tokens** | {usage[model].get('input_tokens', 0)} |
-| **Output Tokens** | {usage[model].get('output_tokens', 0)} |
-| **Total Tokens** | {usage[model].get('total_tokens', 0)} |
-"""
-        if "GITHUB_STEP_SUMMARY" in os.environ:
-            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-                f.write(summary_md)
-
-
-def test_no_mcp_tools(agent_test_session):
-    message_tracking_callback = agent_test_session["message_tracking_callback"]
-    usage_metadata_callback = agent_test_session["usage_metadata_callback"]
-
-    with test_client.websocket_connect("/v1/ws/messages") as websocket:
-        # Consume any initial messages from the server (chat-metadata, etc.)
-        websocket.receive_text()
-        prompt = "what is a pod?"
-        
-        msg = _ws_send_and_receive(websocket, prompt)
-
-        #assert message_tracking_callback.messages == [[SystemMessage(content="You are a helpful assistant for Kubernetes-related questions. Answer the user's question based on your knowledge and provide suggestions for follow-up questions.")], [HumanMessage(content="what is a pod?")]]
-
-        score = _assert_llm_as_judge(expected=expect_answer, actual=msg, prompt=prompt)
-
-        print(f"Consumption so far: {usage_metadata_callback.usage_metadata}")
-
-
-def test_create_and_update_pods(agent_test_session):
-    message_tracking_callback = agent_test_session["message_tracking_callback"]
-    usage_metadata_callback = agent_test_session["usage_metadata_callback"]
-
-    with test_client.websocket_connect("/v1/ws/messages") as websocket:
-        # Consume any initial messages from the server (chat-metadata, etc.)
-        websocket.receive_text()
-        prompt = "what is a pod?"
-        
-        msg = _ws_send_and_receive(websocket, prompt)
-
-        #assert message_tracking_callback.messages == [[SystemMessage(content="You are a helpful assistant for Kubernetes-related questions. Answer the user's question based on your knowledge and provide suggestions for follow-up questions.")], [HumanMessage(content="what is a pod?")]]
-
-        score = _assert_llm_as_judge(expected=expect_answer, actual=msg, prompt=prompt)
-
-        print(f"Consumption so far: {usage_metadata_callback.usage_metadata}")
-
-
-def _ws_send_and_receive(websocket, prompt: str) -> str:
-    """
-    Sends a prompt over the WebSocket and collects the full response,
-    reading until the closing </message> tag.
-    """
-    websocket.send_text(prompt)
-    msg = ""
-    while not msg.endswith("</message>"):
-        msg += websocket.receive_text()
-    return msg
-
-
-def _assert_llm_as_judge(expected, actual, prompt):
-    llm = LLMManager.get_instance()
-    response = llm.invoke([
-        SystemMessage(content=JUDGE_SYSTEM_PROMPT),
-        HumanMessage(content=f"Prompt: {prompt}\n\nResponse 1: {expected}\n\nResponse 2: {actual}\n\nRate semantic equivalence from 1 to 10. Return only a single integer.")
-    ]).text.strip()
-
-    match = re.search(r"\b(10|[1-9])\b", response)
-    assert match, f"Judge returned invalid score: '{response}'"
-
-    score = int(match.group(1))
-
-    if score in (7, 8):
-        warnings.warn(f"Semantic judge returned warning score: {score}", UserWarning)
-
-    assert score >= 6, f"Semantic score too low ({score}). Expected: {expected}, Actual: {actual}"
-
-    return score
+    msg = run_single_prompt(test_client, test_case.prompt)
+    assert_llm_as_judge(
+        expected=test_case.expected,
+        actual=msg,
+        prompt=test_case.prompt,
+        min_score=test_case.min_score,
+    )

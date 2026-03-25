@@ -121,7 +121,12 @@ class ParentAgentBuilder(BaseAgentBuilder):
             router_prompt += f"- {child.config.name}: {child.config.description}\n"
         router_prompt += f"\nUSER'S REQUEST: {messages[-1].content}"
         
-        user_and_ai_messages = [msg for msg in self._get_messages_from_last_summary(state) if isinstance(msg, (HumanMessage, AIMessage, SystemMessage))]
+        # Exclude tool calls
+        user_and_ai_messages = [
+            msg for msg in self._get_messages_from_last_summary(state)
+            if isinstance(msg, (HumanMessage, SystemMessage))
+            or (isinstance(msg, AIMessage) and not msg.tool_calls)
+        ]
 
         # Use LLM to select the appropriate child agent
         child_agent = self.llm.invoke([SystemMessage(content=router_prompt)] + user_and_ai_messages).text.strip()

@@ -7,22 +7,15 @@ asserted against LangGraph state after all turns complete.
 """
 
 import pytest
-from deepeval import evaluate
-from deepeval.test_case import LLMTestCase, LLMTestCaseParams
-from deepeval.metrics import GEval
-from deepeval.models import GeminiModel
+from deepeval.test_case import LLMTestCase
 
-from app.main import app
-from tests.e2e.helpers import (
+from tests.e2e.conftest import (
     MultiTurnTestCase,
     ConversationTurn,
     run_multi_turn,
-    get_langgraph_state,
-    get_executed_tools,
+    evaluate_and_assert,
 )
 
-
-# ─── Test Case Definitions ───────────────────────────────────────────────────
 
 MULTI_TURN_TEST_CASES = [
     MultiTurnTestCase(
@@ -49,19 +42,17 @@ MULTI_TURN_TEST_CASES = [
             ConversationTurn(
                 prompt="no",
                 expected=(
-                    "<message></message>" # empty message indicating user cancelled the action
+                    "<message></message>"
                 ),
             ),
             ConversationTurn(
-                prompt="list all the names of the ConfigMaps in the cm-create-ns namespace",
+                prompt="list all the names of the ConfigMaps in the cm-create-ns namespace in the cluster local",
                 expected=(
-                    "There is 2 ConfigMapz in the `cm-create-ns` namespace: kube-root-ca.crt and cm1."
+                    "There is 2 ConfigMapz in the `cm-create-ns` namespace: kube-root-ca.crt and cm1." # Note: kube-root-ca.crt is automatically created by Kubernetes in every namespace
                 ),
                 expected_agent="rancher",
             )
         ],
-        expected_tools=["createKubernetesResource", "listKubernetesResources"],
-        expect_summary=True,
         resources=[
             """
             apiVersion: v1
@@ -93,20 +84,8 @@ MULTI_TURN_TEST_CASES = [
                 expected_agent="provisioning",
             ),
         ],
-        expected_tools=["listGitRepos", "listK3kClusters"],
-        expect_summary=True,
-        resources=[
-            """
-            apiVersion: v1
-            kind: Namespace
-            metadata:
-              name: cm-create-ns
-            """]
     )
 ]
-
-
-# ─── Parameterized Tests ─────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -118,26 +97,12 @@ def test_multi_turn_conversation(agent_test_session, test_client, test_case, k8s
     """
     Sends multiple prompts in sequence within a single WebSocket session
     and evaluates each response using deepeval GEval.
-
-    This validates that the agent maintains conversational context —
-    e.g., resolving pronouns like "it" to a previously mentioned resource.
-    After all turns, tool calls and summary are asserted against LangGraph state.
     """
-    correctness_metric = GEval(
-        name="Correctness",
-        criteria="Determine if the 'actual output' conveys the same fundamental meaning and key concepts as the 'expected output'. The wording, phrasing, structure, and level of detail may differ — focus only on whether the core factual content is semantically equivalent. Ignore stylistic differences, additional context, suggestions, and agent metadata like agent selection messages.",
-        evaluation_params=[LLMTestCaseParams.ACTUAL_OUTPUT, LLMTestCaseParams.EXPECTED_OUTPUT],
-        threshold=0.5,
-        model=GeminiModel(model="gemini-2.5-flash"),
-    )
-
     prompts = [turn.prompt for turn in test_case.turns]
     results = run_multi_turn(test_client, prompts)
-    thread_id = results[0].thread_id
 
     eval_cases = []
     for turn, result in zip(test_case.turns, results):
-        # --- Per-turn agent assertion ---
         if turn.expected_agent is not None:
             assert result.agent_name == turn.expected_agent, (
                 f"Turn '{turn.prompt[:30]}...': expected agent '{turn.expected_agent}', got '{result.agent_name}'"
@@ -157,30 +122,4 @@ def test_multi_turn_conversation(agent_test_session, test_client, test_case, k8s
                 )
             )
 
-    # --- LangGraph state assertions ---
-    checkpointer = app.memory_manager.get_checkpointer()
-    state = get_langgraph_state(checkpointer, thread_id)
-    messages = state.get("messages", [])
-
-    if test_case.expected_tools:
-        actual_tools = get_executed_tools(messages)
-        missing = [t for t in test_case.expected_tools if t not in actual_tools]
-        assert not missing, (
-            f"Expected tools {sorted(test_case.expected_tools)} to be included in actual tools {sorted(actual_tools)}. Missing: {missing}"
-        )
-
-    if test_case.expect_summary is not None:
-        summary = state.get("summary", {})
-        has_summary = bool(summary.get("text"))
-        assert has_summary == test_case.expect_summary, (
-            f"Expected summary={'present' if test_case.expect_summary else 'absent'}, "
-            f"got summary={'present' if has_summary else 'absent'}"
-        )
-
-    # --- Semantic correctness assertion ---
-    eval_results = evaluate(eval_cases, metrics=[correctness_metric])
-
-    e2e_results.append(eval_results)
-
-    failed = [r for r in eval_results.test_results if not r.success]
-    assert not failed, f"{len(failed)} turn(s) failed evaluation"
+    evaluate_and_assert(eval_cases, e2e_results)

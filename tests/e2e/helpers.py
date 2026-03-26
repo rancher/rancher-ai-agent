@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from kubernetes import client as k8s_client
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from app.services.llm import LLMManager
 
 # TODO: get from chart!
@@ -55,7 +55,6 @@ class E2ETestCase:
         prompt: The user prompt to send via WebSocket.
         expected: Reference answer for semantic comparison.
         description: Human-readable description of what the test validates.
-        min_score: Minimum acceptable semantic similarity score (1-10, default 6).
         resources: Optional list of Kubernetes resource YAML strings to create before
                    the test and delete after.
     """
@@ -65,6 +64,9 @@ class E2ETestCase:
     description: str = ""
     min_score: int = 6
     resources: List[str] = field(default_factory=list)
+    expected_tools: List[str] = field(default_factory=list)
+    expect_summary: Optional[bool] = None
+    expected_agent: Optional[str] = None
 
 
 @dataclass
@@ -75,10 +77,14 @@ class ConversationTurn:
         prompt: The user prompt for this turn.
         expected: Reference answer for semantic comparison.
         min_score: Minimum acceptable semantic similarity score (1-10, default 6).
+        expected_agent: Optional expected agent name for this turn.
+        expected_confirmation_message: Optional expected confirmation message for this turn.
     """
     prompt: str
-    expected: str
+    expected:  Optional[str] = None
+    expected_confirmation_message: Optional[str] = None
     min_score: int = 6
+    expected_agent: Optional[str] = None
 
 
 @dataclass
@@ -96,6 +102,8 @@ class MultiTurnTestCase:
     turns: List[ConversationTurn]
     description: str = ""
     resources: List[str] = field(default_factory=list)
+    expected_tools: List[str] = field(default_factory=list)
+    expect_summary: Optional[bool] = None
 
 
 # ─── Callback Handlers ───────────────────────────────────────────────────────
@@ -152,14 +160,66 @@ def ws_send_json_and_receive(
 # ─── High-Level Test Helpers ─────────────────────────────────────────────────
 
 
-def run_single_prompt(test_client, prompt: str) -> str:
+@dataclass
+class PromptResult:
+    """Result from a single prompt interaction, including metadata for assertions."""
+    response: str
+    thread_id: str
+    agent_name: Optional[str] = None
+    selection_mode: Optional[str] = None
+
+
+def parse_chat_metadata(text: str) -> dict:
+    """Extract chat metadata from a <chat-metadata>...</chat-metadata> tag."""
+    match = re.search(r"<chat-metadata>(.*?)</chat-metadata>", text)
+    if not match:
+        return {}
+    return json.loads(match.group(1))
+
+
+def parse_agent_metadata(text: str) -> dict:
+    """Extract agent metadata from an <agent-metadata>...</agent-metadata> tag."""
+    match = re.search(r"<agent-metadata>(.*?)</agent-metadata>", text)
+    if not match:
+        return {}
+    return json.loads(match.group(1))
+
+
+def get_langgraph_state(checkpointer, thread_id: str) -> dict:
+    """Retrieve the LangGraph checkpoint state for a given thread_id."""
+    config = {"configurable": {"thread_id": thread_id}}
+    checkpoint_tuple = checkpointer.get_tuple(config=config)
+    if not checkpoint_tuple:
+        return {}
+    return checkpoint_tuple.checkpoint.get("channel_values", {})
+
+
+def get_executed_tools(messages) -> list:
+    """Extract tool names from ToolMessage instances in the message history."""
+    return [msg.name for msg in messages if isinstance(msg, ToolMessage)]
+
+
+def run_single_prompt(test_client, prompt: str) -> PromptResult:
     """
-    Opens a WebSocket, sends one prompt, and returns the full response.
+    Opens a WebSocket, sends one prompt, and returns a PromptResult
+    containing the response, thread_id, and agent metadata.
     Each call creates a new conversation thread.
     """
     with test_client.websocket_connect("/v1/ws/messages") as websocket:
-        websocket.receive_text()  # consume chat-metadata
-        return ws_send_and_receive(websocket, prompt)
+        chat_meta_text = websocket.receive_text()
+        chat_meta = parse_chat_metadata(chat_meta_text)
+        thread_id = chat_meta.get("chatId", "")
+
+        response = ws_send_and_receive(websocket, prompt)
+
+        agent_meta = parse_agent_metadata(response)
+
+        return PromptResult(
+            response=response,
+            thread_id=thread_id,
+            agent_name=agent_meta.get("agentName"),
+            selection_mode=agent_meta.get("selectionMode"),
+        )
 
 
 def run_conversation(test_client, prompts: List[str]) -> List[str]:
@@ -176,6 +236,31 @@ def run_conversation(test_client, prompts: List[str]) -> List[str]:
     return responses
 
 
+def run_multi_turn(test_client, prompts: List[str]) -> List[PromptResult]:
+    """
+    Opens a single WebSocket session, sends multiple prompts in sequence,
+    and returns a list of PromptResult objects. All prompts share the same
+    thread_id (conversation).
+    """
+    results = []
+    with test_client.websocket_connect("/v1/ws/messages") as websocket:
+        chat_meta_text = websocket.receive_text()
+        chat_meta = parse_chat_metadata(chat_meta_text)
+        thread_id = chat_meta.get("chatId", "")
+
+        for prompt in prompts:
+            response = ws_send_and_receive(websocket, prompt)
+            agent_meta = parse_agent_metadata(response)
+
+            results.append(PromptResult(
+                response=response,
+                thread_id=thread_id,
+                agent_name=agent_meta.get("agentName"),
+                selection_mode=agent_meta.get("selectionMode"),
+            ))
+    return results
+
+
 def run_prompt_with_context(
     test_client, prompt: str, context: dict = None, agent: str = ""
 ) -> str:
@@ -186,57 +271,6 @@ def run_prompt_with_context(
     with test_client.websocket_connect("/v1/ws/messages") as websocket:
         websocket.receive_text()  # consume chat-metadata
         return ws_send_json_and_receive(websocket, prompt, context, agent)
-
-
-# ─── Assertion Helpers ────────────────────────────────────────────────────────
-
-
-def assert_llm_as_judge(
-    expected: str, actual: str, prompt: str, min_score: int = 6
-) -> int:
-    """
-    Uses LLM-as-judge to semantically compare expected and actual responses.
-
-    Args:
-        expected: The reference/expected response.
-        actual: The actual response from the agent.
-        prompt: The original prompt that produced the responses.
-        min_score: Minimum acceptable semantic similarity score (1-10).
-
-    Returns:
-        The semantic similarity score (1-10).
-
-    Raises:
-        AssertionError: If the score is below min_score or the judge returns
-            an invalid response.
-    """
-    llm = LLMManager.get_instance()
-    response = llm.invoke([
-        SystemMessage(content=JUDGE_SYSTEM_PROMPT),
-        HumanMessage(content=(
-            f"Prompt: {prompt}\n\n"
-            f"Expected Reference: {expected}\n\n"
-            f"Actual Response: {actual}\n\n"
-            "Rate semantic equivalence from 1 to 10. Return only a single integer."
-        )),
-    ]).text.strip()
-
-    match = re.search(r"\b(10|[1-9])\b", response)
-    assert match, f"Judge returned invalid score: '{response}'"
-
-    score = int(match.group(1))
-
-    if score in (7, 8):
-        warnings.warn(f"Semantic judge returned warning score: {score}", UserWarning)
-
-    assert score >= min_score, (
-        f"Semantic score too low ({score}/{min_score}).\n"
-        f"Prompt: {prompt}\n"
-        f"Expected: {expected}\n"
-        f"Actual: {actual}"
-    )
-
-    return score
 
 
 # ─── Kubernetes Resource Helpers ──────────────────────────────────────────────

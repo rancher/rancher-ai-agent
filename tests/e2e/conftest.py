@@ -17,6 +17,7 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+from langgraph.checkpoint.memory import MemorySaver
 from tests.e2e.helpers import (
     MessageTrackingCallback,
     MCP_IMAGE_NAME,
@@ -65,10 +66,10 @@ def setup_test_environment():
 
     class MockMemoryManager:
         storage_type = MockStorageType()
+        _checkpointer = MemorySaver()
 
         def get_checkpointer(self):
-            from langgraph.checkpoint.memory import MemorySaver
-            return MemorySaver()
+            return self._checkpointer
 
     app.memory_manager = MockMemoryManager()
 
@@ -99,7 +100,7 @@ def agent_test_session():
     Session-scoped so the container and LLM instance are reused across all e2e tests.
     """
     with DockerContainer(MCP_IMAGE_NAME) \
-        .with_command(["/usr/local/bin/mcp", "serve", "--insecure"]) \
+        .with_command(["/usr/local/bin/mcp", "serve", "--insecure", "--log-level", "debug"]) \
         .with_exposed_ports("9092") \
         .waiting_for(LogMessageWaitStrategy("MCP Server started!")) as container:
 
@@ -122,6 +123,14 @@ def agent_test_session():
 
         llm_instance.callbacks = []
         _write_usage_summary(usage_metadata_callback)
+
+        print("\n--- MCP Container Logs ---")
+        stdout, stderr = container.get_logs()
+        if stdout:
+            print(stdout.decode("utf-8", errors="replace"))
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        print("--- End MCP Container Logs ---")
 
 
 @pytest.fixture()
@@ -184,10 +193,31 @@ def k8s_resources(request):
     delete_k8s_resources(created)
 
 
+@pytest.fixture(scope="session")
+def e2e_results():
+    """Collects DeepEval results across all e2e tests, written once at session end."""
+    results = []
+    yield results
+    summary_file = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_file and results:
+        with open(summary_file, "a") as f:
+            f.write("## E2E tests summary \n\n")
+            f.write("| Test Case | Metric | Score | Reason | Status |\n")
+            f.write("| --- | --- | --- | --- | --- |\n")
+            for entry in results:
+                for result in entry.test_results:
+                    for metric in result.metrics_data:
+                        score = metric.score if metric.score is not None else 0.0
+                        reason = metric.reason or "N/A"
+                        status = "✅ PASS" if score >= metric.threshold else "❌ FAIL"
+                        f.write(f"| {result.input[:30]}... | {metric.name} | {score:.2f} | {reason} | {status} |\n")
+
+
 def _write_usage_summary(callback: UsageMetadataCallbackHandler):
     """Write token usage summary to stdout and optionally to GitHub Actions step summary."""
     usage = callback.usage_metadata
     if not usage:
+        print("No usage metadata collected.")
         return
 
     rows = []

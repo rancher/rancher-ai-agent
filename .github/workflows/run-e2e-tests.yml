@@ -41,7 +41,8 @@ jobs:
           AWS_REGION: "eu-north-1"
           RANCHER_URL: ${{ env.CATTLE_SERVER_URL }}
           KUBECONFIG: ${{ env.KUBECONFIG_PATH }}
-          MODEL: "eu.anthropic.claude-opus-4-5-20251101-v1:0"
+          BEDROCK_MODEL: "eu.anthropic.claude-opus-4-5-20251101-v1:0"
+          ACTIVE_LLM: "bedrock"
         run: |
           RANCHER_API_TOKEN=$(curl -vkL \
             -H 'Content-Type: application/json' \

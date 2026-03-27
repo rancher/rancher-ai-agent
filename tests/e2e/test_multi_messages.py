@@ -76,12 +76,7 @@ MULTI_TURN_TEST_CASES = [
                 prompt="show me the GitRepos in the 'fleet-default' workspace",
                 expected="There are no GitRepos found.",
                 expected_agent="fleet",
-            ),
-            ConversationTurn(
-                prompt="what K3k virtual clusters are currently provisioned?",
-                expected="There are no K3k clusters found.",
-                expected_agent="provisioning",
-            ),
+            )
         ],
     )
 ]

@@ -18,7 +18,7 @@ import pytest
 from deepeval import evaluate
 from deepeval.test_case import LLMTestCaseParams
 from deepeval.metrics import GEval
-from deepeval.models import GeminiModel
+from deepeval.models import AmazonBedrockModel
 from kubernetes import client, dynamic
 from fastapi.testclient import TestClient
 from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
@@ -213,7 +213,7 @@ def evaluate_and_assert(test_cases: list, e2e_results: list):
         ),
         evaluation_params=[LLMTestCaseParams.ACTUAL_OUTPUT, LLMTestCaseParams.EXPECTED_OUTPUT],
         threshold=0.5,
-        model=GeminiModel(model="gemini-2.5-flash"),
+        model=AmazonBedrockModel(model="eu.anthropic.claude-opus-4-5-20251101-v1:0"),
     )
     results = evaluate(test_cases, metrics=[metric])
     e2e_results.append(results)

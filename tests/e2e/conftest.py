@@ -31,7 +31,6 @@ from app.services.llm import LLMManager
 
 logger = logging.getLogger(__name__)
 
-# TODO: get from chart!
 MCP_IMAGE_NAME = "ghcr.io/rancher/rancher-ai-mcp:v1.0.0"
 
 
@@ -45,7 +44,6 @@ class E2ETestCase:
     prompt: str
     expected: str
     description: str = ""
-    min_score: int = 6
     resources: List[str] = field(default_factory=list)
     expected_agent: Optional[str] = None
 
@@ -56,7 +54,6 @@ class ConversationTurn:
     prompt: str
     expected: Optional[str] = None
     expected_confirmation_message: Optional[str] = None
-    min_score: int = 6
     expected_agent: Optional[str] = None
 
 

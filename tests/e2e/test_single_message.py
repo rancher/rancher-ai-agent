@@ -1,10 +1,3 @@
-"""E2E tests for single-turn knowledge questions.
-
-Tests general Kubernetes knowledge without requiring MCP tool calls.
-Add new test cases to TEST_CASES below — each only needs a prompt
-and a concise reference answer for the LLM-as-judge evaluation.
-"""
-
 import pytest
 from deepeval.test_case import LLMTestCase
 

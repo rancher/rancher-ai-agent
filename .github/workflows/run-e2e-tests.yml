@@ -49,7 +49,7 @@ jobs:
             -X POST \
             ${CATTLE_SERVER_URL}/v3-public/localProviders/local?action=login 2>&1 | \
             awk -F'[=;]' '/Set-Cookie/{gsub(" ","",$2);print $2;exit}')
-          RANCHER_API_TOKEN="$RANCHER_API_TOKEN" uv run pytest tests/e2e -vv
+          RANCHER_API_TOKEN="$RANCHER_API_TOKEN" deepeval test run tests/e2e/ -vvv
 
 
 

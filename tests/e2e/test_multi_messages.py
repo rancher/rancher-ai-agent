@@ -2,8 +2,7 @@
 
 Validates that the agent maintains context across multiple exchanges within
 a single WebSocket session (same conversation thread).  Each turn is
-independently scored by deepeval GEval, and tool calls / summary are
-asserted against LangGraph state after all turns complete.
+independently scored by deepeval GEval.
 """
 
 import pytest

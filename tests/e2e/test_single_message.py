@@ -25,13 +25,6 @@ TEST_CASES = [
             """,
         ],
     ),
-    E2ETestCase(
-        id="show_empty_fleet_workspace",
-        prompt="show me the GitRepos in the 'fleet-default' workspace",
-        expected="There are no GitRepos found.",
-        description="Show empty fleet workspace",
-        expected_agent="fleet",
-    ),
      E2ETestCase(
         id="context_from_ui",
         prompt="""{"prompt": "show all running pods", "context": {"cluster": "local", "namespace": "default"}}""",

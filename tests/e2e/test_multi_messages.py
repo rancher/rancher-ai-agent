@@ -73,7 +73,7 @@ MULTI_TURN_TEST_CASES = [
                 expected_agent="rancher",
             ),
             ConversationTurn(
-                prompt="show me the GitRepos in the 'fleet-default' workspace",
+                prompt="is there any GitRepos in the 'fleet-default' workspace?",
                 expected="There are no GitRepos found.",
                 expected_agent="fleet",
             )

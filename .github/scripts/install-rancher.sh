@@ -74,4 +74,24 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+echo ""
+echo "Waiting for Fleet GitRepo CRD to become available"
+
+TIME=0
+until kubectl --kubeconfig=kubeconfig.yaml get crd gitrepos.fleet.cattle.io &>/dev/null; do
+  if [ $TIME -ge 180 ]; then
+    echo "Timed out waiting for Fleet GitRepo CRD after ${TIME}s"
+    exit 1
+  fi
+  sleep 5
+  TIME=$((TIME + 5))
+  echo "${TIME}s ..."
+done
+
+kubectl --kubeconfig=kubeconfig.yaml wait --for=condition=Established crd/gitrepos.fleet.cattle.io --timeout=120s
+if [ $? -ne 0 ]; then
+  echo "Fleet GitRepo CRD did not become established in time"
+  exit 1
+fi
+
 echo "Done"

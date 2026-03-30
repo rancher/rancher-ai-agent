@@ -1,11 +1,12 @@
 name: Run e2e Tests
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: 'AWS region (value for AWS_BEDROCK_REGION and AWS_REGION env vars)'
+        required: false
+        type: string
+        default: 'eu-north-1'
 
 env:
   RANCHER_VERSION: head
@@ -59,8 +60,8 @@ jobs:
       - name: Execute e2e tests
         env:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
-          AWS_REGION: "eu-north-1" # we need both AWS_REGION and AWS_BEDROCK_REGION because deepeval expects AWS_BEDROCK_REGION and langchain expects AWS_REGION
-          AWS_BEDROCK_REGION: "eu-north-1"
+          AWS_REGION: ${{ inputs.aws_region }} # we need both AWS_REGION and AWS_BEDROCK_REGION because deepeval expects AWS_BEDROCK_REGION and langchain expects AWS_REGION
+          AWS_BEDROCK_REGION: ${{ inputs.aws_region }}
           RANCHER_URL: ${{ env.CATTLE_SERVER_URL }}
           KUBECONFIG: ${{ env.KUBECONFIG_PATH }}
           BEDROCK_MODEL: ${{ matrix.model }}

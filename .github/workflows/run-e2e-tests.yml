@@ -14,36 +14,58 @@ env:
   KUBECONFIG_PATH: ${{ github.workspace }}/kubeconfig.yaml
 
 jobs:
-  run-tests:
+  setup-matrix:
     runs-on: ubuntu-latest
-    
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build model matrix
+        id: set-matrix
+        run: |
+          matrix='[
+            {"active_llm":"bedrock","model":"eu.anthropic.claude-opus-4-5-20251101-v1:0"},
+            {"active_llm":"bedrock","model":"eu.anthropic.claude-sonnet-4-5-20250929-v1:0"},
+            {"active_llm":"gemini","model":"gemini-2.5-flash"},
+            {"active_llm":"gemini","model":"gemini-2.5-pro"}
+          ]'
+          echo "matrix={\"include\":$(echo "$matrix" | jq -c '.')}" >> "$GITHUB_OUTPUT"
+
+  run-tests:
+    needs: setup-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
+    name: "e2e (${{ matrix.active_llm }} / ${{ matrix.model }})"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        
+
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-          
+
       - name: Install uv
         run: pip install uv
-        
+
       - name: Install dependencies
         run: uv sync --all-groups
-        
+
       - name: Start Rancher
         run: bash .github/scripts/install-rancher.sh ${{ env.RANCHER_VERSION }} ${{ env.CATTLE_SERVER_URL }} ${{ env.CATTLE_BOOTSTRAP_PASSWORD }}
 
-      - name: Execute e2e tests with AWS Bedrock
+      - name: Execute e2e tests
         env:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
-          AWS_REGION: "eu-north-1"
+          AWS_REGION: "eu-north-1" # we need both AWS_REGION and AWS_BEDROCK_REGION because deepeval expects AWS_BEDROCK_REGION and langchain expects AWS_REGION
           AWS_BEDROCK_REGION: "eu-north-1"
           RANCHER_URL: ${{ env.CATTLE_SERVER_URL }}
           KUBECONFIG: ${{ env.KUBECONFIG_PATH }}
-          BEDROCK_MODEL: "eu.anthropic.claude-opus-4-5-20251101-v1:0"
-          ACTIVE_LLM: "bedrock"
+          BEDROCK_MODEL: ${{ matrix.model }}
+          GEMINI_MODEL: ${{ matrix.model }}
+          ACTIVE_LLM: ${{ matrix.active_llm }}
         run: |
           RANCHER_API_TOKEN=$(curl -vkL \
             -H 'Content-Type: application/json' \

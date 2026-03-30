@@ -31,7 +31,7 @@ from app.services.llm import LLMManager
 
 logger = logging.getLogger(__name__)
 
-MCP_IMAGE_NAME = "ghcr.io/rancher/rancher-ai-mcp:v1.0.0"
+MCP_IMAGE_NAME = os.environ.get("MCP_IMAGE_NAME", "ghcr.io/rancher/rancher-ai-mcp:v1.0.0")
 
 
 # ─── Test Case Data Classes ──────────────────────────────────────────────────

@@ -7,6 +7,11 @@ on:
         required: false
         type: string
         default: 'eu-north-1'
+      mcp_image:
+        description: 'MCP Docker image to use (value for MCP_IMAGE_NAME env var)'
+        required: false
+        type: string
+        default: 'ghcr.io/rancher/rancher-ai-mcp:v1.0.0'
 
 env:
   RANCHER_VERSION: head
@@ -67,6 +72,7 @@ jobs:
           BEDROCK_MODEL: ${{ matrix.model }}
           GEMINI_MODEL: ${{ matrix.model }}
           ACTIVE_LLM: ${{ matrix.active_llm }}
+          MCP_IMAGE_NAME: ${{ inputs.mcp_image }}
         run: |
           RANCHER_API_TOKEN=$(curl -vkL \
             -H 'Content-Type: application/json' \

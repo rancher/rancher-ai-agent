@@ -4,7 +4,7 @@
 
 VERSION="head"
 CATTLE_SERVER_URL="https://172.17.0.1"
-CATTLE_BOOTSTRAP_PASSWORD="asd"
+CATTLE_BOOTSTRAP_PASSWORD=$(openssl rand -base64 24)
 
 if [ -n "$1" ]; then
   VERSION=$1

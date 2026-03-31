@@ -16,7 +16,7 @@ on:
 env:
   RANCHER_VERSION: head
   CATTLE_SERVER_URL: https://172.17.0.1
-  CATTLE_BOOTSTRAP_PASSWORD: password
+  CATTLE_BOOTSTRAP_PASSWORD=$(openssl rand -base64 24)
   KUBECONFIG_PATH: ${{ github.workspace }}/kubeconfig.yaml
 
 jobs:
@@ -74,12 +74,12 @@ jobs:
           ACTIVE_LLM: ${{ matrix.active_llm }}
           MCP_IMAGE_NAME: ${{ inputs.mcp_image }}
         run: |
-          RANCHER_API_TOKEN=$(curl -vkL \
+          RANCHER_API_TOKEN=$(curl -skLD - \
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"'"$CATTLE_BOOTSTRAP_PASSWORD"'" ,"responseType":"cookie"}' \
             -X POST \
-            ${CATTLE_SERVER_URL}/v3-public/localProviders/local?action=login 2>&1 | \
-            awk -F'[=;]' '/Set-Cookie/{gsub(" ","",$2);print $2;exit}')
+            "${CATTLE_SERVER_URL}/v3-public/localProviders/local?action=login" | \
+            awk -F'[=;]' '/[Ss]et-[Cc]ookie/{gsub(" ","",$2);print $2;exit}')
           RANCHER_API_TOKEN="$RANCHER_API_TOKEN" uv run deepeval test run tests/e2e/ -vvv
 
 

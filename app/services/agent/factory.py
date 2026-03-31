@@ -20,7 +20,7 @@ class NoAgentAvailableError(Exception):
     pass
 
 
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
+async def create_agent(llm: BaseLanguageModel, websocket: WebSocket = None, checkpointer: Checkpointer = None):
     """
     Create and configure an agent based on the available builtin agents.
     
@@ -30,7 +30,9 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     
     Args:
         llm: The language model to use for agent reasoning and responses.
-        websocket: WebSocket connection used to extract authentication cookies and URL info.
+        websocket: Optional WebSocket connection used to extract authentication cookies and URL info.
+        checkpointer: Optional explicit checkpointer for state persistence. If not provided,
+                      falls back to websocket.app.memory_manager.get_checkpointer().
     
     Returns:
         CompiledStateGraph: Either a parent agent managing multiple child agents,
@@ -40,7 +42,10 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         This is an async context manager that properly manages the lifecycle of
         MCP (Model Context Protocol) connections and tools.
     """
-    checkpointer = websocket.app.memory_manager.get_checkpointer()
+    if checkpointer is None:
+        if websocket is None:
+            raise ValueError("Either 'websocket' or 'checkpointer' must be provided.")
+        checkpointer = websocket.app.memory_manager.get_checkpointer()
     
     # Load agent configs from CRDs (or create defaults if none exist)
     agents = load_agent_configs()
@@ -177,7 +182,7 @@ async def _create_single_agent(
     llm: BaseLanguageModel,
     agent_cfg: AgentConfig,
     checkpointer: Checkpointer,
-    websocket: WebSocket
+    websocket: WebSocket = None
 ) -> tuple:
     """
     Create a single child agent based on the provided agent configuration.
@@ -189,7 +194,7 @@ async def _create_single_agent(
         llm: The language model to use for the agent.
         agent_cfg: The configuration object for the agent, containing MCP connection details and system prompt.
         checkpointer: Checkpointer for persisting agent state.
-        websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
+        websocket: Optional WebSocket connection used to extract cookies and URL information for Rancher authentication.
     """
 
     client = create_mcp_client(agent_cfg, websocket)

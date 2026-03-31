@@ -5,10 +5,16 @@ import certifi
 
 from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
+
+from .a2a.executor import RancherAgentExecutor
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .routers import agent, configuration, chat, websocket, ui
 from .controllers.ai_agent_config import create_kopf_manager
+from a2a.server.apps import A2AFastAPIApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -128,6 +134,36 @@ app.include_router(websocket.router)
 app.include_router(agent.router)
 app.include_router(configuration.router)
 app.include_router(chat.router)
+
+request_handler = DefaultRequestHandler(
+    agent_executor=RancherAgentExecutor(app),
+    task_store=InMemoryTaskStore(),
+)
+
+agent_card = AgentCard(
+    name="Rancher AI Agent",
+    description="AI assistant for managing Kubernetes clusters and resources through Rancher.",
+    url="http://localhost:8000/a2a",
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=False),
+    default_input_modes=["text/plain"],
+    default_output_modes=["text/plain"],
+    skills=[
+        AgentSkill(
+            id="kubernetes-management",
+            name="Kubernetes Management",
+            description="Manage Kubernetes clusters and resources through natural language.",
+            tags=["kubernetes", "rancher", "cluster"],
+        ),
+    ],
+)
+
+a2a_app = A2AFastAPIApplication(
+    agent_card=agent_card,
+    http_handler=request_handler,
+)
+a2a_app.add_routes_to_app(app, rpc_url="/a2a")
+
 
 if os.environ.get("ENABLE_TEST_UI", "").lower() == "true":
     app.include_router(ui.router)

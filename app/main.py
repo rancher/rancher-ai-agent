@@ -145,7 +145,7 @@ agent_card = AgentCard(
     description="AI assistant for managing Kubernetes clusters and resources through Rancher.",
     url="http://localhost:8000/a2a",
     version="1.0.0",
-    capabilities=AgentCapabilities(streaming=False),
+    capabilities=AgentCapabilities(streaming=True),
     default_input_modes=["text/plain"],
     default_output_modes=["text/plain"],
     skills=[

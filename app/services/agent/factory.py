@@ -20,7 +20,7 @@ class NoAgentAvailableError(Exception):
     pass
 
 
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
+async def create_agent(llm: BaseLanguageModel, websocket: WebSocket, tokens: dict[str, str] | None = None) -> tuple:
     """
     Create and configure an agent based on the available builtin agents.
     
@@ -57,7 +57,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
         agents_metadata = []
 
         for agent_cfg in agents:
-            client = create_mcp_client(agent_cfg, websocket)
+            client = create_mcp_client(agent_cfg, websocket, tokens)
             try:
                 tools = await client.get_tools()
                 # Filter tools by toolset if specified in agent config
@@ -109,7 +109,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
 
 
 
-def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
+def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None, tokens: dict[str, str] | None = None) -> MultiServerMCPClient:
     """
     Create an MCP client for the agent based on the agent configuration.
     
@@ -148,8 +148,8 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
         else:
             mcp_url = "https://" + mcp_url
         headers = {
-            "R_token": token,
-            "R_url": rancher_url
+                "Authorization": "Bearer " + tokens.get("rancher", ""),
+                "R_url": rancher_url
         }
     elif agent_config.authentication == AuthenticationType.BASIC:
         mcp_url = agent_config.mcp_url

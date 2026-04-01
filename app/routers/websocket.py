@@ -14,11 +14,18 @@ from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
-
+from ..services.oauth2 import OAuthClient
+from .oauth2 import oauth_state_store
 from ..services.auth import get_user_id
 from ..dependencies import get_llm
 
 router = APIRouter()
+
+#TODO move this
+oauth_client = OAuthClient(client_id="xx", client_secret="xxx", metadata_url="https://raul-cabello.ngrok.app/oidc/.well-known/openid-configuration")
+auth_endpoint = "https://raul-cabello.ngrok.app/oidc/authorize"
+token_endpoint = "https://raul-cabello.ngrok.app/oidc/token"
+redirect_uri = "http://localhost:8000/oauth/callback"
 
 async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     """
@@ -54,6 +61,33 @@ class WebSocketRequest:
     labels: dict = None
     agent: str = ""
 
+async def _perform_oauth_authentication(websocket: WebSocket) -> tuple[str, str]:
+    """
+    Performs OAuth authentication flow with the client.
+    
+    Generates an OAuth URL, sends it to the client, and waits for the access and refresh tokens.
+    
+    Args:
+        websocket: The WebSocket connection for communication.
+        
+    Returns:
+        A tuple of (access_token, refresh_token) received from the client.
+    """
+    # Generate URL and the secret verifier
+    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
+
+    # Store the verifier and oauth_client for later use in the callback
+    # TODO - This is a temporary in-memory store. This needs to be improved!
+    oauth_state_store[state] = {
+        "verifier": verifier,
+        "oauth_client": oauth_client
+    }
+    await websocket.send_text(f'<authentication>{{"type": "oauth2", "url": "{str(url)}"}}</authentication>')
+    token_response = await websocket.receive_text()
+    token_data = json.loads(token_response)
+
+    return token_data["access_token"], token_data["refresh_token"]
+
 @router.websocket("/v1/ws/messages")
 @router.websocket("/v1/ws/messages/{thread_id}")
 async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: BaseLanguageModel = Depends(get_llm)):
@@ -72,9 +106,12 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     
     await websocket.accept()
     logging.debug("ws/messages connection opened")
-    
+    access_token, refresh_token = await _perform_oauth_authentication(websocket)
+    tokens = {
+        "rancher": access_token
+        }
     try:
-        agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket) 
+        agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket, tokens=tokens) 
     except NoAgentAvailableError as e:
         logging.error(f"Error creating agent: {e}")
         await websocket.send_text(f'<chat-error>{json.dumps({"message": str(e)})}</chat-error>')

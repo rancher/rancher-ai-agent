@@ -4,6 +4,7 @@ Base agent builder with shared logic for all agent types.
 
 import json
 import logging
+from httpx import HTTPStatusError
 import langgraph.types
 
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
@@ -297,6 +298,10 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     )
                 )
             except Exception as e:
+                if "Unauthorized" in str(e): #todo check not enough permissions vs expired token
+                    logging.warning(f"!!!!!!!!!Received Unauthorized error from tool {tool_call['name']}, likely due to expired token. Prompting re-authentication.")
+                    raise HTTPStatusError("Unauthorized", request=None, response=type('obj', (object,), {'status_code': 401})())
+                
                 logging.error(f"unexpected error during tool call: {e}")
                 outputs.append(ToolMessage(
                     content=f"unexpected error during tool call: {e}",

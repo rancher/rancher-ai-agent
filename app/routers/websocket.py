@@ -53,6 +53,7 @@ class WebSocketRequest:
     tags: list[str] = None
     labels: dict = None
     agent: str = ""
+    ui_tools: dict = None
 
 @router.websocket("/v1/ws/messages")
 @router.websocket("/v1/ws/messages/{thread_id}")
@@ -152,7 +153,12 @@ async def _call_agent(
                 await websocket.send_text(text)
         
         if stream["event"] == "on_custom_event":
-            await websocket.send_text(stream["data"])
+            event_data = stream.get("data", "")
+            # Send custom events as-is (they should already be formatted)
+            if isinstance(event_data, str):
+                await websocket.send_text(event_data)
+            else:
+                await websocket.send_text(json.dumps(event_data))
     
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
@@ -244,7 +250,7 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
     """
     Parses the incoming websocket request and enriches the prompt with context.
 
-    The request can be a JSON string with 'prompt', 'context', and 'agent' keys,
+    The request can be a JSON string with 'prompt', 'context', 'agent', and 'uiTools' keys,
     or a plain text string. If context is provided, it will be appended to the
     prompt to guide tool call parameter population.
 
@@ -277,10 +283,19 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
             context=context,
             tags=json_request.get("tags", []),
             labels=json_request.get("labels", {}),
-            agent=json_request.get("agent", "")
+            agent=json_request.get("agent", ""),
+            ui_tools=json_request.get("tools", {})
         )
     except json.JSONDecodeError:
-        return WebSocketRequest(prompt=request, user_input="", context={}, tags=[], labels={}, agent="")
+        return WebSocketRequest(
+            prompt=request,
+            user_input="",
+            context={},
+            tags=[],
+            labels={},
+            agent="",
+            ui_tools={}
+        )
 
 def _build_config(base_config: dict, request_id: str, ws_request: WebSocketRequest) -> dict:
     """
@@ -290,6 +305,7 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
     - request_id for tracking individual requests
     - agent selection (if specified)
     - ephemeral flag handling (prevents memory storage)
+    - ui_tools configuration (name and list of tools sent from the client)
     
     Args:
         base_config: The base configuration with thread_id and user_id.
@@ -310,7 +326,8 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
         "user_input": ws_request.user_input,
         "context": ws_request.context,
         "labels": ws_request.labels,
-        "tags": ws_request.tags
+        "tags": ws_request.tags,
+        "ui_tools": ws_request.ui_tools
     }
 
     if ws_request.agent:

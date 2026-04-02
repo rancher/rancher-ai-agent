@@ -20,6 +20,11 @@ class ChildAgentBuilder(BaseAgentBuilder):
     def build(self) -> CompiledStateGraph:
         """
         Builds and compiles the LangGraph child agent.
+        
+        Workflow: agent -> tools -> agent (loop) -> END
+        
+        Child agents do NOT include ui_tools. The parent or root agent handles
+        final UI tool selection and dispatch for the entire request.
 
         Returns:
             A compiled LangGraph StateGraph ready to be invoked.

@@ -161,6 +161,8 @@ class ParentAgentBuilder(BaseAgentBuilder):
         
         Creates a LangGraph workflow with a routing node and nodes for each child agent.
         The workflow starts with routing and navigates to the appropriate child agent.
+        UI tools selection happens before conversation summary for faster responses.
+        All paths converge at ui_tools, then summarize_conversation as the absolute final step.
         
         Returns:
             Compiled state graph ready for execution
@@ -168,20 +170,25 @@ class ParentAgentBuilder(BaseAgentBuilder):
         workflow = StateGraph(AgentState)
         
         workflow.add_node("choose_child_agent", self.choose_child_agent)
+        workflow.add_node("ui_tools", self.ui_tools_node)
         workflow.add_node("summarize_conversation", self.summarize_conversation_node)
 
         # Add a node for each child agent
         for child in self.child_agents:
             workflow.add_node(child.config.name, child.agent)
-            workflow.add_conditional_edges(
-                child.config.name,
-                self.should_summarize_conversation,
-                {
-                    "summarize_conversation": "summarize_conversation",
-                    "end": END,
-                },
-            )
+            workflow.add_edge(child.config.name, "ui_tools")
 
+        # After ui_tools dispatch, check if summarization is needed
+        workflow.add_conditional_edges(
+            "ui_tools",
+            self.should_summarize_conversation,
+            {
+                "summarize_conversation": "summarize_conversation",
+                "end": END,
+            },
+        )
+        
+        workflow.add_edge("summarize_conversation", END)
         
         # Set the routing node as the entry point
         workflow.set_entry_point("choose_child_agent")

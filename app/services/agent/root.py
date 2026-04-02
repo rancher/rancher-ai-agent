@@ -16,6 +16,15 @@ class RootAgentBuilder(BaseAgentBuilder):
     def build(self) -> CompiledStateGraph:
         """
         Builds and compiles the LangGraph root agent.
+        
+        Workflow paths:
+        - With tool_calls: agent -> tools (loop) -> agent
+        - No tool_calls: agent -> ui_tools -> should_summarize_conversation
+          - If should summarize: -> summarize_conversation -> END
+          - If not: -> END
+        - Tool rejection: tools -> END (skip ui_tools)
+        
+        Key: should_summarize_conversation is called after ui_tools
 
         Returns:
             A compiled LangGraph StateGraph ready to be invoked.
@@ -23,27 +32,40 @@ class RootAgentBuilder(BaseAgentBuilder):
         workflow = StateGraph(AgentState)
         workflow.add_node("agent", self.call_model_node)
         workflow.add_node("tools", self.tool_node)
+        workflow.add_node("ui_tools", self.ui_tools_node)
         workflow.add_node("summarize_conversation", self.summarize_conversation_node)
         
+        # Agent stage: only check for tool calls, route to ui_tools on completion
         workflow.add_conditional_edges(
             "agent",
-            self.should_summarize_conversation,
+            self.should_continue,
             {
                 "continue": "tools",
-                "summarize_conversation": "summarize_conversation",
-                "end": END,
+                "end": "ui_tools",  # No tool calls -> go to ui_tools
             },
         )
-        workflow.add_edge("summarize_conversation", END)
-
+        
         workflow.add_conditional_edges(
             "tools",
             self.should_continue_after_interrupt,
             {
                 "continue": "agent",
+                # Rejected human validation: END immediately, skip ui_tools
                 "end": END,
             },
         )
+        
+        # After ui_tools dispatch, check if summarization is needed
+        workflow.add_conditional_edges(
+            "ui_tools",
+            self.should_summarize_conversation,
+            {
+                "summarize_conversation": "summarize_conversation",
+                "end": END,
+            },
+        )
+        
+        workflow.add_edge("summarize_conversation", END)
         workflow.set_entry_point("agent")
 
         return workflow.compile(checkpointer=self.checkpointer)

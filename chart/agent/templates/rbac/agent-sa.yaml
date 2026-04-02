@@ -49,6 +49,9 @@ rules:
 - apiGroups: ["ai.cattle.io"]
   resources: ["aiagentconfigs/status"]
   verbs: ["get", "update", "patch"]
+- apiGroups: ["ai.cattle.io"]
+  resources: ["uitoolsconfigs"]
+  verbs: ["create", "list", "get", "update", "patch", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

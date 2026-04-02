@@ -34,8 +34,15 @@ class Summary(TypedDict):
     text: str
     msg_count: int
 
+class UIToolSelection(TypedDict):
+    """Selected UI tools for UI elements rendering."""
+    tool_name: str
+    input: dict
+    reasoning: str
+
 class AgentState(TypedDict):
     """The state of the agent."""
     selected_agent: SelectedAgent
     messages: Annotated[Sequence[BaseMessage], add_messages_with_timestamp]
     summary: Summary
+    ui_tools: Sequence[UIToolSelection]

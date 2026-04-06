@@ -150,10 +150,16 @@ agent_card = AgentCard(
     default_output_modes=["text/plain"],
     skills=[
         AgentSkill(
-            id="kubernetes-management",
-            name="Kubernetes Management",
-            description="Manage Kubernetes clusters and resources through natural language.",
-            tags=["kubernetes", "rancher", "cluster"],
+            id="rancher-management",
+            name="Rancher Management",
+            description="Manage Rancher clusters and resources through natural language.",
+            tags=["rancher", "cluster"],
+        ),
+        AgentSkill(
+            id="k8s-resource-management",
+            name="k8s Resource Management",
+            description="List and manage Kubernetes resources through natural language. E.g list namespaces, pods, deployments, etc.",
+            tags=["kubernetes", "cluster"],
         ),
     ],
 )

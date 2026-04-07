@@ -5,7 +5,7 @@ global:
 aiAgent:
   image:
     repository: rancher/rancher-ai-agent
-    tag: v1.0.1-rc.1
+    tag: v1.0.1
     pullPolicy: IfNotPresent
 mcp:
   readOnly: false

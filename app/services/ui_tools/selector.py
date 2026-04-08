@@ -249,7 +249,7 @@ Output the JSON array on its own line at the end."""
                                 else:
                                     logging.debug(f"UI tool '{tool_name}' not found in available tools: {[t.name for t in available_tools]}")
                 except json.JSONDecodeError as e:
-                    logging.debug(f"Failed to parse JSON array: {json_str[:100]}... Error: {e}")
+                    logging.error(f"Failed to parse JSON array: {json_str[:100]}... Error: {e}")
                     logging.debug("Attempting to extract individual tool objects from the malformed array")
                     # Try to extract individual tool objects even if the full array is malformed
                     individual_matches = re.findall(r'\{"toolName"[^}]*(?:\{[^}]*\}[^}]*)?"reasoning"[^}]*\}', json_str)
@@ -268,7 +268,8 @@ Output the JSON array on its own line at the end."""
                                                 reasoning=call_data.get("reasoning"),
                                             )
                                         )
-                            except json.JSONDecodeError:
+                            except json.JSONDecodeError as e:
+                                logging.error(f"Failed to parse individual UI tool object: {obj_str[:100]}... Error: {e}")
                                 continue
                     continue
             
@@ -292,7 +293,8 @@ Output the JSON array on its own line at the end."""
                                         reasoning=call_data.get("reasoning"),
                                     )
                                 )
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
+                        logging.error(f"Failed to parse individual UI tool object: {obj_str[:100]}... Error: {e}")
                         continue
             
             logging.debug(f"Total UI tools extracted: {len(ui_tool_calls)}")

@@ -98,11 +98,6 @@ class UIToolsRegistry:
         self.tools_by_config: Dict[str, Dict[str, UITool]] = {}
         self.config: UIToolsConfig = UIToolsConfig()
         self.last_updated = datetime.now()
-        self._register_default_tools()
-    
-    def _register_default_tools(self) -> None:
-        """Register default UI tools"""
-
     
     def register_tool(self, tool: UITool, config_name: str = None) -> None:
         """
@@ -185,19 +180,6 @@ class UIToolsRegistry:
             timestamp=self.last_updated,
             config=self.config,
         )
-    
-    def validate_tool_input(self, tool_name: str, input_data: Dict[str, Any], config_name: str = None) -> tuple[bool, Optional[str]]:
-        """Validate tool input against schema"""
-        tool = self.get_tool(tool_name, config_name)
-        if not tool:
-            return False, f"Tool '{tool_name}' not found"
-        
-        # Check required fields
-        for required_field in tool.schema.required:
-            if required_field not in input_data:
-                return False, f"Missing required field: {required_field}"
-        
-        return True, None
     
     def clear_tools(self, config_name: str = None) -> None:
         """

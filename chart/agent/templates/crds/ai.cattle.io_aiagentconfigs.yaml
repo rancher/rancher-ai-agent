@@ -52,7 +52,8 @@ spec:
             description: AIAgentConfigSpec defines the desired state of AIAgentConfig
             properties:
               authenticationSecret:
-                description: AuthenticationSecret specifies the authentication secret
+                description: AuthenticationSecret specifies the basic authentication
+                  secret
                 type: string
               authenticationType:
                 description: AuthenticationType specifies the authentication method
@@ -60,6 +61,7 @@ spec:
                 - RANCHER
                 - NONE
                 - BASIC
+                - OAUTH2
                 type: string
               builtIn:
                 description: BuiltIn indicates if this is a built-in agent configuration
@@ -80,6 +82,11 @@ spec:
                 type: array
               mcpURL:
                 description: MCPURL is the Model Context Protocol server URL
+                type: string
+              oauthSecret:
+                description: 'OAuthSecret specifies the OAuth authentication secret.
+                  It must contain the following keys: clientId, clientSecret, url,
+                  scopes (array of strings)'
                 type: string
               systemPrompt:
                 description: SystemPrompt is the initial system-level instructions

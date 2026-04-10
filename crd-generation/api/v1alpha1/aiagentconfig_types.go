@@ -24,13 +24,17 @@ type AIAgentConfigSpec struct {
 	MCPURL string `json:"mcpURL,omitempty"`
 
 	// AuthenticationType specifies the authentication method
-	// +kubebuilder:validation:Enum=RANCHER;NONE;BASIC
+	// +kubebuilder:validation:Enum=RANCHER;NONE;BASIC;OAUTH2
 	// +optional
 	AuthenticationType string `json:"authenticationType,omitempty"`
 
-	// AuthenticationSecret specifies the authentication secret
+	// AuthenticationSecret specifies the basic authentication secret
 	// +optional
 	AuthenticationSecret string `json:"authenticationSecret,omitempty"`
+
+	// OAuthSecret specifies the OAuth authentication secret. It must contain the following keys: clientId, clientSecret, url, scopes (array of strings)
+	// +optional
+	OAuthSecret string `json:"oauthSecret,omitempty"`
 
 	// BuiltIn indicates if this is a built-in agent configuration
 	// +optional

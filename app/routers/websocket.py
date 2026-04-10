@@ -5,6 +5,17 @@ import json
 
 from ..dependencies import get_llm
 from ..services.agent.factory import NoAgentAvailableError, create_agent
+from ..services.agent.loader import load_agent_configs, AuthenticationType
+from ..services.oauth2 import (
+    OAuthClient,
+    OAuthDiscoveryError,
+    OAuthDiscoveryResult,
+    discover_oauth_metadata,
+    get_redirect_uri,
+    get_oauth_client_credentials,
+)
+from .oauth2 import oauth_state_store
+from ..services.auth import get_user_id
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -14,18 +25,8 @@ from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
-from ..services.oauth2 import OAuthClient
-from .oauth2 import oauth_state_store
-from ..services.auth import get_user_id
-from ..dependencies import get_llm
 
 router = APIRouter()
-
-#TODO move this
-oauth_client = OAuthClient(client_id="xx", client_secret="xxx", metadata_url="https://raul-cabello.ngrok.app/oidc/.well-known/openid-configuration")
-auth_endpoint = "https://raul-cabello.ngrok.app/oidc/authorize"
-token_endpoint = "https://raul-cabello.ngrok.app/oidc/token"
-redirect_uri = "http://localhost:8000/oauth/callback"
 
 async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     """
@@ -61,32 +62,128 @@ class WebSocketRequest:
     labels: dict = None
     agent: str = ""
 
-async def _perform_oauth_authentication(websocket: WebSocket) -> tuple[str, str]:
+async def _discover_and_authenticate_oauth(websocket: WebSocket) -> dict[str, str]:
     """
-    Performs OAuth authentication flow with the client.
-    
-    Generates an OAuth URL, sends it to the client, and waits for the access and refresh tokens.
-    
+    Discover OAuth endpoints for OAUTH2 agents and perform authentication.
+
+    Follows the MCP specification for OAuth discovery:
+    1. Load agent configs to identify agents requiring OAUTH2
+    2. For each OAUTH2 agent, discover OAuth metadata from its MCP server URL
+    3. Perform the OAuth authentication flow per unique authorization server
+
     Args:
         websocket: The WebSocket connection for communication.
-        
+
+    Returns:
+        A dictionary mapping agent names to their OAuth access tokens.
+    """
+    agents = load_agent_configs()
+    oauth_agents = [a for a in agents if a.authentication == AuthenticationType.OAUTH2]
+
+    if not oauth_agents:
+        return {}
+
+    tokens = {}
+    redirect_uri = get_redirect_uri(websocket)
+
+    # Discover OAuth metadata for each unique MCP server URL
+    discovered: dict[str, OAuthDiscoveryResult] = {}
+    for agent_cfg in oauth_agents:
+        if agent_cfg.mcp_url not in discovered:
+            logging.info(f"Discovering OAuth metadata for agent '{agent_cfg.name}' at {agent_cfg.mcp_url}")
+            discovered[agent_cfg.mcp_url] = await discover_oauth_metadata(agent_cfg.mcp_url)
+
+    # Authenticate per unique authorization server to avoid duplicate flows
+    authenticated_servers: dict[str, str] = {}
+    for agent_cfg in oauth_agents:
+        discovery = discovered[agent_cfg.mcp_url]
+        auth_server_key = discovery.authorization_endpoint
+
+        if auth_server_key not in authenticated_servers:
+            access_token, _ = await _perform_oauth_authentication(
+                websocket, discovery, redirect_uri, agent_cfg.oauth_secret
+            )
+            authenticated_servers[auth_server_key] = access_token
+
+        tokens[agent_cfg.name] = authenticated_servers[auth_server_key]
+
+    return tokens
+
+
+async def _perform_oauth_authentication(
+    websocket: WebSocket,
+    discovery: OAuthDiscoveryResult,
+    redirect_uri: str,
+    authentication_secret: str | None = None,
+) -> tuple[str, str]:
+    """
+    Performs OAuth authentication flow using discovered MCP OAuth endpoints.
+
+    Creates an OAuth client using one of these strategies (in order):
+    1. Pre-configured credentials from a Kubernetes secret (if authentication_secret is set)
+    2. Dynamic Client Registration (RFC 7591) if the auth server supports it
+
+    Then generates an authorization URL, sends it to the client via WebSocket,
+    and waits for the access and refresh tokens.
+
+    Args:
+        websocket: The WebSocket connection for communication.
+        discovery: The discovered OAuth metadata from the MCP server.
+        redirect_uri: The OAuth callback redirect URI.
+        authentication_secret: Optional Kubernetes secret name containing client credentials.
+
     Returns:
         A tuple of (access_token, refresh_token) received from the client.
     """
-    # Generate URL and the secret verifier
-    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
+    scope = " "
 
-    # Store the verifier and oauth_client for later use in the callback
+    # Strategy 1: Use pre-configured client credentials from K8s secret
+    if authentication_secret:
+        try:
+            credentials = get_oauth_client_credentials(authentication_secret)
+            # Scopes from the secret take precedence over discovered scopes
+            if credentials.scopes:
+                scope = credentials.scopes
+            oauth_client = OAuthClient(client_id=credentials.client_id, client_secret=credentials.client_secret, scope=scope)
+            logging.info(f"Using pre-configured OAuth credentials from secret '{authentication_secret}'")
+        except Exception as e:
+            logging.warning(f"Failed to load OAuth credentials from secret '{authentication_secret}': {e}")
+            raise OAuthDiscoveryError(
+                f"Failed to load OAuth client credentials from secret '{authentication_secret}': {e}"
+            )
+    # Strategy 2: Dynamic Client Registration
+    elif discovery.registration_endpoint:
+        logging.info(f"Performing dynamic client registration at {discovery.registration_endpoint}")
+        oauth_client = await OAuthClient.from_dynamic_registration(
+            registration_endpoint=discovery.registration_endpoint,
+            redirect_uri=redirect_uri,
+            scope=scope,
+        )
+    else:
+        raise OAuthDiscoveryError(
+            "Authorization server does not support dynamic client registration and "
+            "no OAuth client credentials are configured. "
+            "Please create a Kubernetes secret with 'clientId' and 'clientSecret' keys "
+            "and reference it via the 'oauthSecret' field in the AIAgentConfig."
+        )
+
+    url, verifier, state = await oauth_client.get_auth_url(
+        discovery.authorization_endpoint, redirect_uri
+    )
+
+    # Store state for the callback handler
     # TODO - This is a temporary in-memory store. This needs to be improved!
     oauth_state_store[state] = {
         "verifier": verifier,
-        "oauth_client": oauth_client
+        "oauth_client": oauth_client,
+        "token_endpoint": discovery.token_endpoint,
     }
+
     await websocket.send_text(f'<authentication>{{"type": "oauth2", "url": "{str(url)}"}}</authentication>')
     token_response = await websocket.receive_text()
     token_data = json.loads(token_response)
 
-    return token_data["access_token"], token_data["refresh_token"]
+    return token_data["access_token"], token_data.get("refresh_token", "")
 
 @router.websocket("/v1/ws/messages")
 @router.websocket("/v1/ws/messages/{thread_id}")
@@ -106,10 +203,16 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     
     await websocket.accept()
     logging.debug("ws/messages connection opened")
-    access_token, refresh_token = await _perform_oauth_authentication(websocket)
-    tokens = {
-        "rancher": access_token
-        }
+
+    # Discover and authenticate OAuth for any OAUTH2 agents
+    try:
+        tokens = await _discover_and_authenticate_oauth(websocket)
+    except (OAuthDiscoveryError, Exception) as e:
+        logging.error(f"OAuth discovery/authentication failed: {e}")
+        await websocket.send_text(f'<chat-error>{json.dumps({"message": f"OAuth authentication failed: {str(e)}"})}</chat-error>')
+        await websocket.close()
+        return
+
     try:
         agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket, tokens=tokens) 
     except NoAgentAvailableError as e:

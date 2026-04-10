@@ -99,13 +99,13 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket, tokens: dic
         
         if len(child_agents) == 1:
             logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
-            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket), agents_metadata
+            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket, tokens), agents_metadata
 
         parent_agent = create_parent_agent(llm, child_agents, checkpointer)
 
         return parent_agent, agents_metadata
     else:
-        return await _create_single_agent(llm, agents[0], checkpointer, websocket), [{"name": agents[0].name, "status": "active"}]
+        return await _create_single_agent(llm, agents[0], checkpointer, websocket, tokens), [{"name": agents[0].name, "status": "active"}]
 
 
 
@@ -161,6 +161,17 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
         except Exception as e:
             logging.error(f"Failed to get basic auth credentials: {str(e)}")
 
+    elif agent_config.authentication == AuthenticationType.OAUTH2:
+        mcp_url = agent_config.mcp_url
+        try:
+            # Look up token by agent name first, fall back to generic "oauth2" key
+            token = tokens.get(agent_config.name, tokens.get("oauth2", ""))
+            headers = {
+                "Authorization": f"Bearer {token}"
+            }
+        except Exception as e:
+            logging.error(f"Failed to get OAuth2 credentials: {str(e)}")
+
     else:
         mcp_url = agent_config.mcp_url
 
@@ -177,7 +188,8 @@ async def _create_single_agent(
     llm: BaseLanguageModel,
     agent_cfg: AgentConfig,
     checkpointer: Checkpointer,
-    websocket: WebSocket
+    websocket: WebSocket,
+    tokens: dict[str, str] | None = None
 ) -> tuple:
     """
     Create a single child agent based on the provided agent configuration.
@@ -190,9 +202,9 @@ async def _create_single_agent(
         agent_cfg: The configuration object for the agent, containing MCP connection details and system prompt.
         checkpointer: Checkpointer for persisting agent state.
         websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
+        tokens: Optional dictionary of authentication tokens to pass to the MCP client.
     """
-
-    client = create_mcp_client(agent_cfg, websocket)
+    client = create_mcp_client(agent_cfg, websocket, tokens)
     try:
         tools = await client.get_tools()
         # Filter tools by toolset if specified in agent config

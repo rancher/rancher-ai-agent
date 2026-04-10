@@ -21,7 +21,7 @@ class AuthenticationType(str, Enum):
     NONE = "NONE"
     RANCHER = "RANCHER"
     BASIC = "BASIC"
-
+    OAUTH2 = "OAUTH2"
 
 class ToolActionType(str, Enum):
     """Action types for human validation tools."""
@@ -218,6 +218,7 @@ class AgentConfig(BaseModel):
     mcp_url: str
     authentication: AuthenticationType = AuthenticationType.NONE
     authentication_secret: Optional[str] = None
+    oauth_secret: Optional[str] = None
     toolset: Optional[str] = None
     human_validation_tools: list[str] = []
     ready: bool = False
@@ -295,6 +296,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         mcp_url=spec.get("mcpURL", ""),
         authentication=AuthenticationType[spec.get("authenticationType", "NONE")],
         authentication_secret=spec.get("authenticationSecret", None),
+        oauth_secret=spec.get("oauthSecret", None),
         toolset=spec.get("toolSet", None),
         human_validation_tools=human_validation_tools,
         ready=status.get("phase", "Failed") == "Ready"

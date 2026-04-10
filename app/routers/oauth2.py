@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse
 
-from ..services.oauth2 import OAuthClient
+from ..services.oauth2 import OAuthClient, get_redirect_uri
 
 
 router = APIRouter()
@@ -33,10 +33,10 @@ async def get(request: Request):
 
     verifier = oauth_data["verifier"]
     oauth_client = oauth_data["oauth_client"]
+    token_endpoint = oauth_data["token_endpoint"]
 
     # 3. Exchange the code for the actual Access Token
-    token_endpoint = "https://raul-cabello.ngrok.app/oidc/token"
-    redirect_uri = "http://localhost:8000/callback"
+    redirect_uri = get_redirect_uri()
 
     try:
         token = await oauth_client.fetch_token(

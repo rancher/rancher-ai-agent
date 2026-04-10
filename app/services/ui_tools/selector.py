@@ -66,7 +66,6 @@ When selecting UI tools:
 - Analyze the context and the information being presented
 - Choose tools that will best visualize or present the information
 - You can recommend multiple tools if they complement each other
-- Provide clear reasoning for each selection
 - Match the complexity of the tool to the task."""
     
     def select_tools(
@@ -123,8 +122,8 @@ IMPORTANT INSTRUCTIONS:
 5. Optional fields can be omitted if not needed
 6. Output a valid JSON array at the very end with this format:
 [
-  {{"toolName": "tool_name", "input": {{"field1": "value1", "field2": "value2"}}, "reasoning": "why this tool is appropriate"}},
-  {{"toolName": "another_tool", "input": {{"requiredField": "value"}}, "reasoning": "reasoning"}}
+  {{"toolName": "tool_name", "input": {{"field1": "value1", "field2": "value2"}}}},
+  {{"toolName": "another_tool", "input": {{"requiredField": "value"}}}}
 ]
 
 If no tools are appropriate, output an empty array: []
@@ -243,7 +242,6 @@ Output the JSON array on its own line at the end."""
                                         UIToolCall(
                                             tool_name=tool_name,
                                             input=call_data.get("input", {}),
-                                            reasoning=call_data.get("reasoning"),
                                         )
                                     )
                                 else:
@@ -252,7 +250,7 @@ Output the JSON array on its own line at the end."""
                     logging.error(f"Failed to parse JSON array: {json_str[:100]}... Error: {e}")
                     logging.debug("Attempting to extract individual tool objects from the malformed array")
                     # Try to extract individual tool objects even if the full array is malformed
-                    individual_matches = re.findall(r'\{"toolName"[^}]*(?:\{[^}]*\}[^}]*)?"reasoning"[^}]*\}', json_str)
+                    individual_matches = re.findall(r'\{"toolName"[^}]*\}', json_str)
                     if individual_matches:
                         for obj_str in individual_matches:
                             try:
@@ -265,7 +263,6 @@ Output the JSON array on its own line at the end."""
                                             UIToolCall(
                                                 tool_name=tool_name,
                                                 input=call_data.get("input", {}),
-                                                reasoning=call_data.get("reasoning"),
                                             )
                                         )
                             except json.JSONDecodeError as e:
@@ -290,7 +287,6 @@ Output the JSON array on its own line at the end."""
                                     UIToolCall(
                                         tool_name=tool_name,
                                         input=call_data.get("input", {}),
-                                        reasoning=call_data.get("reasoning"),
                                     )
                                 )
                     except json.JSONDecodeError as e:
@@ -388,7 +384,6 @@ Output the JSON array on its own line at the end."""
         Performs sanity checks:
         - Validates tool_name is not empty and is a string
         - Validates input is a dict (not None)
-        - Validates reasoning is a string
         - Validates input matches the tool's schema definition
         
         Args:
@@ -428,15 +423,9 @@ Output the JSON array on its own line at the end."""
                 validation_removed_count += 1
                 continue
             
-            # Sanity check: reasoning is a string (if present)
-            if call.reasoning is not None and not isinstance(call.reasoning, str):
-                logging.warning(f"UI tool call '{call.tool_name}' at index {idx} has non-string reasoning: {type(call.reasoning)}")
-                call.reasoning = str(call.reasoning) if call.reasoning else ""
-            
             validated_tools.append({
                 "toolName": call.tool_name.strip(),
                 "input": call.input,
-                "reasoning": call.reasoning or "",
             })
         
         if validation_removed_count > 0:

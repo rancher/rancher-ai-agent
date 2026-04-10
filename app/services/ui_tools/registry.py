@@ -65,7 +65,6 @@ class UIToolCall:
     tool_name: str
     input: Dict[str, Any]
     tool_call_id: Optional[str] = None
-    reasoning: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -38,7 +38,6 @@ class UIToolSelection(TypedDict):
     """Selected UI tools for UI elements rendering."""
     tool_name: str
     input: dict
-    reasoning: str
 
 class AgentState(TypedDict):
     """The state of the agent."""

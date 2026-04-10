@@ -139,13 +139,19 @@ class BaseAgentBuilder:
             # Get the registry first
             registry = get_ui_tools_registry()
             
-            if not registry.config.enabled:
+            # Get the config data for this config_name
+            ui_tools_config = registry.get_tools_config(name)
+            if not ui_tools_config:
+                logging.debug(f"UI tools config {name} not found, skipping ui tools dispatch")
+                return
+            
+            if not ui_tools_config.config.enabled:
                 logging.debug(f"UI tools config {name} are disabled, skipping ui tools dispatch")
                 return
             
-            # Get the system prompt and max_tools from the registry config
-            system_prompt = registry.config.system_prompt
-            max_tools = registry.config.max_tools
+            # Get the system prompt and max_tools from the config
+            system_prompt = ui_tools_config.config.system_prompt
+            max_tools = ui_tools_config.config.max_tools
             
             # Create a UI tools selector using the same LLM and the system prompt
             selector = create_ui_tools_selector(self.llm, system_prompt=system_prompt, max_tools=max_tools)

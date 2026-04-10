@@ -37,6 +37,9 @@ rules:
   verbs: ["get", "list", "patch", "update"]
 - apiGroups: [""]
   resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
   verbs: ["get", "patch", "update"]
   resourceNames: ["llm-config"]
 - apiGroups: ["apps"]
@@ -49,9 +52,6 @@ rules:
 - apiGroups: ["ai.cattle.io"]
   resources: ["aiagentconfigs/status"]
   verbs: ["get", "update", "patch"]
-- apiGroups: ["ai.cattle.io"]
-  resources: ["uitoolsconfigs"]
-  verbs: ["create", "list", "get", "update", "patch", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

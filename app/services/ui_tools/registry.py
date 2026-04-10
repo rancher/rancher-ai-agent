@@ -6,6 +6,21 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+@dataclass
+class UIToolsConfig:
+    """UIToolsConfig spec-level configuration"""
+    enabled: bool = True
+    revision: int = 0
+    system_prompt: Optional[str] = None
+    max_tools: int = 5
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "revision": self.revision,
+            "system_prompt": self.system_prompt,
+            "max_tools": self.max_tools,
+        }
 
 @dataclass
 class UIToolSchema:
@@ -30,7 +45,6 @@ class UITool:
     metadata: Dict[str, Any] = field(default_factory=dict)
     revision: int = 0
     enabled: bool = True
-    config_name: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -42,7 +56,6 @@ class UITool:
             "metadata": self.metadata,
             "revision": self.revision,
             "enabled": self.enabled,
-            "config_name": self.config_name,
         }
 
 
@@ -59,96 +72,42 @@ class UIToolCall:
 
 
 @dataclass
-class UIToolsConfig:
-    """UIToolsConfig spec-level configuration"""
-    enabled: bool = True
-    revision: int = 0
-    system_prompt: Optional[str] = None
-    max_tools: int = 5
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "enabled": self.enabled,
-            "revision": self.revision,
-            "system_prompt": self.system_prompt,
-            "max_tools": self.max_tools,
-        }
-
-
-@dataclass
-class AvailableUITools:
-    """Container for available UI tools"""
-    tools: List[UITool]
-    timestamp: datetime
+class UIToolsConfigData:
+    """Container for tools and config"""
     config: Optional[UIToolsConfig] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "tools": [tool.to_dict() for tool in self.tools],
-            "timestamp": self.timestamp.isoformat(),
-            "config": self.config.to_dict() if self.config else None,
-        }
+    tools: Dict[str, UITool] = field(default_factory=dict)
 
 
 class UIToolsRegistry:
     """Registry for managing available UI tools scoped by configuration"""
     
     def __init__(self):
-        # Structure: {config_name: {tool_name: UITool}}
-        self.tools_by_config: Dict[str, Dict[str, UITool]] = {}
-        self.config: UIToolsConfig = UIToolsConfig()
+        self.configs_map: Dict[str, UIToolsConfigData] = {}
         self.last_updated = datetime.now()
     
-    def register_tool(self, tool: UITool, config_name: str = None) -> None:
-        """
-        Register a UI tool from CRD, scoped by config
+    def register_tools_config(self, tools: List[UITool], config: UIToolsConfig, config_name: str = None) -> None:
+        """Register both tools and config, scoped by config name"""
         
-        Args:
-            tool: The UITool to register
-            config_name: The config this tool belongs to (default: 'default')
-        """
         if config_name is None:
             config_name = "default"
         
-        if config_name not in self.tools_by_config:
-            self.tools_by_config[config_name] = {}
+        if config_name not in self.configs_map:
+            self.configs_map[config_name] = UIToolsConfigData()
         
-        tool.config_name = config_name
-        self.tools_by_config[config_name][tool.name] = tool
-        self.last_updated = datetime.now()
-    
-    def register_tools(self, tools: List[UITool], config_name: str = None) -> None:
-        """Register multiple UI tools from CRDs, scoped by config"""
+        # Register config
+        self.configs_map[config_name].config = config
+        
+        # Register tools
         for tool in tools:
-            self.register_tool(tool, config_name)
-    
-    def register_config(self, config: UIToolsConfig) -> None:
-        """Register the spec-level configuration"""
-        self.config = config
+            self.configs_map[config_name].tools[tool.name] = tool
+
         self.last_updated = datetime.now()
+        
+    def get_tools_config(self, config_name: str) -> Optional[UIToolsConfigData]:
+        """Get tools and config for a specific config name"""
+        return self.configs_map.get(config_name)
     
-    def get_tool(self, name: str, config_name: str = None) -> Optional[UITool]:
-        """
-        Get a specific tool by name, optionally scoped by config
-        
-        Args:
-            name: Tool name
-            config_name: Config name (searches all if None)
-            
-        Returns:
-            The UITool if found, None otherwise
-        """
-        if config_name:
-            return self.tools_by_config.get(config_name, {}).get(name)
-        
-        # Search across all configs if no specific config given
-        for tools in self.tools_by_config.values():
-            if name in tools:
-                return tools[name]
-        
-        return None
-    
-    def get_all_tools(self, config_name: str = None) -> List[UITool]:
+    def get_all_tools(self, config_name: str) -> List[UITool]:
         """
         Get all registered tools, optionally filtered by config
         
@@ -159,12 +118,13 @@ class UIToolsRegistry:
             List of UITool objects
         """
         if config_name:
-            return list(self.tools_by_config.get(config_name, {}).values())
+            config_data = self.configs_map.get(config_name)
+            return list(config_data.tools.values()) if config_data else []
         
         # Return all tools from all configs
         all_tools = []
-        for tools in self.tools_by_config.values():
-            all_tools.extend(tools.values())
+        for config_data in self.configs_map.values():
+            all_tools.extend(config_data.tools.values())
         return all_tools
     
     def get_tools_by_category(self, category: str, config_name: str = None) -> List[UITool]:
@@ -172,26 +132,17 @@ class UIToolsRegistry:
         tools = self.get_all_tools(config_name)
         return [tool for tool in tools if tool.category == category]
     
-    def get_available_tools(self, config_name: str = None) -> AvailableUITools:
-        """Get all available tools with metadata, optionally scoped by config"""
-        tools = self.get_all_tools(config_name)
-        return AvailableUITools(
-            tools=tools,
-            timestamp=self.last_updated,
-            config=self.config,
-        )
-    
     def clear_tools(self, config_name: str = None) -> None:
         """
-        Clear tools, optionally for a specific config
+        Clear tools, optionally for a specific config_name
         
         Args:
-            config_name: Clear only this config (clears all if None)
+            config_name: Clear only this config_name (clears all if None)
         """
         if config_name:
-            self.tools_by_config.pop(config_name, None)
+            self.configs_map.pop(config_name, None)
         else:
-            self.tools_by_config.clear()
+            self.configs_map.clear()
         self.last_updated = datetime.now()
 
 

@@ -203,25 +203,25 @@ class BaseAgentBuilder:
                     logging.debug("No last AI message found, skipping ui tools dispatch")
                     return
             
-            # Get conversation context (last few messages)
+            # Get conversation context (last 5 messages)
             conversation_context = ""
             for msg in state["messages"][-5:]:
                 if hasattr(msg, "content") and isinstance(msg.content, str):
                     role = type(msg).__name__
-                    conversation_context += f"\n{role}: {msg.content[:200]}..."
+                    conversation_context += f"\n{role}: {msg.content}"
                 
                 # Include MCP response data if present (from tool execution)
                 if hasattr(msg, "additional_kwargs"):
                     additional_kwargs = msg.additional_kwargs
                     if "mcp_response" in additional_kwargs:
                         mcp_response = additional_kwargs["mcp_response"]
-                        conversation_context += f"\n[MCP Response]: {mcp_response[:500]}..."
+                        conversation_context += f"\n[MCP Response]: {mcp_response}"
             
             # Select UI tools for this response
             logging.debug(f"Selecting UI tools with {len(filtered_tools)} available tools")
             logging.debug(f"LLM context includes: last_message={bool(last_message)}, conversation_context_length={len(conversation_context)}, includes_mcp={'[MCP Response]' in conversation_context}")
             
-            # select_tools already returns sanitized and validated ui_tools_list (list of dicts)
+            # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(
                 context=last_message,
                 available_tools=filtered_tools,

@@ -112,7 +112,14 @@ class UIToolsSelector:
         """
         self.llm = llm
         self.registry = get_ui_tools_registry()
-        self.system_prompt = system_prompt or self._get_default_system_prompt()
+        
+        # Merge system_prompt with default if both are provided
+        default_prompt = self._get_default_system_prompt()
+        if system_prompt and system_prompt.strip():
+            self.system_prompt = f"{system_prompt}\n\n{default_prompt}"
+        else:
+            self.system_prompt = default_prompt
+        
         self.max_tools = max_tools if max_tools > 0 else None  # None means unlimited
     
     def _get_default_system_prompt(self) -> str:
@@ -124,7 +131,7 @@ When selecting UI tools:
 - Analyze the context and the information being presented
 - Choose tools that will best visualize or present the information
 - You can recommend multiple tools if they complement each other
-- Match the complexity of the tool to the task."""
+- Match the complexity of the tool to the task"""
     
     def select_tools(
         self,
@@ -183,7 +190,7 @@ If no tools are appropriate, do not invoke any tools."""
             logging.debug(f"UI tool selection result: {len(ui_tool_calls)} UI tools selected before validation")
             
             # Sanitize and validate tool calls against schema
-            ui_tools_list = self._sanitize_ui_tools(ui_tool_calls)
+            ui_tools_list = self._sanitize_ui_tools(ui_tool_calls, available_tools)
             logging.debug(f"UI tool selection result after validation: {len(ui_tools_list)} valid UI tools")
             return ui_tools_list
             
@@ -223,17 +230,60 @@ If no tools are appropriate, do not invoke any tools."""
                     else:
                         logging.debug(f"Tool '{tool_name}' not found in available tools: {[t.name for t in available_tools]}")
             else:
-                logging.debug("No tool_calls found in response, trying fallback JSON extraction from content")
-                # Fallback to content extraction if tools are not structured
-                if hasattr(response, 'content'):
-                    ui_tool_calls = self._extract_ui_tool_calls(response.content, available_tools)
+                logging.debug("No tool_calls found in response")
         
         except Exception as e:
             logging.error(f"Error extracting tool calls from response: {e}")
         
         return ui_tool_calls
 
-    def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall]) -> list:
+    def _is_tool_call_valid(self, call: UIToolCall, available_tools: List[UITool]) -> bool:
+        """
+        Validates a single tool call against its schema.
+        
+        Args:
+            call: The tool call to validate
+            available_tools: List of available tools for schema lookup
+            
+        Returns:
+            True if the tool call is valid, False otherwise
+        """
+        # Sanity check: tool_name exists and is not empty
+        if not isinstance(call.tool_name, str) or not call.tool_name.strip():
+            logging.warning(f"Invalid/empty tool_name: {call.tool_name}")
+            return False
+        
+        # Sanity check: input is a dict
+        if call.input is None:
+            call.input = {}
+        elif not isinstance(call.input, dict):
+            logging.warning(f"UI tool call '{call.tool_name}' has non-dict input: {type(call.input)}")
+            return False
+        
+        # Schema validation: check for required fields and empty values
+        tool_schemas = {tool.name: tool.schema for tool in available_tools}
+        schema = tool_schemas.get(call.tool_name)
+        
+        if schema and hasattr(schema, 'properties'):
+            properties = schema.properties
+            
+            # Check each property for required flag
+            for field_name, field_schema in properties.items():
+                # Check if this field is marked as required
+                is_required = field_schema.get('required', False) if isinstance(field_schema, dict) else False
+                
+                if is_required:
+                    # Check if field is present and not empty
+                    if field_name not in call.input:
+                        logging.warning(f"UI tool call '{call.tool_name}' is missing required field: {field_name}")
+                        return False
+                    elif call.input[field_name] == "" or call.input[field_name] is None:
+                        logging.warning(f"UI tool call '{call.tool_name}' has empty required field: {field_name}")
+                        return False
+        
+        return True
+
+    def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall], available_tools: List[UITool]) -> list:
         """
         Sanitize UI tool calls by deduplicating and capping to max_tools.
         
@@ -248,80 +298,52 @@ If no tools are appropriate, do not invoke any tools."""
         
         Args:
             ui_tool_calls: List of tool calls from the selector
+            available_tools: List of available tools for schema validation
             
         Returns:
             List of deduplicated and capped tool calls in state format
-        """        
-        # Phase 1: Basic sanity checks (tool_name exists and is not empty)
+        """
+        
+        # Phase 1: Validate tool calls against schema and required fields
         validated_tools = []
-        validation_removed_count = 0
-        
-        for idx, call in enumerate(ui_tool_calls):
-            # Sanity check: tool_name exists and is not empty
-            if not isinstance(call.tool_name, str) or not call.tool_name.strip():
-                logging.warning(f"UI tool call at index {idx} has invalid/empty tool_name: {call.tool_name}")
-                validation_removed_count += 1
-                continue
-            
-            # Sanity check: input is a dict
-            if call.input is None:
-                logging.debug(f"UI tool call '{call.tool_name}' at index {idx} has None input, using empty dict")
-                call.input = {}
-            elif not isinstance(call.input, dict):
-                logging.warning(f"UI tool call '{call.tool_name}' at index {idx} has non-dict input: {type(call.input)}")
-                validation_removed_count += 1
-                continue
-            
-            validated_tools.append({
-                "toolName": call.tool_name.strip(),
-                "input": call.input,
-            })
-        
-        if validation_removed_count > 0:
-            logging.debug(f"Sanity checks removed {validation_removed_count} invalid UI tool call(s), {len(validated_tools)} valid UI tool(s) remaining")
-        
+        for call in ui_tool_calls:
+            if self._is_tool_call_valid(call, available_tools):
+                validated_tools.append({
+                    "toolName": call.tool_name.strip(),
+                    "input": call.input,
+                })
+                
+        logging.debug(f"Phase 1: Validated {len(validated_tools)} tool calls out of {len(ui_tool_calls)}")
+                
         # Phase 2: Deduplicate by {toolName, input}
         seen = set()
         deduplicated_tools = []
-        deduplication_removed_count = 0
         
         for tool_call in validated_tools:
             tool_name = tool_call["toolName"]
             input_json = json.dumps(tool_call["input"], sort_keys=True)
-            
-            # Create unique key based on toolName and input
             dedup_key = (tool_name, input_json)
             
-            if dedup_key in seen:
-                logging.debug(f"Duplicate removed: toolName='{tool_name}', input={input_json[:100]}...")
-                deduplication_removed_count += 1
-                continue
-            
-            seen.add(dedup_key)
-            deduplicated_tools.append(tool_call)
+            if dedup_key not in seen:
+                seen.add(dedup_key)
+                deduplicated_tools.append(tool_call)
         
-        if deduplication_removed_count > 0:
-            logging.debug(f"Deduplication removed {deduplication_removed_count} duplicate(s), {len(deduplicated_tools)} unique UI tool call(s) remaining")
+        logging.debug(f"Phase 2: Deduplicated {len(validated_tools)} tool calls to {len(deduplicated_tools)}")
         
         # Phase 3: Cap the results to maxTools if specified (by unique tool names)
         if self.max_tools:
-            # Count unique tool names in the list
             unique_tool_names = set()
             capped_list = []
             
             for tool_call in deduplicated_tools:
                 tool_name = tool_call["toolName"]
-                # If we haven't seen this tool name yet and we have room, add it
                 if tool_name not in unique_tool_names and len(unique_tool_names) < self.max_tools:
                     unique_tool_names.add(tool_name)
                     capped_list.append(tool_call)
-                # If we've seen this tool name before, we can still add it (same tool, different params)
                 elif tool_name in unique_tool_names:
                     capped_list.append(tool_call)
             
-            if len(unique_tool_names) > self.max_tools or len(capped_list) != len(deduplicated_tools):
-                logging.debug(f"Capping applied: {len(deduplicated_tools)} total selections reduced to {len(capped_list)} calls, unique tools limited to {len(unique_tool_names)}/{self.max_tools}")
-            
+            logging.debug(f"Phase 3: Capped to {len(capped_list)} tool calls, {len(unique_tool_names)} unique tools")
             return capped_list
         
         return deduplicated_tools

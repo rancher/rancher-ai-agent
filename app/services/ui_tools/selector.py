@@ -5,9 +5,11 @@ This module implements a generic UI tools selector that works with the LLM provi
 
 import json
 import logging
-from typing import Optional, List
+from typing import Optional, List, Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models.llms import BaseLanguageModel
+from langchain_core.tools import Tool
+from pydantic import create_model, Field
 
 from .registry import UITool, UIToolCall, get_ui_tools_registry
 
@@ -35,6 +37,62 @@ def filter_tool(ui_tool: UITool, ui_tools_selectors: list[str]) -> bool:
             return True
     
     return False
+
+
+def ui_tool_to_langchain_tool(ui_tool: UITool) -> Tool:
+    """
+    Convert a UITool to a LangChain Tool with dynamic input schema.
+    
+    Args:
+        ui_tool: The UI tool to convert
+        
+    Returns:
+        A LangChain Tool ready to be bound to an LLM
+    """
+    # Type mapping from JSON schema types to Python types
+    type_map = {
+        'string': str,
+        'number': float,
+        'integer': int,
+        'boolean': bool,
+        'array': list,
+        'object': dict,
+    }
+    
+    # Extract properties from the tool's schema
+    properties = ui_tool.schema.properties
+    
+    # Build field definitions for the dynamic model
+    field_definitions = {}
+    for field_name, field_schema in properties.items():
+        field_type = field_schema.get('type', 'string')
+        python_type = type_map.get(field_type, str)
+        field_description = field_schema.get('description', '')
+        is_required = field_schema.get('required', False)
+        
+        # Create Field with description and default if not required
+        if is_required:
+            field_definitions[field_name] = (python_type, Field(..., description=field_description))
+        else:
+            field_definitions[field_name] = (python_type, Field(None, description=field_description))
+    
+    # Create dynamic Pydantic model for the tool's input schema
+    if field_definitions:
+        input_model = create_model(
+            f"{ui_tool.name}Input",
+            **field_definitions
+        )
+    else:
+        # Empty model if no properties defined
+        input_model = create_model(f"{ui_tool.name}Input")
+    
+    # Create and return the LangChain Tool
+    return Tool(
+        name=ui_tool.name,
+        description=ui_tool.prompt,
+        args_schema=input_model,
+        func=lambda **kwargs: kwargs,  # Placeholder function - we only care about schema validation
+    )
 
 
 class UIToolsSelector:
@@ -75,7 +133,7 @@ When selecting UI tools:
         conversation_context: Optional[str] = None,
     ) -> List[UIToolCall]:
         """
-        Use any LLM to select appropriate UI tools
+        Use any LLM to select appropriate UI tools using bind_tools for structured output.
         
         Args:
             context: The response/context to enhance with UI tools
@@ -85,319 +143,116 @@ When selecting UI tools:
         Returns:
             List of recommended UI tool calls
         """
-        if available_tools is None:
-            # Get all available tools (no config scoping at selector level)
-            available_tools = self.registry.get_all_tools()
-        
         if not available_tools:
             logging.warning("No UI tools available for selection")
             return []
         
-        # Build tools description
-        tools_description = self._format_available_tools(available_tools)
-        
-        # Build messages for the LLM
-        system_msg = SystemMessage(
-            content=f"{self.system_prompt}\n\n{tools_description}"
-        )
-        
-        max_tools_instruction = ""
-        if self.max_tools:
-            max_tools_instruction = f"\n\nIMPORTANT LIMIT: You can select at most {self.max_tools} different UI tool(s) by unique name (you may call the same tool with different parameters). If more are appropriate, select only the {self.max_tools} most important unique tool(s)."
-        
-        prompt_text = f"""Analyze this context and select appropriate UI tools.
+        try:
+            # Convert UITools to LangChain Tool objects with proper schemas
+            langchain_tools = [ui_tool_to_langchain_tool(tool) for tool in available_tools]
+            
+            # Bind tools to the LLM for structured tool calling
+            llm_with_tools = self.llm.bind_tools(langchain_tools)
+            
+            logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in available_tools]}")
+            
+            # Build the prompt
+            max_tools_instruction = ""
+            if self.max_tools:
+                max_tools_instruction = f"\n\nIMPORTANT LIMIT: You can select at most {self.max_tools} different UI tool(s) by unique name (you may call the same tool with different parameters). If more are appropriate, select only the {self.max_tools} most important unique tool(s)."
+            
+            prompt_text = f"""Analyze this context and select appropriate UI tools to enhance the response.
 
 CONTEXT:
 {context}
 
 {f'CONVERSATION CONTEXT:{chr(10)}{conversation_context}' if conversation_context else ''}
 
-Based on the context, select which UI tools would best enhance this response.{max_tools_instruction}
+Based on the context, invoke the most appropriate UI tools to enhance this response.{max_tools_instruction}
 
-IMPORTANT INSTRUCTIONS:
-1. Only select tools from the available list above
-2. For each tool, provide input parameters that EXACTLY match the tool's schema
-3. Use the field names shown in the "Expected Input Format" section - do NOT use different field names
-4. Include all REQUIRED fields marked with (REQUIRED) in your input
-5. Optional fields can be omitted if not needed
-6. Output a valid JSON array at the very end with this format:
-[
-  {{"toolName": "tool_name", "input": {{"field1": "value1", "field2": "value2"}}}},
-  {{"toolName": "another_tool", "input": {{"requiredField": "value"}}}}
-]
-
-If no tools are appropriate, output an empty array: []
-
-Output the JSON array on its own line at the end."""
-        
-        user_msg = HumanMessage(content=prompt_text)
-        
-        try:
-            # Call the LLM (works with any provider)
-            logging.debug(f"Calling LLM for UI tool selection. Available tools: {[t.name for t in available_tools]}")
-            response = self.llm.invoke([system_msg, user_msg])
-            response_text = response.content if hasattr(response, 'content') else str(response)
+If no tools are appropriate, do not invoke any tools."""
+            
+            user_msg = HumanMessage(content=prompt_text)
+            system_msg = SystemMessage(content=self.system_prompt)
+            
+            # Call the LLM with bound tools
+            response = llm_with_tools.invoke([system_msg, user_msg])
             
             # Extract tool calls
-            ui_tool_calls = self._extract_ui_tool_calls(response_text, available_tools)
+            ui_tool_calls = self._extract_tool_calls_from_response(response, available_tools)
             logging.debug(f"UI tool selection result: {len(ui_tool_calls)} UI tools selected before validation")
             
             # Sanitize and validate tool calls against schema
-            ui_tools_list = self.sanitize_ui_tools(ui_tool_calls, available_tools)
+            ui_tools_list = self._sanitize_ui_tools(ui_tool_calls)
             logging.debug(f"UI tool selection result after validation: {len(ui_tools_list)} valid UI tools")
             return ui_tools_list
             
         except Exception as e:
-            logging.error(f"Error selecting UI tools: {e}")
+            logging.error(f"Error selecting UI tools with bind_tools: {e}")
             return []
     
-    def _format_available_tools(self, tools: List[UITool]) -> str:
-        """Format available tools for the system prompt with schema details"""
-        tools_list = []
-        for tool in tools:
-            tool_info = f"- **{tool.name}** ({tool.category}): {tool.prompt}"
-            
-            # Extract properties from tool.schema object
-            properties = tool.schema.properties
-            
-            if properties:
-                props_desc = []
-                required_fields = []
-                
-                # Build properties description and collect required fields
-                for prop_name, prop_schema in properties.items():
-                    prop_type = prop_schema.get('type', 'unknown')
-                    prop_desc = prop_schema.get('description', '')
-                    is_required = prop_schema.get('required', False)
-                    if is_required:
-                        required_fields.append(prop_name)
-                    required_mark = " (REQUIRED)" if is_required else " (optional)"
-                    props_desc.append(f"    - {prop_name} ({prop_type}){required_mark}: {prop_desc}")
-                
-                if props_desc:
-                    tool_info += "\n  Input Schema:\n" + "\n".join(props_desc)
-                
-                # Add JSON example showing expected input format
-                if required_fields or any(properties.values()):
-                    tool_info += "\n  Expected Input Format (JSON):\n  {"
-                    
-                    # Show required fields first with example values
-                    if required_fields:
-                        for field_name in required_fields:
-                            field_type = properties.get(field_name, {}).get('type', 'string')
-                            if field_type == 'string':
-                                tool_info += f'\n    "{field_name}": "value",'
-                            elif field_type == 'boolean':
-                                tool_info += f'\n    "{field_name}": true,'
-                            elif field_type == 'number' or field_type == 'integer':
-                                tool_info += f'\n    "{field_name}": 0,'
-                            elif field_type == 'array':
-                                tool_info += f'\n    "{field_name}": [],'
-                            elif field_type == 'object':
-                                tool_info += f'\n    "{field_name}": {{}},'
-                        
-                        # Show optional fields as comment
-                        optional_fields = [name for name in properties.keys() if name not in required_fields]
-                        if optional_fields:
-                            tool_info += f'\n    // optional: {", ".join(optional_fields)}'
-                    
-                    tool_info = tool_info.rstrip(',') + "\n  }"
-            
-            tools_list.append(tool_info)
+    def _extract_tool_calls_from_response(self, response: Any, available_tools: List[UITool]) -> List[UIToolCall]:
+        """
+        Extract tool calls from the LLM response when using bind_tools.
         
-        return f"\n\nAvailable UI Tools:\n" + "\n".join(tools_list)
-    
-    def _extract_ui_tool_calls(
-        self,
-        response_text: str,
-        available_tools: List[UITool],
-    ) -> List[UIToolCall]:
+        Args:
+            response: The response from the LLM (AIMessage)
+            available_tools: List of available tools for validation
+            
+        Returns:
+            List of UIToolCall objects extracted from the response
         """
-        Extract UI tool calls from the LLM response
-        Looks for JSON-formatted tool calls with robust parsing.
-        If full array parsing fails, attempts to extract individual valid tool objects.
-        """
-        ui_tool_calls: List[UIToolCall] = []
-
-        logging.debug(f"LLM response for UI tool extraction: {response_text[:500]}...")
+        ui_tool_calls = []
         
         try:
-            import re
-            
-            # Strategy 1: Look for JSON array with [ ] markers (target arrays like [{...}, {...}])
-            bracket_pattern = r'\[\s*\{.*?\}\s*\]'
-            bracket_matches = re.findall(bracket_pattern, response_text, re.DOTALL)
-            
-            for json_str in bracket_matches:
-                try:
-                    tool_calls_data = json.loads(json_str)
-                    if isinstance(tool_calls_data, list):
-                        for call_data in tool_calls_data:
-                            if isinstance(call_data, dict) and "toolName" in call_data:
-                                tool_name = call_data.get("toolName")
-                                # Validate the tool exists
-                                if any(t.name == tool_name for t in available_tools):
-                                    logging.debug(f"Extracted UI tool call: {tool_name}")
-                                    ui_tool_calls.append(
-                                        UIToolCall(
-                                            tool_name=tool_name,
-                                            input=call_data.get("input", {}),
-                                        )
-                                    )
-                                else:
-                                    logging.debug(f"UI tool '{tool_name}' not found in available tools: {[t.name for t in available_tools]}")
-                except json.JSONDecodeError as e:
-                    logging.error(f"Failed to parse JSON array: {json_str[:100]}... Error: {e}")
-                    logging.debug("Attempting to extract individual tool objects from the malformed array")
-                    # Try to extract individual tool objects even if the full array is malformed
-                    individual_matches = re.findall(r'\{"toolName"[^}]*\}', json_str)
-                    if individual_matches:
-                        for obj_str in individual_matches:
-                            try:
-                                call_data = json.loads(obj_str)
-                                if isinstance(call_data, dict) and "toolName" in call_data:
-                                    tool_name = call_data.get("toolName")
-                                    if any(t.name == tool_name for t in available_tools):
-                                        logging.debug(f"Extracted individual UI tool object from malformed array: {tool_name}")
-                                        ui_tool_calls.append(
-                                            UIToolCall(
-                                                tool_name=tool_name,
-                                                input=call_data.get("input", {}),
-                                            )
-                                        )
-                            except json.JSONDecodeError as e:
-                                logging.error(f"Failed to parse individual UI tool object: {obj_str[:100]}... Error: {e}")
-                                continue
-                    continue
-            
-            # Strategy 2: If no arrays found, look for individual objects with toolName
-            if not ui_tool_calls:
-                logging.debug("No JSON arrays found, trying to find individual UI tool objects")
-                object_pattern = r'\{"toolName"\s*:\s*"[^"]*"[^}]*"input"\s*:\s*\{[^}]*\}[^}]*\}'
-                obj_matches = re.findall(object_pattern, response_text)
-                
-                for obj_str in obj_matches:
-                    try:
-                        call_data = json.loads(obj_str)
-                        if isinstance(call_data, dict) and "toolName" in call_data:
-                            tool_name = call_data.get("toolName")
-                            if any(t.name == tool_name for t in available_tools):
-                                logging.debug(f"Extracted UI tool object: {tool_name}")
-                                ui_tool_calls.append(
-                                    UIToolCall(
-                                        tool_name=tool_name,
-                                        input=call_data.get("input", {}),
-                                    )
-                                )
-                    except json.JSONDecodeError as e:
-                        logging.error(f"Failed to parse individual UI tool object: {obj_str[:100]}... Error: {e}")
-                        continue
-            
-            logging.debug(f"Total UI tools extracted: {len(ui_tool_calls)}")
-            
+            # Check if response has tool_calls attribute (AIMessage from bind_tools)
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.get('name') or tool_call.get('tool_name')
+                    tool_input = tool_call.get('args', tool_call.get('input', {}))
+                    
+                    # Validate tool exists in available tools
+                    if any(t.name == tool_name for t in available_tools):
+                        logging.debug(f"Extracted tool call: {tool_name} with input: {tool_input}")
+                        ui_tool_calls.append(
+                            UIToolCall(
+                                tool_name=tool_name,
+                                input=tool_input if isinstance(tool_input, dict) else {},
+                            )
+                        )
+                    else:
+                        logging.debug(f"Tool '{tool_name}' not found in available tools: {[t.name for t in available_tools]}")
+            else:
+                logging.debug("No tool_calls found in response, trying fallback JSON extraction from content")
+                # Fallback to content extraction if tools are not structured
+                if hasattr(response, 'content'):
+                    ui_tool_calls = self._extract_ui_tool_calls(response.content, available_tools)
+        
         except Exception as e:
-            logging.error(f"Error extracting UI tool calls: {e}")
+            logging.error(f"Error extracting tool calls from response: {e}")
         
         return ui_tool_calls
 
-    def _validate_tool_input(self, tool_name: str, input_data: dict, available_tools: List[UITool]) -> bool:
+    def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall]) -> list:
         """
-        Validate that the generated input matches the tool's schema definition.
-        
-        Validation Rules:
-        - ALL required fields MUST be present in input_data
-        - NO unexpected fields are allowed (only fields defined in properties)
-        - All provided fields MUST match the expected type
-        
-        Args:
-            tool_name: Name of the tool
-            input_data: The input dict generated by the LLM
-            available_tools: List of available tools with schemas
-            
-        Returns:
-            True if input is valid according to tool schema, False otherwise
-        """
-        # Find the tool definition
-        tool_def = next((t for t in available_tools if t.name == tool_name), None)
-        if not tool_def:
-            logging.warning(f"Tool '{tool_name}' definition not found")
-            return False
-
-        # Extract properties from tool.schema object
-        properties = tool_def.schema.properties
-        
-        # Build required fields list by checking each property's required field
-        required_fields = [name for name, prop in properties.items() if prop.get('required', False)]
-        
-        # Validation 1: Check ALL required fields are present
-        missing_required = [field for field in required_fields if field not in input_data]
-        if missing_required:
-            logging.warning(
-                f"Tool '{tool_name}' validation failed: missing required fields {missing_required}. "
-                f"Expected: {required_fields}, got: {list(input_data.keys())}"
-            )
-            return False
-        
-        # Validation 2: Check NO unexpected fields are present
-        unexpected_fields = [field for field in input_data.keys() if field not in properties]
-        if unexpected_fields:
-            logging.warning(
-                f"Tool '{tool_name}' validation failed: unexpected fields {unexpected_fields}. "
-                f"Valid fields are: {list(properties.keys())}"
-            )
-            return False
-        
-        # Validation 3: Check type of each provided field matches schema
-        for field_name, field_value in input_data.items():
-            expected_type = properties[field_name].get('type', 'string')
-            
-            # Map JSON schema types to Python types
-            type_mapping = {
-                'string': str,
-                'number': (int, float),
-                'integer': int,
-                'boolean': bool,
-                'object': dict,
-                'array': list,
-            }
-            
-            expected_python_type = type_mapping.get(expected_type)
-            if expected_python_type and not isinstance(field_value, expected_python_type):
-                logging.warning(
-                    f"Tool '{tool_name}' validation failed: field '{field_name}' has wrong type. "
-                    f"Expected {expected_type} but got {type(field_value).__name__} with value: {field_value}"
-                )
-                return False
-        
-        logging.debug(f"Tool '{tool_name}' input validation passed: {list(input_data.keys())}")
-        return True
-
-    def sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall], available_tools: Optional[List[UITool]] = None) -> list:
-        """
-        Sanitize UI tool calls by validating, deduplicating and converting to state format.
+        Sanitize UI tool calls by deduplicating and capping to max_tools.
         
         Deduplication Logic:
         - Removes duplicate tool calls based on exact match of {toolName, input}
         - If the LLM returned the same tool with identical parameters twice, only the first occurrence is kept
         - This ensures no redundant tool calls are sent to the frontend
         
-        Performs sanity checks:
-        - Validates tool_name is not empty and is a string
-        - Validates input is a dict (not None)
-        - Validates input matches the tool's schema definition
+        Capping Logic:
+        - If max_tools is set, limits to that many unique tool names
+        - Same tool with different parameters still counts as the same unique tool
         
         Args:
             ui_tool_calls: List of tool calls from the selector
-            available_tools: List of tool definitions for schema validation
             
         Returns:
-            List of validated and deduplicated tool calls in state format
-        """
-        if available_tools is None:
-            # Get all available tools (no config scoping at sanitize level)
-            available_tools = self.registry.get_all_tools()
-        
-        # Phase 1: Validate each tool call
+            List of deduplicated and capped tool calls in state format
+        """        
+        # Phase 1: Basic sanity checks (tool_name exists and is not empty)
         validated_tools = []
         validation_removed_count = 0
         
@@ -410,16 +265,10 @@ Output the JSON array on its own line at the end."""
             
             # Sanity check: input is a dict
             if call.input is None:
-                logging.warning(f"UI tool call '{call.tool_name}' at index {idx} has None input, using empty dict")
+                logging.debug(f"UI tool call '{call.tool_name}' at index {idx} has None input, using empty dict")
                 call.input = {}
             elif not isinstance(call.input, dict):
                 logging.warning(f"UI tool call '{call.tool_name}' at index {idx} has non-dict input: {type(call.input)}")
-                validation_removed_count += 1
-                continue
-            
-            # Schema validation: check if input matches tool definition
-            if not self._validate_tool_input(call.tool_name, call.input, available_tools):
-                logging.warning(f"UI tool call '{call.tool_name}' at index {idx} has invalid input according to schema")
                 validation_removed_count += 1
                 continue
             
@@ -429,7 +278,7 @@ Output the JSON array on its own line at the end."""
             })
         
         if validation_removed_count > 0:
-            logging.debug(f"Validation removed {validation_removed_count} invalid UI tool call(s), {len(validated_tools)} valid UI tool(s) remaining")
+            logging.debug(f"Sanity checks removed {validation_removed_count} invalid UI tool call(s), {len(validated_tools)} valid UI tool(s) remaining")
         
         # Phase 2: Deduplicate by {toolName, input}
         seen = set()
@@ -476,7 +325,6 @@ Output the JSON array on its own line at the end."""
             return capped_list
         
         return deduplicated_tools
-
 
 
 def create_ui_tools_selector(llm: BaseLanguageModel, system_prompt: str, max_tools: int = 5) -> UIToolsSelector:

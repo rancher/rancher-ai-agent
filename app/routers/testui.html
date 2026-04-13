@@ -32,7 +32,6 @@
 
               // Listen for OAuth token from popup window
             window.addEventListener('message', function(event) {
-                alert(event.data.access_token);
                 if (event.data.type === 'oauth_success' && event.data.access_token) {
                     const messages = document.getElementById('messages');
 

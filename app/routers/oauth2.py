@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse
 
-from ..services.oauth2 import OAuthClient, get_redirect_uri
+from ..services.oauth2 import OAuthClient, get_redirect_uri, get_oauth_cookie_names
 
 
 router = APIRouter()
@@ -12,7 +12,7 @@ oauth_state_store = {}
 
 @router.get("/oauth/callback")
 async def get(request: Request):
-    """OAuth callback that returns HTML to communicate token back to parent window"""
+    """OAuth callback that returns HTML to communicate token back to parent window and stores tokens as httponly cookies."""
     # 1. Get parameters from the URL
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -34,6 +34,7 @@ async def get(request: Request):
     verifier = oauth_data["verifier"]
     oauth_client = oauth_data["oauth_client"]
     token_endpoint = oauth_data["token_endpoint"]
+    cookie_key = oauth_data.get("cookie_key", "")
 
     # 3. Exchange the code for the actual Access Token
     redirect_uri = get_redirect_uri()
@@ -46,8 +47,9 @@ async def get(request: Request):
             verifier=verifier
         )
 
-        access_token = token["access_token"]
-        # setTimeout(() => window.close(), 500);
+        access_token = token.get("access_token", "")
+        refresh_token = token.get("refresh_token", "")
+
         # Return HTML that sends token to parent and closes popup
         html_content = f"""
         <!DOCTYPE html>
@@ -62,7 +64,7 @@ async def get(request: Request):
                     window.opener.postMessage({{
                         type: 'oauth_success',
                         access_token: '{access_token}',
-                        refresh_token: '{token.get("refresh_token", "")}',
+                        refresh_token: '{refresh_token}',
                     }}, '*');
                     // Close the popup after a short delay
                     window.close()
@@ -73,7 +75,25 @@ async def get(request: Request):
         </body>
         </html>
         """
-        return HTMLResponse(content=html_content)
+
+        response = HTMLResponse(content=html_content)
+
+        # Store tokens as httponly cookies for subsequent connections
+        if cookie_key:
+            cookie_names = get_oauth_cookie_names(cookie_key)
+            is_secure = request.url.scheme == "https"
+
+            response.set_cookie(
+                cookie_names["access_token"], access_token,
+                httponly=True, secure=is_secure, samesite="lax", path="/",
+            )
+            if refresh_token:
+                response.set_cookie(
+                    cookie_names["refresh_token"], refresh_token,
+                    httponly=True, secure=is_secure, samesite="lax", path="/",
+                )
+
+        return response
 
     except Exception as e:
         return HTMLResponse(content=f"""

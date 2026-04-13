@@ -1,6 +1,7 @@
 import pytest
 
-from app.routers.websocket import websocket_endpoint
+from app.routers.websocket import websocket_endpoint, _get_valid_token_from_cookies, _try_refresh_token
+from app.services.oauth2 import get_oauth_cookie_names, generate_oauth_cookie_key, OAuthClientCredentials
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from fastapi import WebSocketDisconnect
 from contextlib import asynccontextmanager
@@ -99,3 +100,88 @@ async def test_websocket_endpoint_context_message(mock_dependencies):
     assert "show all pods" in call_kwargs['input_data']["messages"][0]["content"]
     assert call_kwargs['websocket'] == mock_ws
  """
+
+
+# ──────────────────────────────────────────────────────────────
+# Tests for _get_valid_token_from_cookies
+# ──────────────────────────────────────────────────────────────
+
+class TestGetValidTokenFromCookies:
+    def _cookie_names(self):
+        return get_oauth_cookie_names("testkey1")
+
+    def test_returns_token_when_present(self):
+        names = self._cookie_names()
+        cookies = {names["access_token"]: "my-access-token"}
+        assert _get_valid_token_from_cookies(cookies, names) == "my-access-token"
+
+    def test_returns_none_when_no_token(self):
+        names = self._cookie_names()
+        assert _get_valid_token_from_cookies({}, names) is None
+
+
+# ──────────────────────────────────────────────────────────────
+# Tests for _try_refresh_token
+# ──────────────────────────────────────────────────────────────
+
+class TestTryRefreshToken:
+    def _cookie_names(self):
+        return get_oauth_cookie_names("testkey1")
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_refresh_token(self):
+        names = self._cookie_names()
+        cookies = {}
+        result = await _try_refresh_token(cookies, names, "https://auth.example.com/token", "my-secret")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_oauth_secret(self):
+        names = self._cookie_names()
+        cookies = {
+            names["refresh_token"]: "my-refresh-token",
+        }
+        result = await _try_refresh_token(cookies, names, "https://auth.example.com/token", None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_successful_refresh(self):
+        names = self._cookie_names()
+        cookies = {
+            names["refresh_token"]: "my-refresh-token",
+        }
+
+        mock_credentials = OAuthClientCredentials(
+            client_id="test-id", client_secret="test-secret"
+        )
+
+        with patch("app.routers.websocket.get_oauth_client_credentials", return_value=mock_credentials), \
+             patch("app.routers.websocket.OAuthClient") as MockOAuthClient:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.refresh_token = AsyncMock(
+                return_value={"access_token": "new-access-token"}
+            )
+            MockOAuthClient.return_value = mock_client_instance
+
+            result = await _try_refresh_token(cookies, names, "https://auth.example.com/token", "my-secret")
+
+        assert result == "new-access-token"
+        MockOAuthClient.assert_called_once_with(client_id="test-id", client_secret="test-secret")
+        mock_client_instance.refresh_token.assert_awaited_once_with(
+            "https://auth.example.com/token", "my-refresh-token"
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_refresh_failure(self):
+        names = self._cookie_names()
+        cookies = {
+            names["refresh_token"]: "my-refresh-token",
+        }
+
+        with patch(
+            "app.routers.websocket.get_oauth_client_credentials",
+            side_effect=RuntimeError("secret not found"),
+        ):
+            result = await _try_refresh_token(cookies, names, "https://auth.example.com/token", "my-secret")
+
+        assert result is None

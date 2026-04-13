@@ -13,6 +13,8 @@ from ..services.oauth2 import (
     discover_oauth_metadata,
     get_redirect_uri,
     get_oauth_client_credentials,
+    generate_oauth_cookie_key,
+    get_oauth_cookie_names,
 )
 from .oauth2 import oauth_state_store
 from ..services.auth import get_user_id
@@ -69,7 +71,9 @@ async def _discover_and_authenticate_oauth(websocket: WebSocket) -> dict[str, st
     Follows the MCP specification for OAuth discovery:
     1. Load agent configs to identify agents requiring OAUTH2
     2. For each OAUTH2 agent, discover OAuth metadata from its MCP server URL
-    3. Perform the OAuth authentication flow per unique authorization server
+    3. Check httponly cookies for cached tokens before triggering interactive authentication
+    4. If tokens are expired, attempt a silent refresh using the refresh token cookie
+    5. Fall back to the full interactive OAuth flow only when no valid tokens are available
 
     Args:
         websocket: The WebSocket connection for communication.
@@ -85,6 +89,7 @@ async def _discover_and_authenticate_oauth(websocket: WebSocket) -> dict[str, st
 
     tokens = {}
     redirect_uri = get_redirect_uri(websocket)
+    cookies = websocket.cookies
 
     # Discover OAuth metadata for each unique MCP server URL
     discovered: dict[str, OAuthDiscoveryResult] = {}
@@ -100,14 +105,77 @@ async def _discover_and_authenticate_oauth(websocket: WebSocket) -> dict[str, st
         auth_server_key = discovery.authorization_endpoint
 
         if auth_server_key not in authenticated_servers:
-            access_token, _ = await _perform_oauth_authentication(
-                websocket, discovery, redirect_uri, agent_cfg.oauth_secret
-            )
-            authenticated_servers[auth_server_key] = access_token
+            # 1. Check cookies for a valid (non-expired) access token
+            cookie_key = generate_oauth_cookie_key(auth_server_key)
+            cookie_names = get_oauth_cookie_names(cookie_key)
+
+            cached_token = _get_valid_token_from_cookies(cookies, cookie_names)
+            if cached_token:
+                logging.info(f"Using cached OAuth token from cookies for {auth_server_key}")
+                authenticated_servers[auth_server_key] = cached_token
+            else:
+                # 2. Try silent refresh if a refresh token cookie exists
+                refreshed_token = await _try_refresh_token(
+                    cookies, cookie_names, discovery.token_endpoint, agent_cfg.oauth_secret
+                )
+                if refreshed_token:
+                    logging.info(f"Refreshed OAuth token from cookies for {auth_server_key}")
+                    authenticated_servers[auth_server_key] = refreshed_token
+                else:
+                    # 3. Fall back to interactive OAuth flow
+                    access_token, _ = await _perform_oauth_authentication(
+                        websocket, discovery, redirect_uri, agent_cfg.oauth_secret
+                    )
+                    authenticated_servers[auth_server_key] = access_token
 
         tokens[agent_cfg.name] = authenticated_servers[auth_server_key]
 
     return tokens
+
+
+def _get_valid_token_from_cookies(
+    cookies: dict[str, str], cookie_names: dict[str, str]
+) -> str | None:
+    """
+    Check if cookies contain an OAuth access token.
+
+    Returns the access token string if present, None otherwise.
+    """
+    return cookies.get(cookie_names["access_token"]) or None
+
+
+async def _try_refresh_token(
+    cookies: dict[str, str],
+    cookie_names: dict[str, str],
+    token_endpoint: str,
+    oauth_secret: str | None,
+) -> str | None:
+    """
+    Attempt to refresh an expired access token using the refresh token from cookies.
+
+    Requires a refresh token cookie, a token endpoint, and client credentials
+    from a Kubernetes secret. Returns the new access token or None if refresh fails.
+    """
+    refresh_tok = cookies.get(cookie_names["refresh_token"])
+
+    if not refresh_tok:
+        return None
+
+    if not oauth_secret:
+        logging.debug("Cannot refresh token: no oauth_secret configured for agent")
+        return None
+
+    try:
+        credentials = get_oauth_client_credentials(oauth_secret)
+        oauth_client = OAuthClient(
+            client_id=credentials.client_id,
+            client_secret=credentials.client_secret,
+        )
+        new_token = await oauth_client.refresh_token(token_endpoint, refresh_tok)
+        return new_token.get("access_token")
+    except Exception as e:
+        logging.warning(f"Failed to refresh OAuth token: {e}")
+        return None
 
 
 async def _perform_oauth_authentication(
@@ -173,10 +241,12 @@ async def _perform_oauth_authentication(
 
     # Store state for the callback handler
     # TODO - This is a temporary in-memory store. This needs to be improved!
+    cookie_key = generate_oauth_cookie_key(discovery.authorization_endpoint)
     oauth_state_store[state] = {
         "verifier": verifier,
         "oauth_client": oauth_client,
         "token_endpoint": discovery.token_endpoint,
+        "cookie_key": cookie_key,
     }
 
     await websocket.send_text(f'<authentication>{{"type": "oauth2", "url": "{str(url)}"}}</authentication>')

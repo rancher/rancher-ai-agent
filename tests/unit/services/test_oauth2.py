@@ -17,6 +17,9 @@ from app.services.oauth2 import (
     _discover_auth_server_metadata,
     discover_oauth_metadata,
     get_redirect_uri,
+    generate_oauth_cookie_key,
+    get_oauth_cookie_names,
+    OAUTH_COOKIE_PREFIX,
 )
 
 
@@ -721,3 +724,38 @@ class TestOAuthClient:
                     registration_endpoint="https://auth.example.com/register",
                     redirect_uri="http://localhost:8000/oauth/callback",
                 )
+
+
+# ──────────────────────────────────────────────────────────────
+# Tests for generate_oauth_cookie_key and get_oauth_cookie_names
+# ──────────────────────────────────────────────────────────────
+
+class TestOAuthCookieHelpers:
+    def test_generate_cookie_key_is_deterministic(self):
+        key1 = generate_oauth_cookie_key("https://auth.example.com/authorize")
+        key2 = generate_oauth_cookie_key("https://auth.example.com/authorize")
+        assert key1 == key2
+
+    def test_generate_cookie_key_differs_for_different_endpoints(self):
+        key1 = generate_oauth_cookie_key("https://auth.example.com/authorize")
+        key2 = generate_oauth_cookie_key("https://other.example.com/authorize")
+        assert key1 != key2
+
+    def test_generate_cookie_key_length(self):
+        key = generate_oauth_cookie_key("https://auth.example.com/authorize")
+        assert len(key) == 8
+
+    def test_get_cookie_names_returns_all_keys(self):
+        names = get_oauth_cookie_names("abcd1234")
+        assert "access_token" in names
+        assert "refresh_token" in names
+
+    def test_get_cookie_names_uses_prefix(self):
+        names = get_oauth_cookie_names("abcd1234")
+        for name in names.values():
+            assert name.startswith(OAUTH_COOKIE_PREFIX)
+
+    def test_get_cookie_names_includes_key(self):
+        names = get_oauth_cookie_names("abcd1234")
+        for name in names.values():
+            assert "abcd1234" in name

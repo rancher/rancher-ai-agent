@@ -4,6 +4,7 @@ Base agent builder with shared logic for all agent types.
 
 import json
 import logging
+from typing import Optional
 import langgraph.types
 
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
@@ -229,14 +230,51 @@ class BaseAgentBuilder:
             )
             
             # Dispatch custom event with all tools
-            ui_tools_json = json.dumps(ui_tools_list)
-            ui_tools_event = f"<ui-tools>{ui_tools_json}</ui-tools>"
-            dispatch_custom_event("ui_tools", ui_tools_event)
-            
-            logging.debug(f"Dispatched {len(ui_tools_list)} UI tool(s): {[t['toolName'] for t in ui_tools_list]}")
-            
+            self._dispatch_ui_tools(ui_tools_list)            
         except Exception as e:
             logging.error(f"Error dispatching UI tools event: {e}", exc_info=True)
+            
+    def _dispatch_preprocessed_ui_tools(self, state: AgentState, config: RunnableConfig, tools: list[dict]) -> None:
+        """
+        Helper method to dispatch preprocessed UI tools.
+
+        This method can be used to dispatch UI tools that have been preprocessed,
+        for example based on the MCP response or other intermediate computations.
+        It ensures the tools are sent to the UI in a consistent format.
+
+        Args:
+            state: The current state of the agent, containing the full conversation.
+            config: The runtime configuration containing ui_tools_config name.
+            tools: A list of dictionaries representing the preprocessed UI tools to dispatch.
+        """
+        # Extract the UI tools configuration from request metadata
+        request_metadata = config.get("configurable", {}).get("request_metadata", {})
+        ui_tools_config = request_metadata.get("ui_tools", {})
+        
+        logging.debug(f"_dispatch_preprocessed_ui_tools: config={ui_tools_config}")
+        
+        name = ui_tools_config.get("name", "")
+
+        if not name:
+            logging.debug("UI tools config name is missing, skipping ui tools dispatch")
+            return
+        
+        self._dispatch_ui_tools(tools)
+
+    def _dispatch_ui_tools(self, tools: list[dict]) -> None:
+        """
+        Helper method to dispatch UI tools event with a given list of tools.
+        
+        Args:
+            tools: A list of dictionaries representing the selected UI tools to dispatch.
+        """
+        try:
+            ui_tools_json = json.dumps(tools)
+            ui_tools_event = f"<ui-tools>{ui_tools_json}</ui-tools>"
+            dispatch_custom_event("ui_tools", ui_tools_event)
+            logging.debug(f"Dispatched {len(tools)} UI tool(s): {[t['toolName'] for t in tools]}")
+        except Exception as e:
+            logging.error(f"Error dispatching UI tools: {e}", exc_info=True)
 
     def ui_tools_node(self, state: AgentState, config: RunnableConfig):
         """
@@ -592,12 +630,41 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         if interrupt_message := await self.should_interrupt(human_validation_tools, tool_call):
             logging.info(f"Confirmation interrupt triggered for tool '{tool_call.get('name')}', config={'present' if config else 'missing'}")
             
-            # Dispatch UI tools before the interrupt, so they're available to the client
-            if config is not None:
-                logging.info(f"Dispatching UI tools before confirmation interrupt")
-                self._dispatch_ui_tools_event(state, config)
-            else:
-                logging.warning("config is None, cannot dispatch UI tools before confirmation")
+            if interrupt_message:
+                # Dispatch UI tools before the interrupt, so they're available to the client
+                if config is not None:
+                    try:
+                        data = json.loads(interrupt_message.strip('<confirmation-response></confirmation-response>'))
+                        if isinstance(data, list) and len(data) > 0:
+                            data = data[0]
+                            
+                        # Build ui tool
+                        resource = data.get("resource", {})
+                        input = {
+                            "resourceKind": resource.get("kind"),
+                            "resourceName": resource.get("name"),
+                            "resourceNamespace": resource.get("namespace"),
+                        }
+                        ui_tool_name = "show-yaml"
+
+                        if data.get("type") == "create":
+                            input["yaml"] = data.get("payload", {})
+                        else:
+                            ui_tool_name = "show-yaml-diff"
+                            input["original"] = data.get("payload", {}).get("original")
+                            input["patched"] = data.get("payload", {}).get("patched")
+
+                        input = {k: v for k, v in input.items() if v is not None}
+                    except Exception as e:
+                        logging.debug(f"Could not extract precomputed fields from interrupt message: {e}")
+
+                    ui_tools_list = [{
+                        "toolName": ui_tool_name,
+                        "input": input,
+                    }]
+                    self._dispatch_preprocessed_ui_tools(state, config, ui_tools_list)
+                else:
+                    logging.warning("config is None, cannot dispatch UI tools before confirmation")
             
             response = langgraph.types.interrupt(interrupt_message)
             if response != "yes":

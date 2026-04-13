@@ -162,11 +162,16 @@ When selecting UI tools:
             llm_with_tools = self.llm.bind_tools(langchain_tools)
             
             logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in available_tools]}")
-            
+
             # Build the prompt
             max_tools_instruction = ""
             if self.max_tools:
                 max_tools_instruction = f"\n\nIMPORTANT LIMIT: You can select at most {self.max_tools} different UI tool(s) by unique name (you may call the same tool with different parameters). If more are appropriate, select only the {self.max_tools} most important unique tool(s)."
+            
+            yaml_preservation_instruction = """\n\nIMPORTANT: When passing YAML content to UI tools:
+- Maintain proper indentation and line breaks from the original YAML
+- Do not convert YAML to JSON or any other format
+- Do not modify or re-indent the YAML content"""
             
             prompt_text = f"""Analyze this context and select appropriate UI tools to enhance the response.
 
@@ -175,7 +180,7 @@ CONTEXT:
 
 {f'CONVERSATION CONTEXT:{chr(10)}{conversation_context}' if conversation_context else ''}
 
-Based on the context, invoke the most appropriate UI tools to enhance this response.{max_tools_instruction}
+Based on the context, invoke the most appropriate UI tools to enhance this response.{yaml_preservation_instruction}{max_tools_instruction}
 
 If no tools are appropriate, do not invoke any tools."""
             
@@ -192,6 +197,7 @@ If no tools are appropriate, do not invoke any tools."""
             # Sanitize and validate tool calls against schema
             ui_tools_list = self._sanitize_ui_tools(ui_tool_calls, available_tools)
             logging.debug(f"UI tool selection result after validation: {len(ui_tools_list)} valid UI tools")
+
             return ui_tools_list
             
         except Exception as e:

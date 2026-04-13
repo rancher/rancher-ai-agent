@@ -20,6 +20,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Get version from Git tag
         id: get_version
@@ -27,22 +28,35 @@ jobs:
 
       - name: Update Chart.yaml with new version
         run: |
-          echo "Updating chart to version ${{ env.VERSION }}"
-          sed -i "s/^version: .*/version: ${{ env.VERSION }}/" ${{ env.CHART_PATH }}/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"${{ env.VERSION }}\"/" ${{ env.CHART_PATH }}/Chart.yaml
+          echo "Updating chart to version $VERSION"
+          sed -i "s/^version: .*/version: $VERSION/" $CHART_PATH/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"$VERSION\"/" $CHART_PATH/Chart.yaml
 
           echo "--- Chart.yaml after update ---"
-          cat ${{ env.CHART_PATH }}/Chart.yaml
+          cat $CHART_PATH/Chart.yaml
           echo "------------------------------"
+        env:
+          VERSION: ${{ env.VERSION }}
+          CHART_PATH: ${{ env.CHART_PATH }} 
 
       - name: Install Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-
+        run: echo $GITHUB_TOKEN | helm registry login $REGISTRY -u $ACTOR --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          REGISTRY: ${{ env.REGISTRY }}
+          ACTOR: ${{ github.actor }}
+           
       - name: Package Helm chart
-        run: helm package ${{ env.CHART_PATH }} --destination .helm-packages
+        run: helm package $CHART_PATH --destination .helm-packages
+        env:
+          CHART_PATH: ${{ env.CHART_PATH }} 
 
       - name: Push chart to GHCR OCI registry
-        run: helm push .helm-packages/rancher-ai-agent-${{ env.VERSION }}.tgz oci://${{ env.REGISTRY }}/${{ github.repository }}/charts
+        run: helm push .helm-packages/rancher-ai-agent-$VERSION.tgz oci://$REGISTRY/$REPOSITORY/charts
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          VERSION: ${{ env.VERSION }}
+          REPOSITORY: ${{ github.repository }}

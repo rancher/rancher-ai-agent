@@ -221,6 +221,7 @@ async def _perform_oauth_authentication(
             )
     # Strategy 2: Dynamic Client Registration
     elif discovery.registration_endpoint:
+        #TODO store clientID and clientSecret in secret?
         logging.info(f"Performing dynamic client registration at {discovery.registration_endpoint}")
         oauth_client = await OAuthClient.from_dynamic_registration(
             registration_endpoint=discovery.registration_endpoint,

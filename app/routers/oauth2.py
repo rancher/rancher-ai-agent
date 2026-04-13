@@ -1,8 +1,6 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
-
-from ..services.oauth2 import OAuthClient, get_redirect_uri, get_oauth_cookie_names
-
+from ..services.oauth2 import  get_redirect_uri, get_oauth_cookie_names
 
 router = APIRouter()
 

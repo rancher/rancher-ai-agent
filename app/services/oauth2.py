@@ -15,14 +15,16 @@ import os
 import secrets
 import logging
 import re
+import httpx
+
 from urllib.parse import urlparse
 from dataclasses import dataclass, field
-
-import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
+from kubernetes import client, config
+
+AGENT_NAMESPACE = "cattle-ai-agent-system"
 
 logger = logging.getLogger(__name__)
-
 
 class OAuthDiscoveryError(Exception):
     """Raised when OAuth discovery fails."""
@@ -297,6 +299,8 @@ async def discover_oauth_metadata(mcp_url: str) -> OAuthDiscoveryResult:
             # Step 3: Fetch resource metadata and discover the authorization server
             resource_metadata = await _fetch_resource_metadata(client, resource_metadata_url)
 
+            # TODO how to show supported scopes? use status?
+
             if not resource_metadata.authorization_servers:
                 raise OAuthDiscoveryError(
                     f"Resource metadata at {resource_metadata_url} did not include any authorization servers."
@@ -388,7 +392,7 @@ class OAuthClient:
                 "token_endpoint_auth_method": "client_secret_basic",
             }
             if scope:
-                registration_data["scope"] = "read:jira-user"
+                registration_data["scope"] = scope
 
             try:
                 response = await http_client.post(registration_endpoint, json=registration_data)
@@ -475,6 +479,7 @@ def get_redirect_uri(websocket=None) -> str:
         port_str = f":{port}" if port and port not in (80, 443) else ""
         return f"{scheme}://{host}{port_str}/oauth/callback"
 
+    # TODO figure out redirect, return error here!
     return "http://localhost:8000/oauth/callback"
 
 
@@ -495,7 +500,6 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
     Returns:
         OAuthClientCredentials with client_id, client_secret, and scopes.
     """
-    from kubernetes import client, config
 
     try:
         config.load_incluster_config()
@@ -503,31 +507,18 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
         config.load_kube_config()
 
     v1 = client.CoreV1Api()
-    namespace = os.environ.get("AGENT_NAMESPACE", "cattle-ai-agent-system")
-    secret = v1.read_namespaced_secret(secret_name, namespace)
+    secret = v1.read_namespaced_secret(secret_name, AGENT_NAMESPACE)
 
     if not secret.data:
         raise RuntimeError(
-            f"OAuth secret '{secret_name}' in namespace '{namespace}' is empty."
+            f"OAuth secret '{secret_name}' in namespace '{AGENT_NAMESPACE}' is empty."
         )
 
-    # Support both camelCase (CRD convention) and snake_case (legacy)
-    raw = secret.data
-    id_key = next((k for k in ('clientId', 'client_id') if k in raw), None)
-    if not id_key:
-        raise RuntimeError(
-            f"OAuth secret '{secret_name}' in namespace '{namespace}' "
-            "must contain a 'clientId' key."
-        )
-
-    client_id = base64.b64decode(raw[id_key]).decode('utf-8')
-    client_secret = ""
-    secret_key = next((k for k in ('clientSecret', 'client_secret') if k in raw), None)
-    if secret_key:
-        client_secret = base64.b64decode(raw[secret_key]).decode('utf-8')
-
-    scopes = ""
-    if 'scopes' in raw:
-        scopes = base64.b64decode(raw['scopes']).decode('utf-8').strip()
+    if "clientId" in secret.data:
+        client_id = base64.b64decode(secret.data["clientId"]).decode('utf-8')
+    if "clientSecret" in secret.data:
+        client_secret = base64.b64decode(secret.data["clientSecret"]).decode('utf-8')
+    if 'scopes' in secret.data:
+        scopes = base64.b64decode(secret.data['scopes']).decode('utf-8').strip()
 
     return OAuthClientCredentials(client_id=client_id, client_secret=client_secret, scopes=scopes)

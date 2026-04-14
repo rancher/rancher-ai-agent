@@ -60,6 +60,7 @@ spec:
                 - RANCHER
                 - NONE
                 - BASIC
+                - HEADER
                 type: string
               builtIn:
                 description: BuiltIn indicates if this is a built-in agent configuration

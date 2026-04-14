@@ -23,6 +23,14 @@ namespacedRules:
       verbs:
         - get
     - apiGroups:
+        - ''
+      resourceNames:
+        - rancher-ai-ui
+      resources:
+        - configmaps
+      verbs:
+        - get
+    - apiGroups:
         - apps
       resources:
         - deployments

@@ -70,6 +70,19 @@ def ui_tool_to_langchain_tool(ui_tool: UITool) -> Tool:
         field_description = field_schema.get('description', '')
         is_required = field_schema.get('required', False)
         
+        # Patch ui_tool description for enum fields
+        is_enum = field_type == 'string' and 'enum' in field_schema
+        if is_enum:       
+            # Get enum description from metadata if available
+            enum_fields = ui_tool.metadata.get('enum', {}).get(field_name) if ui_tool.metadata else None
+            if enum_fields and isinstance(enum_fields, dict):
+                field_description += " Options:"
+                for enum_name, enum_schema in enum_fields.items():
+                    requires = enum_schema.get('requires')
+                    requires_description = f" - requires: {requires}" if requires else ""
+                    field_description += f" '{enum_name}' ({enum_schema.get('description', '')}{requires_description}),"
+                field_description += ". ONLY these options are valid for this field. DO NOT allow any values other than these."
+        
         # Create Field with description and default if not required
         if is_required:
             field_definitions[field_name] = (python_type, Field(..., description=field_description))
@@ -113,39 +126,61 @@ class UIToolsSelector:
         self.llm = llm
         self.registry = get_ui_tools_registry()
         
+        self.max_tools = max_tools if max_tools > 0 else None
+        
         # Merge system_prompt with default if both are provided
         default_prompt = self._get_default_system_prompt()
         if system_prompt and system_prompt.strip():
             self.system_prompt = f"{system_prompt}\n\n{default_prompt}"
         else:
             self.system_prompt = default_prompt
-        
-        self.max_tools = max_tools if max_tools > 0 else None  # None means unlimited
     
     def _get_default_system_prompt(self) -> str:
         """Get the default system prompt for the selector"""
-        return """You are a UI component selector. Your role is to analyze the current response 
+        prompt = """You are a UI component selector. Your role is to analyze the current response 
 and select the most appropriate UI tools from the available list to enhance the user experience.
 
+GENERAL GUIDELINES:
+
 When selecting UI tools:
-- Analyze the context and the information being presented
+- Analyze the content and the mcp response (if available) to understand what information is being presented and what the user might need to interact with it effectively
 - Choose tools that will best visualize or present the information
 - You can recommend multiple tools if they complement each other
-- Match the complexity of the tool to the task"""
-    
+- Match the complexity of the tool to the task
+- If the assistant message contains additional requests for the user (e.g. "Please provide more details / cluster name / namespace, etc."), prioritize tools that enable that interaction and DO NOT provide tools that anticipate information that the assistant is explicitly asking the user to provide in follow-up messages.
+  - For example, if the assistant message is "Please provide the cluster name to view more details", do NOT provide a show YAML tool that shows a resource YAML content
+
+IMPORTANT RULES:
+
+Some tools are designed for specific resource requests (e.g. a tool for viewing a single Kubernetes resource) vs other tools are designed for viewing lists of resources.
+  - When the user asks for a list of resources or the assistant message presents a list of resources, DO NOT create individual tool calls for each resource.
+    - For example, if the user message is "Show me the pods in the cluster", do NOT create a separate tool call for each pod. Instead, provide a single tool that can help the user to display the list of pods and their details.
+    - For example, if the assistant message is "Here are the pods in the cluster: pod1, pod2, pod3", do NOT create 3 separate tool calls for each pod. Instead, provide a single tool that can help to display the list of pods and their details.
+  - When the user specifically asks for a single resource or the assistant message presents information about a single resource, it is appropriate to create a tool call for that specific resource.
+    - For example, if the user message is "Show me the details of pod1", it is appropriate to create a tool call for pod1 that shows its YAML or details.
+When passing YAML content to UI tools:
+  - Maintain proper indentation and line breaks from the original YAML
+  - Do not convert YAML to JSON or any other format
+  - Do not modify or re-indent the YAML content"""
+  
+        if self.max_tools:
+            prompt += f"\n\nIMPORTANT LIMIT: You can select at most {self.max_tools} different UI tool(s) by unique name (you may call the same tool with different parameters). If more are appropriate, select only the {self.max_tools} most important unique tool(s)."
+            
+        return prompt
+
     def select_tools(
         self,
         context: str,  # Current response/context from agent
+        mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
         available_tools: Optional[List[UITool]] = None,
-        conversation_context: Optional[str] = None,
     ) -> List[UIToolCall]:
         """
         Use any LLM to select appropriate UI tools using bind_tools for structured output.
         
         Args:
             context: The response/context to enhance with UI tools
+            mcp_response: Raw MCP response if available for better tool selection
             available_tools: List of available tools (uses all if not specified)
-            conversation_context: Additional context for selection
             
         Returns:
             List of recommended UI tool calls
@@ -162,25 +197,14 @@ When selecting UI tools:
             llm_with_tools = self.llm.bind_tools(langchain_tools)
             
             logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in available_tools]}")
-
-            # Build the prompt
-            max_tools_instruction = ""
-            if self.max_tools:
-                max_tools_instruction = f"\n\nIMPORTANT LIMIT: You can select at most {self.max_tools} different UI tool(s) by unique name (you may call the same tool with different parameters). If more are appropriate, select only the {self.max_tools} most important unique tool(s)."
             
-            yaml_preservation_instruction = """\n\nIMPORTANT: When passing YAML content to UI tools:
-- Maintain proper indentation and line breaks from the original YAML
-- Do not convert YAML to JSON or any other format
-- Do not modify or re-indent the YAML content"""
-            
-            prompt_text = f"""Analyze this context and select appropriate UI tools to enhance the response.
+            # Build the prompt with context and MCP response if available            
+            prompt_text = f"""Analyze this context + mcp response (if available) and select appropriate UI tools to enhance the response.
 
 CONTEXT:
 {context}
 
-{f'CONVERSATION CONTEXT:{chr(10)}{conversation_context}' if conversation_context else ''}
-
-Based on the context, invoke the most appropriate UI tools to enhance this response.{yaml_preservation_instruction}{max_tools_instruction}
+{f'MCP RESPONSE:{chr(10)}{mcp_response}' if mcp_response else ''}
 
 If no tools are appropriate, do not invoke any tools."""
             

@@ -4,8 +4,9 @@ Base agent builder with shared logic for all agent types.
 
 import json
 import logging
-from typing import Optional
+from langchain.messages import AIMessage
 import langgraph.types
+import yaml
 
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -172,61 +173,73 @@ class BaseAgentBuilder:
                 logging.debug("No UI tools available after filtering, skipping ui tools dispatch")
                 return
             
-            # Get the last assistant message (the response to enhance)
+            # Construct the context for tool selection: use {last user message, last assistant message, MCP responses}
             if not state.get("messages"):
                 logging.debug("No messages in state, skipping ui tools dispatch")
                 return
             
-            last_message = None
-            last_ai_message = None
-            
-            # Find the last message with content (could be from assistant, human, or system)
-            for msg in reversed(state["messages"]):
-                if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content.strip():
-                    last_message = msg.content
+            # Messages are collected in reverse order to get the most recent user and assistant messages, and any MCP responses from tool calls
+            request_id = config["configurable"]["request_id"]
+            user_message = ''
+            ai_message = ''
+            mcp_response = ''
+            for msg in reversed(state["messages"][-10:]):
+                additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
+
+                # Only consider messages from the current request context
+                if request_id != additional_kwargs.get("request_id", ""):
                     break
-                # Also track last AI message even if it's just tool calls
-                if not last_ai_message and type(msg).__name__ == "AIMessage":
-                    last_ai_message = msg
-            
-            # If no message with content, fall back to using the conversation context
-            if not last_message:
-                logging.debug("No message with content found, using conversation context for UI tools selection")
-                if last_ai_message:
-                    # Use tool names from the tool calls as context
-                    if hasattr(last_ai_message, "tool_calls") and last_ai_message.tool_calls:
-                        tool_names = [tc.get("name", "unknown") for tc in last_ai_message.tool_calls]
-                        last_message = f"Executing tools: {', '.join(tool_names)}"
-                    else:
-                        logging.debug("No tool calls or content in last AI message, skipping ui tools dispatch")
-                        return
-                else:
-                    logging.debug("No last AI message found, skipping ui tools dispatch")
-                    return
-            
-            # Get conversation context (last 5 messages)
-            conversation_context = ""
-            for msg in state["messages"][-5:]:
-                if hasattr(msg, "content") and isinstance(msg.content, str):
+
+                # Message are collected, skip
+                if user_message and ai_message and mcp_response:
+                    break
+
+                if hasattr(msg, "text") and isinstance(msg.text, str):
                     role = type(msg).__name__
-                    conversation_context += f"\n{role}: {msg.content}"
-                
-                # Include MCP response data if present (from tool execution)
-                if hasattr(msg, "additional_kwargs"):
-                    additional_kwargs = msg.additional_kwargs
-                    if "mcp_response" in additional_kwargs:
-                        mcp_response = additional_kwargs["mcp_response"]
-                        conversation_context += f"\n[MCP Response]: {mcp_response}"
-            
-            # Select UI tools for this response
-            logging.debug(f"Selecting UI tools with {len(filtered_tools)} available tools")
-            logging.debug(f"LLM context includes: last_message={bool(last_message)}, conversation_context_length={len(conversation_context)}, includes_mcp={'[MCP Response]' in conversation_context}")
-            
+
+                    if isinstance(msg, HumanMessage) and not user_message:
+                        if "request_metadata" in additional_kwargs:
+                            request_metadata = additional_kwargs["request_metadata"]
+                            user_input = request_metadata.get("user_input", "")
+                            context = request_metadata.get("context", {})
+                            user_message += f"\n[{role}]: {user_input} - ui context: {context}"
+                        if not user_message:
+                            user_message += f"\n[{role}]: {msg.text}"
+                    elif isinstance(msg, AIMessage) and not ai_message:
+                        ai_message += f"\n[{role}]: {msg.text}"
+                    elif isinstance(msg, ToolMessage) and not mcp_response:
+                        content = msg.content
+                        try:
+                            parsed = json.loads(content)
+                            # Handle both single objects and arrays of objects
+                            if isinstance(parsed, list):
+                                # Convert array of objects to YAML with document separators
+                                yaml_parts = []
+                                for item in parsed:
+                                    yaml_parts.append(yaml.dump(item, default_flow_style=False, sort_keys=False))
+                                content = "---\n".join(yaml_parts)
+                                logging.debug(f"Converted ToolMessage array content to YAML format ({len(parsed)} items)")
+                            elif isinstance(parsed, dict):
+                                # Convert single object to YAML
+                                content = yaml.dump(parsed, default_flow_style=False, sort_keys=False)
+                                logging.debug(f"Converted ToolMessage dict content to YAML format")
+                        except (json.JSONDecodeError, TypeError):
+                            # If not valid JSON, use original content
+                            pass
+                        
+                        mcp_response += f"\n[MCP data]: {content}"
+                        
+                        # Include MCP response data if present (from tool execution)
+                        if hasattr(msg, "additional_kwargs"):
+                            additional_kwargs = msg.additional_kwargs
+                            if "mcp_response" in additional_kwargs:
+                                mcp_response += f"\n[MCP Response]: {additional_kwargs["mcp_response"].strip('<mcp-response></mcp-response>')}"
+
             # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(
-                context=last_message,
+                context=user_message + ai_message,
+                mcp_response=mcp_response,
                 available_tools=filtered_tools,
-                conversation_context=conversation_context,
             )
             
             # Dispatch custom event with all tools

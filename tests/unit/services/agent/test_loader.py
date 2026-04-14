@@ -14,7 +14,7 @@ from app.services.agent.loader import (
     NAMESPACE,
 )
 
-from app.services.agent.loader import get_basic_auth_credentials, NAMESPACE
+from app.services.agent.loader import get_basic_auth_credentials, get_header_auth_headers, NAMESPACE
 
 
 # ============================================================================
@@ -332,3 +332,69 @@ def test_update_ignores_enabled_field_change():
     # enabled change must not cause any patch or create
     mock_api.patch_namespaced_custom_object.assert_not_called()
     mock_api.create_namespaced_custom_object.assert_not_called()
+
+
+# ============================================================================
+# get_header_auth_headers Tests
+# ============================================================================
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_header_auth_headers_success(mock_k8s_client, mock_config):
+    """Verify get_header_auth_headers successfully retrieves and decodes headers."""
+    secret_name = "my-headers-secret"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        'X-Api-Key': base64.b64encode(b'my-api-key').decode('utf-8'),
+        'Authorization': base64.b64encode(b'Bearer tok123').decode('utf-8'),
+    }
+    mock_v1.read_namespaced_secret.return_value = mock_secret
+
+    result = get_header_auth_headers(secret_name)
+
+    assert result == {
+        'X-Api-Key': 'my-api-key',
+        'Authorization': 'Bearer tok123',
+    }
+    mock_v1.read_namespaced_secret.assert_called_once_with(secret_name, NAMESPACE)
+
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_header_auth_headers_empty_secret(mock_k8s_client, mock_config):
+    """Verify get_header_auth_headers raises RuntimeError for empty secret."""
+    secret_name = "empty-secret"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_secret = MagicMock()
+    mock_secret.data = None
+    mock_v1.read_namespaced_secret.return_value = mock_secret
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_header_auth_headers(secret_name)
+
+    assert f"Authentication secret '{secret_name}'" in str(exc_info.value)
+    assert "is empty" in str(exc_info.value)
+
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_header_auth_headers_api_exception(mock_k8s_client, mock_config):
+    """Verify get_header_auth_headers propagates ApiException from Kubernetes."""
+    secret_name = "nonexistent-secret"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_v1.read_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
+
+    with pytest.raises(ApiException) as exc_info:
+        get_header_auth_headers(secret_name)
+
+    assert exc_info.value.status == 404

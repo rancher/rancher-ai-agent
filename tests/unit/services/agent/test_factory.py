@@ -548,3 +548,31 @@ async def test_create_single_agent_filters_tools_by_toolset(mock_update_status, 
     filtered_tools = mock_create_root.call_args[0][1]
     assert len(filtered_tools) == 1
     assert filtered_tools[0].name == "matching_tool"
+
+
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.get_header_auth_headers')
+def test_create_mcp_client_header_auth(mock_get_headers, mock_mcp_client):
+    """Verify create_mcp_client handles header authentication."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.HEADER
+    mock_config.mcp_url = "http://test:8080"
+    mock_config.authentication_secret = "my-headers-secret"
+
+    mock_get_headers.return_value = {
+        "X-Api-Key": "my-api-key",
+        "Authorization": "Bearer tok123",
+    }
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    result = create_mcp_client(mock_config)
+
+    assert result == mock_client_instance
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["url"] == "http://test:8080"
+    assert call_args["TestAgent"]["headers"]["X-Api-Key"] == "my-api-key"
+    assert call_args["TestAgent"]["headers"]["Authorization"] == "Bearer tok123"
+    mock_get_headers.assert_called_once_with("my-headers-secret")

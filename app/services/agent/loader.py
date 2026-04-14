@@ -21,6 +21,7 @@ class AuthenticationType(str, Enum):
     NONE = "NONE"
     RANCHER = "RANCHER"
     BASIC = "BASIC"
+    HEADER = "HEADER"
 
 
 class ToolActionType(str, Enum):
@@ -274,6 +275,38 @@ def get_basic_auth_credentials(secret_name: str) -> str:
     credentials = base64.b64encode(f"{username}:{password}".encode('utf-8')).decode('utf-8')
     return credentials
 
+
+def get_header_auth_headers(secret_name: str) -> dict[str, str]:
+    """
+    Retrieve custom headers from a Kubernetes secret.
+
+    Each key in the secret is used as a header name and its decoded value
+    as the header value.
+
+    Args:
+        secret_name: Name of the Opaque secret containing header key-value pairs.
+
+    Returns:
+        dict[str, str]: Mapping of header names to their values.
+    """
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    v1 = client.CoreV1Api()
+    secret = v1.read_namespaced_secret(secret_name, NAMESPACE)
+
+    if not secret.data:
+        raise RuntimeError(
+            f"Authentication secret '{secret_name}' in namespace '{NAMESPACE}' is empty"
+        )
+
+    headers = {}
+    for key, value in secret.data.items():
+        headers[key] = base64.b64decode(value).decode('utf-8')
+
+    return headers
 
 
 def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:

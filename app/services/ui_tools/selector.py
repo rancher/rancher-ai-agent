@@ -143,7 +143,7 @@ and select the most appropriate UI tools from the available list to enhance the 
 GENERAL GUIDELINES:
 
 When selecting UI tools:
-- Analyze the content and the mcp response (if available) to understand what information is being presented and what the user might need to interact with it effectively
+- Analyze the context and the mcp response (if available) to understand what information is being presented and what the user might need to interact with it effectively
 - Choose tools that will best visualize or present the information
 - You can recommend multiple tools if they complement each other
 - Match the complexity of the tool to the task

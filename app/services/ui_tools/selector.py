@@ -148,7 +148,7 @@ CORE RULES:
 2. MULTIPLE RESOURCES context (e.g., 'list of pods', 'show all deployments'): Use tools marked for lists/collections, NOT single-resource tools
 3. DETECTION: If tempted to call the same tool 2+ times with different resource names → you're in a list scenario, use a list tool instead
 4. YAML CONTENT HANDLING (CRITICAL): When passing YAML to UI tools, you MUST:
-   - YAML content MUST be fetched from the context or MCP response - NEVER make the LLM generate YAML on its own, it will be error-prone and break the UI
+   - YAML content MUST be fetched from the context or [MCP result payloads] - NEVER make the LLM generate YAML on its own, it will be error-prone and break the UI
    - Preserve EXACT indentation and line breaks from the original YAML
    - Keep all whitespace exactly as it appears
    - Do NOT convert YAML to JSON, TOML, or any other format
@@ -176,9 +176,9 @@ CORE RULES:
    - Avoid underfitting: don't use basic tools when the task demands comprehensive visualization or advanced capabilities
 
 6. RESPECT EXPLICIT USER INTERACTION FLOWS: If the assistant message explicitly requests user input (e.g., 'Please provide the cluster name...', 'Please specify the namespace...', 'Need more details about...'):
+   - DO use tools that facilatate or offers assistance in providing the requested information (e.g., search/discovery tools, input forms, selection inputs, guided wizards)
    - DO NOT provide tools that would bypass or anticipate this requested information
-   - DO NOT use tools that assume/guess the missing details the assistant is asking for
-   - Instead, either select NO tools (let the conversation flow naturally) OR select tools that HELP users provide the requested info
+
    
    EXAMPLE - DON'T DO THIS:
      ✗ Assistant says: 'Please provide the cluster name to show more details'

@@ -182,7 +182,7 @@ class BaseAgentBuilder:
             request_id = config["configurable"]["request_id"]
             user_message = ''
             ai_message = ''
-            mcp_response = ''
+            mcp_data = ''
             for msg in reversed(state["messages"][-10:]):
                 additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
 
@@ -191,7 +191,7 @@ class BaseAgentBuilder:
                     break
 
                 # Message are collected, skip
-                if user_message and ai_message and mcp_response:
+                if user_message and ai_message and mcp_data:
                     break
 
                 if hasattr(msg, "text") and isinstance(msg.text, str):
@@ -207,7 +207,9 @@ class BaseAgentBuilder:
                             user_message += f"\n[{role}]: {msg.text}"
                     elif isinstance(msg, AIMessage) and not ai_message:
                         ai_message += f"\n[{role}]: {msg.text}"
-                    elif isinstance(msg, ToolMessage) and not mcp_response:
+                    
+                    # Collect the mcp result's payloads
+                    elif isinstance(msg, ToolMessage) and not mcp_data:
                         content = msg.content
                         try:
                             parsed = json.loads(content)
@@ -227,18 +229,26 @@ class BaseAgentBuilder:
                             # If not valid JSON, use original content
                             pass
                         
-                        mcp_response += f"\n[MCP data]: {content}"
+                        mcp_data += f"\n[MCP result payloads]: {content}"
+            
+            # Collect the resorces from all MCP responses in the messages, if any, to provide more context for tool selection
+            mcp_response = ''
+            for msg in reversed(state["messages"]):
+                additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
+                
+                # Include MCP response data if present (from tool execution)
+                if hasattr(msg, "additional_kwargs"):
+                    additional_kwargs = msg.additional_kwargs
+                    if "mcp_response" in additional_kwargs:
+                        mcp_response += f"\n{additional_kwargs["mcp_response"].strip('<mcp-response></mcp-response>')}"
                         
-                        # Include MCP response data if present (from tool execution)
-                        if hasattr(msg, "additional_kwargs"):
-                            additional_kwargs = msg.additional_kwargs
-                            if "mcp_response" in additional_kwargs:
-                                mcp_response += f"\n[MCP Response]: {additional_kwargs["mcp_response"].strip('<mcp-response></mcp-response>')}"
+            if mcp_response:
+                mcp_response = '\n[MCP result resources]: ' + mcp_response
 
             # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(
                 context=user_message + ai_message,
-                mcp_response=mcp_response,
+                mcp_response=mcp_response + mcp_data,
                 available_tools=filtered_tools,
             )
             

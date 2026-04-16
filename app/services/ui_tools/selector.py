@@ -11,6 +11,7 @@ from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.tools import Tool
 from pydantic import create_model, Field
 
+from ..agent.loader import AgentConfig
 from .registry import UITool, UIToolCall, get_ui_tools_registry
 
 
@@ -198,6 +199,7 @@ Each tool's description explains its scope. Follow it strictly."""
 
     def select_tools(
         self,
+        agent_config: AgentConfig, # The agent used to permorm the user request, used to scope tool selection and for better prompt guidance
         context: str,  # Current response/context from agent
         mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
         available_tools: Optional[List[UITool]] = None,
@@ -206,6 +208,7 @@ Each tool's description explains its scope. Follow it strictly."""
         Use any LLM to select appropriate UI tools using bind_tools for structured output.
         
         Args:
+            agent_config: The agent configuration using this selector
             context: The response/context to enhance with UI tools
             mcp_response: Raw MCP response if available for better tool selection
             available_tools: List of available tools (uses all if not specified)
@@ -228,6 +231,8 @@ Each tool's description explains its scope. Follow it strictly."""
             
             # Build the prompt with context and MCP response if available            
             prompt_text = f"""Analyze this context + mcp response (if available) and select appropriate UI tools to enhance the response.
+
+SELECTED AGENT: name: {agent_config.displayName}, description: "{agent_config.description}"
 
 CONTEXT:
 {context}

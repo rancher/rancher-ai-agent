@@ -173,11 +173,19 @@ class BaseAgentBuilder:
                 logging.debug("No UI tools available after filtering, skipping ui tools dispatch")
                 return
             
-            # Construct the context for tool selection: use {last user message, last assistant message, MCP responses}
             if not state.get("messages"):
                 logging.debug("No messages in state, skipping ui tools dispatch")
                 return
             
+            # Get the selected agent context
+            selected_agent = state.get("selected_agent", {}).get("name", "")
+            agent_config = None
+            for child in self.child_agents:
+                if child.config.name == selected_agent:
+                    agent_config = child.config
+                    break
+
+            # Construct the context for tool selection using the most recent messages and MCP response if available
             # Messages are collected in reverse order to get the most recent user and assistant messages, and any MCP responses from tool calls
             request_id = config["configurable"]["request_id"]
             user_message = ''
@@ -247,6 +255,7 @@ class BaseAgentBuilder:
 
             # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(
+                agent_config=agent_config,
                 context=user_message + ai_message,
                 mcp_response=mcp_response + mcp_data,
                 available_tools=filtered_tools,

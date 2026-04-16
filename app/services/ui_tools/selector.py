@@ -129,14 +129,9 @@ class UIToolsSelector:
         
         self.max_tools = max_tools if max_tools > 0 else None
         
-        # Merge system_prompt with default if both are provided
-        default_prompt = self._get_default_system_prompt()
-        if system_prompt and system_prompt.strip():
-            self.system_prompt = f"{system_prompt}\n\n{default_prompt}"
-        else:
-            self.system_prompt = default_prompt
+        self._build_system_prompt(system_prompt)
     
-    def _get_default_system_prompt(self) -> str:
+    def _build_default_system_prompt(self) -> str:
         """Get the default system prompt for the selector"""
         prompt = """You are a UI component selector. Your role is to select appropriate UI tools to enhance responses.
 
@@ -190,12 +185,47 @@ CORE RULES:
      ✓ You either: provide NO tools (let user respond naturally)
      ✓ Or provide: a search/discovery tool to help them find and specify the cluster name
 
+7. REAL VALUES ONLY - NEVER PLACEHOLDER TEXT (CRITICAL): When calling ANY tool with parameters:
+   - EVERY parameter value MUST be extracted from the context, MCP results, or assistant message
+   - NEVER use placeholder values like 'option1', 'option2', 'option3', 'name1', 'value1', 'resource'
+   - NEVER use template defaults, field descriptions, or generic text as actual values
+   
+   EXAMPLE - DON'T DO THIS:
+     ✗ Assistant asks: 'Which pod do you want to debug?'
+     ✗ You call the tool with: 'option1', 'option2', 'option3'
+   
+   EXAMPLE - DO THIS:
+     ✓ Assistant asks: 'Which pod do you want to debug?'
+     ✓ From MCP data, you have: pods=['nginx-pod', 'web-server-pod', 'api-pod']
+     ✓ You call the tool with: 'nginx-pod', 'web-server-pod', 'api-pod'
+
 Each tool's description explains its scope. Follow it strictly."""
   
         if self.max_tools:
             prompt += f"\n\nIMPORTANT LIMIT: You can select at most {self.max_tools} different UI tool(s) by unique name (you may call the same tool with different parameters). If more are appropriate, select only the {self.max_tools} most important unique tool(s)."
             
         return prompt
+    
+    def _build_system_prompt(self, system_prompt: str) -> str:
+        """Get the system prompt for the selector, merging default guidance with any custom prompt provided"""
+        default_prompt = self._build_default_system_prompt()
+        if system_prompt and system_prompt.strip():
+            self.system_prompt = f"{system_prompt}\n\n{default_prompt}"
+        else:
+            self.system_prompt = default_prompt
+            
+    def _build_text_prompt(self, agent_config: AgentConfig, context: str, mcp_response: Optional[str]) -> str:
+        """Build the text prompt for the LLM based on the agent context and MCP response if available"""
+        return f"""Analyze this CONTEXT + MCP RESPONSE (if available) + the SELECTED AGENT used to perform the task, and select appropriate UI tools to enhance the response.
+
+SELECTED AGENT: name: {agent_config.displayName}, description: "{agent_config.description}"
+
+CONTEXT:
+{context}
+
+{f'MCP RESPONSE:{chr(10)}{mcp_response}' if mcp_response else ''}
+
+If no tools are appropriate, do not invoke any tools."""
 
     def select_tools(
         self,
@@ -229,19 +259,10 @@ Each tool's description explains its scope. Follow it strictly."""
             
             logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in available_tools]}")
             
-            # Build the prompt with context and MCP response if available            
-            prompt_text = f"""Analyze this context + mcp response (if available) and select appropriate UI tools to enhance the response.
-
-SELECTED AGENT: name: {agent_config.displayName}, description: "{agent_config.description}"
-
-CONTEXT:
-{context}
-
-{f'MCP RESPONSE:{chr(10)}{mcp_response}' if mcp_response else ''}
-
-If no tools are appropriate, do not invoke any tools."""
+            # Build the prompt with the agent, context and MCP response if available            
+            text_prompt = self._build_text_prompt(agent_config, context, mcp_response)
             
-            user_msg = HumanMessage(content=prompt_text)
+            user_msg = HumanMessage(content=text_prompt)
             system_msg = SystemMessage(content=self.system_prompt)
             
             # Call the LLM with bound tools

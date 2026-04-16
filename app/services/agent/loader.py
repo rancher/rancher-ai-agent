@@ -69,17 +69,7 @@ When a tool requires parameters (e.g., `collectResources` requiring a GitRepo na
 
 ## RESPONSE FORMAT
 * **Summary First:** Start with a high-level status of the Fleet environment (e.g., "3 GitRepos are Active, 1 is in an Error state").
-* **Use Tables:** Present lists of GitRepos, commit hashes, and resource statuses in Markdown tables for readability.
-
-## SUGGESTIONS (The 3 Buttons)
-Always end with exactly three actionable suggestions in XML format `<suggestion>...</suggestion>`.
-**Example Scenarios:**
-* *Context: GitRepos listed successfully*
-`<suggestion>Troubleshoot failing resources</suggestion><suggestion>Check status of a specific repo</suggestion><suggestion>Show workspace overview</suggestion>`
-* *Context: Troubleshooting a specific GitRepo*
-`<suggestion>List all GitRepos</suggestion><suggestion>Analyze another repository</suggestion><suggestion>Explain Fleet resource states</suggestion>`
-* *Context: Errors found in collectResources*
-`<suggestion>Retry resource collection</suggestion><suggestion>List GitRepos in workspace</suggestion><suggestion>View deployment logs</suggestion>`"""
+* **Use Tables:** Present lists of GitRepos, commit hashes, and resource statuses in Markdown tables for readability."""
 
 
 PROVISIONING_DESCRIPTION= """This agent specializes in Kubernetes cluster lifecycle management, focusing on provisioning, detailed configuration analysis, and resource management within Rancher-managed environments. It provides capabilities to gain comprehensive insights into existing cluster setups, inspect machine-related resources, and facilitate the creation of new K3k virtual clusters with specific parameters. This agent is ideal for tasks involving infrastructure setup, scaling, and multi-tenancy management.
@@ -124,18 +114,7 @@ PROVISIONING_SYSTEM_PROMPT = """You are the SUSE Provisioning Specialist, a spec
 
     ## RESPONSE FORMAT
     * **Summary First:** Start with a high-level status or an overview of the analysis.
-    * **Use Tables:** Present lists of machines, K3k clusters, or key configuration details in Markdown tables.
-
-    ## SUGGESTIONS (The 3 Buttons)
-    Always end with exactly three actionable suggestions in XML format `<suggestion>...</suggestion>`.
-
-    **Example Scenarios:**
-    * *Context: Cluster analysis completed*
-        `<suggestion>Analyze machine configurations</suggestion><suggestion>List all K3k clusters</suggestion><suggestion>Create a new K3k cluster</suggestion>`
-    * *Context: Listing K3k clusters*
-        `<suggestion>Create a new K3k cluster</suggestion><suggestion>Get details of a specific K3k cluster</suggestion><suggestion>Analyze a downstream cluster</suggestion>`
-    * *Context: Proposed K3k cluster creation parameters*
-        `<suggestion>Confirm creation</suggestion><suggestion>Modify version</suggestion><suggestion>Adjust node counts</suggestion>`"""
+    * **Use Tables:** Present lists of machines, K3k clusters, or key configuration details in Markdown tables."""
 
 RANCHER_DESCRIPTION = """This agent specializes in **Kubernetes cluster operations and Rancher resource lifecycle management**, focusing on retrieving and creating cluster resources, exploring node and workload resource usage, troubleshooting pod issues, and managing Rancher projects. It provides clear, confident, and safe guidance on day-to-day cluster operations within the Rancher environment. This agent is ideal for tasks involving resource inspection, workload health analysis, and project administration.
 
@@ -200,12 +179,6 @@ Summarize first: Provide a clear, human-readable overview of the resource's stat
 The output should always be provided in Markdown format.
 
 - Be concise: No unnecessary conversational fluff.  
-- Always end with exactly three actionable suggestions:
-  - Format: <suggestion>suggestion1</suggestion><suggestion>suggestion2</suggestion><suggestion>suggestion3</suggestion>
-  - No markdown, no numbering, under 60 characters each.
-  - The first two suggestions must be directly relevant to the current context. If none fallback to the next rule.
-  - The third suggestion should be a 'discovery' action. It introduces a related but broader Rancher or Kubernetes topic, helping the user learn.
-Examples: <suggestion>How do I scale a deployment?</suggestion><suggestion>Check the resource usage for this cluster</suggestion><suggestion>Show me the logs for the failing pod</suggestion>
 """
 
 

@@ -203,18 +203,16 @@ class BaseAgentBuilder:
                     break
 
                 if hasattr(msg, "text") and isinstance(msg.text, str):
-                    role = type(msg).__name__
-
                     if isinstance(msg, HumanMessage) and not user_message:
                         if "request_metadata" in additional_kwargs:
                             request_metadata = additional_kwargs["request_metadata"]
                             user_input = request_metadata.get("user_input", "")
                             context = request_metadata.get("context", {})
-                            user_message += f"\n[{role}]: {user_input} - ui context: {context}"
+                            user_message += f"\n[User Message]: {user_input} - ui context: {context}"
                         if not user_message:
-                            user_message += f"\n[{role}]: {msg.text}"
+                            user_message += f"\n[User Message]: {msg.text}"
                     elif isinstance(msg, AIMessage) and not ai_message:
-                        ai_message += f"\n[{role}]: {msg.text}"
+                        ai_message += f"\n[Assistant Message]: {msg.text}"
                     
                     # Collect the mcp result's payloads
                     elif isinstance(msg, ToolMessage) and not mcp_data:
@@ -248,7 +246,7 @@ class BaseAgentBuilder:
                 if hasattr(msg, "additional_kwargs"):
                     additional_kwargs = msg.additional_kwargs
                     if "mcp_response" in additional_kwargs:
-                        mcp_response += f"\n{additional_kwargs["mcp_response"].strip('<mcp-response></mcp-response>')}"
+                        mcp_response += f"\n{additional_kwargs['mcp_response'].strip('<mcp-response></mcp-response>')}"
                         
             if mcp_response:
                 mcp_response = '\n[MCP result resources]: ' + mcp_response

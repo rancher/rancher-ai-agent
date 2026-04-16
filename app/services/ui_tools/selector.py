@@ -350,7 +350,10 @@ If no tools are appropriate, do not invoke any tools."""
         
         if schema and hasattr(schema, 'properties'):
             properties = schema.properties
-            
+
+            # Get all string values
+            str_values = []
+
             # Check each property for required flag
             for field_name, field_schema in properties.items():
                 # Check if this field is marked as required
@@ -364,7 +367,37 @@ If no tools are appropriate, do not invoke any tools."""
                     elif call.input[field_name] == "" or call.input[field_name] is None:
                         logging.warning(f"UI tool call '{call.tool_name}' has empty required field: {field_name}")
                         return False
-        
+
+                # Collect string values for placeholder detection
+                if field_name in call.input:
+                    value = call.input[field_name]
+                    if isinstance(value, str):
+                        str_values.append(value)
+
+            # Placeholder detection
+            known_placeholders = ['option', 'name', 'value', 'item', 'element', 'placeholder', 'field']
+
+            # Remove FINAL DIGIT from each value
+            normalized_values = []
+            for value in str_values:
+                # Remove last character if it's a digit
+                if value and value[-1].isdigit():
+                    normalized = value[:-1].lower().strip()
+                else:
+                    normalized = value.lower().strip()
+                normalized_values.append(normalized)
+
+            # Check if more than 1 option is a known placeholder
+            placeholder_count = sum(1 for norm_val in normalized_values if norm_val in known_placeholders)
+            if placeholder_count > 1:
+                logging.warning(f"UI tool call '{call.tool_name}' has {placeholder_count} placeholder patterns: '{', '.join(normalized_values)}' (rejecting)")
+                return False
+
+            # Check if 2 or more options are the same
+            if len(normalized_values) >= 2 and len(set(normalized_values)) < len(normalized_values):
+                logging.warning(f"UI tool call '{call.tool_name}' has duplicate values after removing final digit: '{', '.join(set(normalized_values))}' (rejecting)")
+                return False
+
         return True
 
     def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall], available_tools: List[UITool]) -> list:

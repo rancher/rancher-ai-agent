@@ -2,6 +2,8 @@
 
 import logging
 import base64
+import os
+import urllib3
 
 from enum import Enum
 from typing import List, Optional
@@ -231,15 +233,23 @@ class AgentConfig(BaseModel):
     ready: bool = False
 
 
-def _init_k8s_client():
-    """Initialize Kubernetes client."""
+def _load_k8s_config():
+    """Load Kubernetes configuration, disabling SSL verification when INSECURE_SKIP_TLS is set."""
     try:
-        # Try in-cluster config first
         config.load_incluster_config()
     except config.ConfigException:
-        # Fall back to kubeconfig
         config.load_kube_config()
-    
+
+    if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == 'true':
+        configuration = client.Configuration.get_default_copy()
+        configuration.verify_ssl = False
+        client.Configuration.set_default(configuration)
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _init_k8s_client():
+    """Initialize Kubernetes client."""
+    _load_k8s_config()
     return client.CustomObjectsApi()
 
 
@@ -253,11 +263,7 @@ def get_basic_auth_credentials(secret_name: str) -> str:
     Returns:
         str: Base64-encoded credentials in the format "username:password".
     """
-    # Initialize Kubernetes client
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
+    _load_k8s_config()
     
     v1 = client.CoreV1Api()
     secret = v1.read_namespaced_secret(secret_name, NAMESPACE)
@@ -328,10 +334,7 @@ def get_ca_cert_from_secret(secret_name: str, key: str = "ca.crt") -> str:
     Returns:
         str: PEM-encoded CA certificate.
     """
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
+    _load_k8s_config()
 
     v1 = client.CoreV1Api()
     secret = v1.read_namespaced_secret(secret_name, NAMESPACE)

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client, config
 from .root import create_root_agent
-from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret
+from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from fastapi import  WebSocket
@@ -292,13 +292,7 @@ def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, me
         return
     
     try:
-        # Load in-cluster config (works when running in a pod)
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            # Fall back to kubeconfig (for local development)
-            config.load_kube_config()
-        
+        _load_k8s_config()
         api = client.CustomObjectsApi()
         
         status = {

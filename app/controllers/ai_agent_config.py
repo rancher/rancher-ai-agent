@@ -12,7 +12,7 @@ import kopf
 
 from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
-from ..services.agent.loader import AgentConfig
+from ..services.agent.loader import AgentConfig, CABundleRef
 from ..services.agent.factory import create_mcp_client
 
 
@@ -187,7 +187,8 @@ async def create_fn(spec, name, namespace, logger, patch, **kwargs):
         system_prompt=spec.get('systemPrompt', ''),
         mcp_url=spec.get('mcpURL', ''),
         authentication=spec.get('authenticationType', ''),
-        authentication_secret=spec.get('authenticationSecret', '')
+        authentication_secret=spec.get('authenticationSecret', ''),
+        ca_bundle_ref=CABundleRef(**spec["caBundleRef"]) if spec.get("caBundleRef") else None,
     )
     try:
         # Validate the configuration by testing MCP server connection

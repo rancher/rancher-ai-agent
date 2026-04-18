@@ -2,6 +2,7 @@ import os
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from kubernetes import client, config
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials
@@ -13,6 +14,15 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph.state import Checkpointer
 
 NAMESPACE = "cattle-ai-agent-system"
+
+
+def _make_insecure_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """httpx_client_factory that disables TLS certificate verification."""
+    return httpx.AsyncClient(headers=headers or {}, timeout=timeout, auth=auth, verify=False)
 
 
 class NoAgentAvailableError(Exception):
@@ -127,7 +137,7 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
     
     Note:
         - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
-        - Respects INSECURE_SKIP_TLS environment variable for HTTP/HTTPS selection
+        - Respects INSECURE_SKIP_TLS environment variable to disable TLS certificate verification
         - For BASIC authentication, encodes credentials in the Authorization header
         - For NONE authentication, creates client with no additional headers
     """
@@ -143,9 +153,7 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
             token = os.environ.get("RANCHER_API_TOKEN", "")
         
         mcp_url = os.environ.get("MCP_URL", agent_config.mcp_url)
-        if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == "true":
-            mcp_url = "http://" + mcp_url
-        else:
+        if not mcp_url.startswith(("http://", "https://")):
             mcp_url = "https://" + mcp_url
         headers = {
             "R_token": token,
@@ -164,12 +172,16 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
     else:
         mcp_url = agent_config.mcp_url
 
+    client_config: dict = {
+        "url": mcp_url,
+        "transport": "streamable_http",
+        "headers": headers,
+    }
+    if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == "true":
+        client_config["httpx_client_factory"] = _make_insecure_http_client
+
     return MultiServerMCPClient({
-        agent_config.name: {
-            "url": mcp_url,
-            "transport": "streamable_http",
-            "headers": headers,
-        },
+        agent_config.name: client_config,
     })
 
 

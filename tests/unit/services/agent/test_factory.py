@@ -407,7 +407,26 @@ def test_create_mcp_client_rancher_auth_with_websocket(mock_mcp_client):
 @patch('app.services.agent.factory.MultiServerMCPClient')
 @patch.dict(os.environ, {'INSECURE_SKIP_TLS': 'true', 'MCP_URL': 'mcp:8080'})
 def test_create_mcp_client_insecure(mock_mcp_client):
-    """Verify create_mcp_client respects INSECURE_SKIP_TLS."""
+    """Verify create_mcp_client respects INSECURE_SKIP_TLS by disabling TLS verification."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.RANCHER
+    mock_config.mcp_url = "mcp-service:8080"
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    result = create_mcp_client(mock_config)
+
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["url"] == "https://mcp:8080"
+    assert call_args["TestAgent"]["httpx_client_factory"] is not None
+
+
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch.dict(os.environ, {'INSECURE_SKIP_TLS': 'true', 'MCP_URL': 'https://mcp:8080'})
+def test_create_mcp_client_insecure_with_existing_scheme(mock_mcp_client):
+    """Verify create_mcp_client preserves an existing URL scheme."""
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.RANCHER
@@ -419,7 +438,8 @@ def test_create_mcp_client_insecure(mock_mcp_client):
     result = create_mcp_client(mock_config)
     
     call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"].startswith("http://")
+    assert call_args["TestAgent"]["url"] == "https://mcp:8080"
+    assert call_args["TestAgent"]["httpx_client_factory"] is not None
 
 
 @patch('app.services.agent.factory.MultiServerMCPClient')

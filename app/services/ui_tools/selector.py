@@ -13,7 +13,7 @@ from pydantic import create_model, Field
 
 from ..agent.loader import AgentConfig
 from .registry import UITool, UIToolCall, get_ui_tools_registry
-
+from .validator import create_ui_tools_validator
 
 def filter_tool(ui_tool: UITool, ui_tools_selectors: list[str]) -> bool:
     """
@@ -321,85 +321,6 @@ If no tools are appropriate, do not invoke any tools."""
         
         return ui_tool_calls
 
-    def _is_tool_call_valid(self, call: UIToolCall, available_tools: List[UITool]) -> bool:
-        """
-        Validates a single tool call against its schema.
-        
-        Args:
-            call: The tool call to validate
-            available_tools: List of available tools for schema lookup
-            
-        Returns:
-            True if the tool call is valid, False otherwise
-        """
-        # Sanity check: tool_name exists and is not empty
-        if not isinstance(call.tool_name, str) or not call.tool_name.strip():
-            logging.warning(f"Invalid/empty tool_name: {call.tool_name}")
-            return False
-        
-        # Sanity check: input is a dict
-        if call.input is None:
-            call.input = {}
-        elif not isinstance(call.input, dict):
-            logging.warning(f"UI tool call '{call.tool_name}' has non-dict input: {type(call.input)}")
-            return False
-        
-        # Schema validation: check for required fields and empty values
-        tool_schemas = {tool.name: tool.schema for tool in available_tools}
-        schema = tool_schemas.get(call.tool_name)
-        
-        if schema and hasattr(schema, 'properties'):
-            properties = schema.properties
-
-            # Get all string values
-            str_values = []
-
-            # Check each property for required flag
-            for field_name, field_schema in properties.items():
-                # Check if this field is marked as required
-                is_required = field_schema.get('required', False) if isinstance(field_schema, dict) else False
-                
-                if is_required:
-                    # Check if field is present and not empty
-                    if field_name not in call.input:
-                        logging.warning(f"UI tool call '{call.tool_name}' is missing required field: {field_name}")
-                        return False
-                    elif call.input[field_name] == "" or call.input[field_name] is None:
-                        logging.warning(f"UI tool call '{call.tool_name}' has empty required field: {field_name}")
-                        return False
-
-                # Collect string values for placeholder detection
-                if field_name in call.input:
-                    value = call.input[field_name]
-                    if isinstance(value, str):
-                        str_values.append(value)
-
-            # Placeholder detection
-            known_placeholders = ['option', 'name', 'value', 'item', 'element', 'placeholder', 'field']
-
-            # Remove FINAL DIGIT from each value
-            normalized_values = []
-            for value in str_values:
-                # Remove last character if it's a digit
-                if value and value[-1].isdigit():
-                    normalized = value[:-1].lower().strip()
-                else:
-                    normalized = value.lower().strip()
-                normalized_values.append(normalized)
-
-            # Check if more than 1 option is a known placeholder
-            placeholder_count = sum(1 for norm_val in normalized_values if norm_val in known_placeholders)
-            if placeholder_count > 1:
-                logging.warning(f"UI tool call '{call.tool_name}' has {placeholder_count} placeholder patterns: '{', '.join(normalized_values)}' (rejecting)")
-                return False
-
-            # Check if 2 or more options are the same
-            if len(normalized_values) >= 2 and len(set(normalized_values)) < len(normalized_values):
-                logging.warning(f"UI tool call '{call.tool_name}' has duplicate values after removing final digit: '{', '.join(set(normalized_values))}' (rejecting)")
-                return False
-
-        return True
-
     def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall], available_tools: List[UITool]) -> list:
         """
         Sanitize UI tool calls by deduplicating and capping to max_tools.
@@ -421,18 +342,13 @@ If no tools are appropriate, do not invoke any tools."""
             List of deduplicated and capped tool calls in state format
         """
         
-        # Phase 1: Validate tool calls against schema and required fields
-        validated_tools = []
-        for call in ui_tool_calls:
-            if self._is_tool_call_valid(call, available_tools):
-                validated_tools.append({
-                    "toolName": call.tool_name.strip(),
-                    "input": call.input,
-                })
+        # Validate tool calls
+        validator = create_ui_tools_validator()
+
+        validated_tools = validator.validate_tool_calls(ui_tool_calls, available_tools)
+        logging.debug(f"Validated {len(validated_tools)} tool calls out of {len(ui_tool_calls)}")
                 
-        logging.debug(f"Phase 1: Validated {len(validated_tools)} tool calls out of {len(ui_tool_calls)}")
-                
-        # Phase 2: Deduplicate by {toolName, input}
+        # Deduplicate by {toolName, input}
         seen = set()
         deduplicated_tools = []
         
@@ -445,9 +361,9 @@ If no tools are appropriate, do not invoke any tools."""
                 seen.add(dedup_key)
                 deduplicated_tools.append(tool_call)
         
-        logging.debug(f"Phase 2: Deduplicated {len(validated_tools)} tool calls to {len(deduplicated_tools)}")
+        logging.debug(f"Deduplicated {len(validated_tools)} tool calls to {len(deduplicated_tools)}")
         
-        # Phase 3: Cap the results to maxTools if specified (by unique tool names)
+        # Cap the results to maxTools if specified (by unique tool names)
         if self.max_tools:
             unique_tool_names = set()
             capped_list = []
@@ -460,7 +376,7 @@ If no tools are appropriate, do not invoke any tools."""
                 elif tool_name in unique_tool_names:
                     capped_list.append(tool_call)
             
-            logging.debug(f"Phase 3: Capped to {len(capped_list)} tool calls, {len(unique_tool_names)} unique tools")
+            logging.debug(f"Capped to {len(capped_list)} tool calls, {len(unique_tool_names)} unique tools")
             return capped_list
         
         return deduplicated_tools

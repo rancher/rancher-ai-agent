@@ -5,6 +5,7 @@ UI Tools Registry and definitions for managing available UI tools and their meta
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+from enum import Enum
 
 @dataclass
 class UIToolsConfig:
@@ -76,6 +77,12 @@ class UIToolsConfigData:
     config: Optional[UIToolsConfig] = None
     tools: Dict[str, UITool] = field(default_factory=dict)
 
+class UIToolCategory(str, Enum):
+    """Builtin UI tool categories"""
+    SELECTOR = "selector"
+    
+    def __str__(self) -> str:
+        return self.value
 
 class UIToolsRegistry:
     """Registry for managing available UI tools scoped by configuration"""

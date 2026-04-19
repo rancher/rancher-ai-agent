@@ -108,7 +108,7 @@ class BaseAgentBuilder:
             }
         }
 
-    def _dispatch_ui_tools_event(self, state: AgentState, config: RunnableConfig) -> None:
+    def _dispatch_ui_tools_event(self, state: AgentState, config: RunnableConfig) -> list[dict]:
         """
         Helper method to dispatch UI tools event.
         
@@ -119,6 +119,9 @@ class BaseAgentBuilder:
         Args:
             state: The current agent state
             config: The runtime configuration containing ui_tools_config
+            
+        Returns:
+            List of selected UI tools, or empty list if dispatch was skipped
         """
         try:
             # Dispatch processing message to notify the ui-tools selection is in progress
@@ -136,11 +139,11 @@ class BaseAgentBuilder:
 
             if not name:
                 logging.debug("UI tools config name is missing, skipping ui tools dispatch")
-                return
+                return []
             
             if not tool_filters or len(tool_filters) == 0:
                 logging.debug("UI tools list is empty, skipping ui tools dispatch")
-                return
+                return []
             
             # Get the registry first
             registry = get_ui_tools_registry()
@@ -175,11 +178,11 @@ class BaseAgentBuilder:
             # Skip if filtered tools list is empty
             if len(filtered_tools) == 0:
                 logging.debug("No UI tools available after filtering, skipping ui tools dispatch")
-                return
+                return []
             
             if not state.get("messages"):
                 logging.debug("No messages in state, skipping ui tools dispatch")
-                return
+                return []
             
             # Get the selected agent context
             selected_agent = state.get("selected_agent", {}).get("name", "")
@@ -264,9 +267,12 @@ class BaseAgentBuilder:
             )
             
             # Dispatch custom event with all tools
-            self._dispatch_ui_tools(ui_tools_list)            
+            self._dispatch_ui_tools(ui_tools_list)
+            
+            return ui_tools_list            
         except Exception as e:
             logging.error(f"Error dispatching UI tools event: {e}", exc_info=True)
+            return []
             
     def _dispatch_preprocessed_ui_tools(self, state: AgentState, config: RunnableConfig, tools: list[dict]) -> None:
         """
@@ -326,11 +332,28 @@ class BaseAgentBuilder:
             config: The runtime configuration containing ui_tools_config name.
         
         Returns:
-            A dictionary with the selected UI tools (empty if skipped).
+            A dictionary with the updated AIMessage containing ui_tools in additional_kwargs (empty if skipped).
         """
         # Dispatch UI tools using the helper method
-        self._dispatch_ui_tools_event(state, config)
-        return {"ui_tools": []}
+        ui_tools_list = self._dispatch_ui_tools_event(state, config)
+        
+        # Save UI tools to the AIMessage's additional_kwargs for this request_id
+        if ui_tools_list:
+            request_id = config["configurable"]["request_id"]
+            
+            # Find the AIMessage with matching request_id
+            for msg in reversed(state["messages"]):
+                if isinstance(msg, AIMessage):
+                    additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
+                    if additional_kwargs.get("request_id") == request_id:
+                        # Add ui_tools to the AIMessage's additional_kwargs
+                        additional_kwargs["ui_tools"] = ui_tools_list
+                        msg.additional_kwargs = additional_kwargs
+                        return {"messages": [msg]}
+            
+            logging.warning(f"Could not find AIMessage with request_id {request_id} to attach ui_tools")
+        
+        return {"messages": []}
 
     def _count_consecutive_tool_rounds(self, state: AgentState) -> int:
         """Count the number of consecutive tool call rounds since the last HumanMessage.

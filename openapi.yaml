@@ -449,34 +449,6 @@ components:
         name: Chat 1
         createdAt: 1767638974
 
-    ChatResponse:
-      type: object
-      description: Response when creating a chat
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: Unique identifier for the chat
-        userId:
-          type: string
-          description: ID of the user who owns the chat
-        name:
-          type: string
-          description: Display name of the chat
-        created_at:
-          type: integer
-          description: Unix timestamp of when the chat was created
-      required:
-        - id
-        - userId
-        - name
-        - created_at
-      example:
-        id: ad924baf-24d7-49a5-84ae-bba3a58218a6
-        userId: PIPPO
-        name: My New Chat
-        created_at: 1767638974
-
     Message:
       type: object
       description: A message in a chat
@@ -514,6 +486,19 @@ components:
               example: '["urgent", "bug"]'
             - type: object
               description: Tags as JSON object
+        tools:
+          type: array
+          nullable: true
+          description: UI tools to be dispatched with the agent response (Assistant message only)
+          items:
+            type: object
+            properties:
+              toolName:
+                type: string
+                description: Name of the UI tool
+              input:
+                type: object
+                description: Input parameters for the UI tool
         createdAt:
           type: integer
           description: Unix timestamp of when the message was created
@@ -528,9 +513,10 @@ components:
         chatId: ad924baf-24d7-49a5-84ae-bba3a58218a6
         role: user
         message: Chat 1 - Message 1
-        context: "{}"
+        context: "{ 'cluster: 'local'}"
         labels: '{"summary": "Chat summary"}'
-        tags: "[]"
+        tags: "['welcome']"
+        tools: "[ { 'toolName': 'my_tool', 'input': { 'param1': 'value1' } } ]"
         createdAt: 1767638974
 
     Error:

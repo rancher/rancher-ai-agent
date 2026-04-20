@@ -124,10 +124,6 @@ class BaseAgentBuilder:
             List of selected UI tools, or empty list if dispatch was skipped
         """
         try:
-            # Dispatch processing message to notify the ui-tools selection is in progress
-            # This should become a standard pattern, potentially implemented as a LangGraph event, to notify the UI the status of operations
-            dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
-            
             # Extract the UI tools configuration from request metadata
             request_metadata = config.get("configurable", {}).get("request_metadata", {})
             ui_tools_config = request_metadata.get("ui_tools", {})
@@ -257,6 +253,10 @@ class BaseAgentBuilder:
                         
             if mcp_response:
                 mcp_response = '\n[MCP result resources]: ' + mcp_response
+                
+            # Dispatch processing message to notify the ui-tools selection is in progress
+            # This should become a standard pattern, potentially implemented as a LangGraph event, to notify the UI the status of operations
+            dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
             # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(

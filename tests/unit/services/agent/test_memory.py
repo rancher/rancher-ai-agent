@@ -97,3 +97,79 @@ async def test_delete_chat_does_nothing_if_not_found():
     manager.checkpointer = mock_checkpointer
     await manager.delete_chat("chat1", "user1")
     mock_checkpointer.adelete_thread.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_fetch_messages_payload():
+    """Verify that fetch_messages includes UI tools in the agent response payload."""
+    from langchain_core.messages import HumanMessage, AIMessage
+    
+    mock_checkpointer = MagicMock()
+    checkpoint_tuple = MagicMock()
+    
+    # Create mock messages
+    human_msg = MagicMock(spec=HumanMessage)
+    human_msg.type = "human"
+    human_msg.text = ""
+    human_msg.additional_kwargs = {
+        "request_id": "req1",
+        "request_metadata": {
+            "user_input": "Show me the dashboard",
+            "agent": {"name": "test-agent"},
+            "tags": ["dashboard"],
+            "labels": {},
+            "context": None,
+        },
+        "created_at": "2024-01-01T00:00:00Z",
+    }
+    
+    ai_msg = MagicMock(spec=AIMessage)
+    ai_msg.type = "ai"
+    ai_msg.text = "Here is the dashboard"
+    ai_msg.additional_kwargs = {
+        "request_id": "req1",
+        "selected_agent": {"name": "test-agent", "mode": "auto"},
+        "ui_tools": [
+            {
+                "toolName": "chart_tool",
+                "description": "Renders data charts",
+                "prompt": "Show chart",
+            },
+            {
+                "toolName": "table_tool",
+                "description": "Renders data in table format",
+                "prompt": "Show table",
+            },
+        ],
+        "created_at": "2024-01-01T00:00:01Z",
+    }
+    
+    # Setup checkpoint tuple
+    checkpoint_tuple.checkpoint = {
+        "channel_values": {
+            "messages": [human_msg, ai_msg],
+        }
+    }
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)
+    
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    
+    messages = await manager.fetch_messages("chat1", "user1", {})
+    
+    # Verify messages structure
+    assert len(messages) == 2
+    
+    # Verify user message
+    user_msg = messages[0]
+    assert user_msg["role"] == "user"
+    assert user_msg["message"] == "Show me the dashboard"
+    assert user_msg["tags"] == ["dashboard"]
+    
+    # Verify agent message includes tools
+    agent_msg = messages[1]
+    assert agent_msg["role"] == "agent"
+    assert agent_msg["message"] == "Here is the dashboard"
+    assert "tools" in agent_msg
+    assert len(agent_msg["tools"]) == 2
+    assert agent_msg["tools"][0]["toolName"] == "chart_tool"
+    assert agent_msg["tools"][1]["toolName"] == "table_tool"

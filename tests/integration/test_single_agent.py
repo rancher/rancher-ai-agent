@@ -323,3 +323,126 @@ def test_summary():
         
     finally:
         LLMManager._instance = None
+
+
+def test_websocket_with_ui_tools():
+    """Tests agent with UI tools enabled, verifying both response and dispatch ui-tools messages."""
+    from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
+    from app.services.agent.loader import AgentConfig, AuthenticationType
+    from app.services.agent.root import RootAgentBuilder
+    from unittest.mock import patch, MagicMock
+    import json
+
+    # Create a mock UI tool
+    schema = UIToolSchema(
+        type="object",
+        properties={"name": {"type": "string", "description": "Resource name"}},
+        required=["name"]
+    )
+    ui_tool = UITool(
+        name="show-yaml",
+        description="Display resource in YAML format",
+        prompt="Show resource YAML",
+        category="viewer",
+        schema=schema,
+        metadata={},
+        enabled=True
+    )
+
+    fake_llm_responses = [
+        AIMessage(content="Here is the resource information"),
+    ]
+
+    fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
+    fake_llm.all_calls = []
+    LLMManager._instance = fake_llm
+
+    try:
+        agent_config = AgentConfig(
+            name="test-agent",
+            displayName="Test Agent",
+            description="Test agent for integration tests",
+            system_prompt=RANCHER_AGENT_PROMPT,
+            mcp_url="http://localhost:8000/mcp",
+            authentication=AuthenticationType.NONE,
+            ui_tools_selectors=["show-yaml"]  # Enable UI tools
+        )
+        
+        # Patch RootAgentBuilder to include child_agents attribute
+        original_init = RootAgentBuilder.__init__
+
+        def patched_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            if not hasattr(self, 'child_agents'):
+                self.child_agents = []
+
+        with patch.object(RootAgentBuilder, '__init__', patched_init):
+            with patch('app.services.agent.factory.load_agent_configs') as mock_load:
+                mock_load.return_value = [agent_config]
+                
+                # Patch get_ui_tools_registry where it's USED (in base.py), not where it's defined
+                with patch('app.services.agent.base.get_ui_tools_registry') as mock_get_registry:
+                    mock_registry = MagicMock()
+                    mock_get_registry.return_value = mock_registry
+                    
+                    # Setup registry to return the UI tool and config
+                    mock_registry.get_all_tools.return_value = [ui_tool]
+                    ui_tools_config = UIToolsConfigData(
+                        tools=[ui_tool],
+                        config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Select relevant UI tools")
+                    )
+                    mock_registry.get_tools_config.return_value = ui_tools_config
+                    
+                    # Mock the UI tools selector
+                    with patch('app.services.agent.base.create_ui_tools_selector') as mock_selector_factory:
+                        mock_selector = MagicMock()
+                        mock_selector_factory.return_value = mock_selector
+                        # Mock select_tools to return a formatted UI tool
+                        mock_selector.select_tools.return_value = [
+                            {
+                                "toolName": "show-yaml",
+                                "description": "Display resource in YAML format",
+                                "prompt": "Show resource YAML",
+                            }
+                        ]
+                        
+                        messages = []
+                        with client.websocket_connect("/v1/ws/messages") as websocket:
+                            # Consume any initial messages from the server (chat-metadata)
+                            websocket.receive_text()
+
+                            # Send JSON request with tools configuration
+                            request = json.dumps({
+                                "prompt": "show me the resource",
+                                "tools": {"name": "default", "tools": ["show-yaml"]}
+                            })
+                            websocket.send_text(request)
+                            
+                            # Collect ALL messages from the websocket until we get </message>
+                            msg = ""
+                            while True:
+                                chunk = websocket.receive_text()
+                                messages.append(chunk)
+                                msg += chunk
+                                if msg.endswith("</message>"):
+                                    break
+                        
+                        full_stream = "".join(messages)
+                        
+                        # Verify workflow correctness: response content in stream
+                        assert "Here is the resource information" in full_stream, "Response should contain LLM response"
+                        assert len(fake_llm.all_calls) == 1, "Expected 1 LLM call"
+                        assert fake_llm.all_calls[0][0].content == RANCHER_AGENT_PROMPT, "LLM should receive system prompt"
+                        assert "show me the resource" in fake_llm.all_calls[0][1].content, "LLM should receive user prompt"
+                        
+                        # Verify dispatch correctness: processing message sent
+                        assert "<processing-ui-tools/>" in full_stream, "Missing <processing-ui-tools/> dispatch message"
+                        
+                        # Verify UI tools were dispatched
+                        assert "<ui-tools>" in full_stream, "Missing <ui-tools> dispatch message"
+                        
+                        mock_get_registry.assert_called(), "Registry should be queried for UI tools"
+                        mock_selector_factory.assert_called(), "Selector factory should be called"
+                        mock_selector.select_tools.assert_called(), "Selector should select tools"
+    finally:
+        LLMManager._instance = None

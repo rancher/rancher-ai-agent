@@ -712,14 +712,15 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                             input["patched"] = data.get("payload", {}).get("patched")
 
                         input = {k: v for k, v in input.items() if v is not None}
+                        
+                        ui_tools_list = [{
+                            "toolName": ui_tool_name,
+                            "input": input,
+                        }]
+                        self._dispatch_preprocessed_ui_tools(state, config, ui_tools_list)
                     except Exception as e:
-                        logging.debug(f"Could not extract precomputed fields from interrupt message: {e}")
+                        logging.debug(f"Could not extract precomputed fields from interrupt message and dispatch UI tools: {e}")
 
-                    ui_tools_list = [{
-                        "toolName": ui_tool_name,
-                        "input": input,
-                    }]
-                    self._dispatch_preprocessed_ui_tools(state, config, ui_tools_list)
                 else:
                     logging.warning("config is None, cannot dispatch UI tools before confirmation")
             

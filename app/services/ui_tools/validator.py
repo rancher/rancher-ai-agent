@@ -65,7 +65,7 @@ class UIToolCallValidator:
             logging.warning(f"UI tool call '{call.tool_name}' refers to an unavailable tool.")
             return False
         
-        schema_validator = SchemaValidator(tool) 
+        schema_validator = SchemaValidator(tool)
         if not schema_validator.validate(call):
             return False
         

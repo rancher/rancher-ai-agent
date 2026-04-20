@@ -1,11 +1,12 @@
 import os
+import ssl
 import logging
 from datetime import datetime, timezone
 
 import httpx
 from kubernetes import client, config
 from .root import create_root_agent
-from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers
+from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret
 from .child import create_child_agent
 from .parent import create_parent_agent, ChildAgent
 from fastapi import  WebSocket
@@ -186,10 +187,49 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
     }
     if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == "true":
         client_config["httpx_client_factory"] = _make_insecure_http_client
+        
+    elif agent_config.ca_bundle_ref:
+        try:
+            ca_pem = get_ca_cert_from_secret(
+                agent_config.ca_bundle_ref.name,
+                agent_config.ca_bundle_ref.key,
+            )
+            client_config["httpx_client_factory"] = _make_ca_httpx_factory(ca_pem)
+        except Exception as e:
+            logging.error(f"Failed to load CA cert from secret '{agent_config.ca_bundle_ref.name}': {e}")
+
 
     return MultiServerMCPClient({
         agent_config.name: client_config,
     })
+
+
+def _make_ca_httpx_factory(ca_pem: str):
+    """
+    Return an httpx_client_factory that trusts *both* the system CAs and
+    the supplied PEM-encoded CA certificate.
+
+    The factory follows the ``McpHttpClientFactory`` protocol expected by
+    ``langchain-mcp-adapters`` / the MCP Python SDK.
+    """
+    ctx = ssl.create_default_context()  # loads system CAs
+    ctx.load_verify_locations(cadata=ca_pem)
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        kwargs: dict = {"follow_redirects": True, "verify": ctx}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        if headers is not None:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx.AsyncClient(**kwargs)
+
+    return factory
 
 
 async def _create_single_agent(

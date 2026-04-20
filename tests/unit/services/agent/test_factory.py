@@ -12,7 +12,8 @@ from app.services.agent.factory import (
     create_agent,
     NoAgentAvailableError,
     create_mcp_client,
-    _create_single_agent
+    _create_single_agent,
+    _make_ca_httpx_factory,
 )
 from app.services.agent.loader import AuthenticationType
 
@@ -596,3 +597,118 @@ def test_create_mcp_client_header_auth(mock_get_headers, mock_mcp_client):
     assert call_args["TestAgent"]["headers"]["X-Api-Key"] == "my-api-key"
     assert call_args["TestAgent"]["headers"]["Authorization"] == "Bearer tok123"
     mock_get_headers.assert_called_once_with("my-headers-secret")
+
+
+@patch('app.services.agent.factory._make_ca_httpx_factory')
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.get_ca_cert_from_secret')
+def test_create_mcp_client_with_ca_bundle_ref(mock_get_ca, mock_mcp_client, mock_make_factory):
+    """Verify create_mcp_client sets httpx_client_factory when caBundleRef is configured."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.NONE
+    mock_config.mcp_url = "https://mcp:8080"
+    ca_ref = MagicMock()
+    ca_ref.name = "my-ca-secret"
+    ca_ref.key = "ca.crt"
+    mock_config.ca_bundle_ref = ca_ref
+
+    mock_get_ca.return_value = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
+    mock_factory = MagicMock()
+    mock_make_factory.return_value = mock_factory
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    result = create_mcp_client(mock_config)
+
+    assert result == mock_client_instance
+    mock_get_ca.assert_called_once_with("my-ca-secret", "ca.crt")
+    call_args = mock_mcp_client.call_args[0][0]
+    assert "httpx_client_factory" in call_args["TestAgent"]
+    assert call_args["TestAgent"]["httpx_client_factory"] == mock_factory
+
+
+@patch('app.services.agent.factory._make_ca_httpx_factory')
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.get_ca_cert_from_secret')
+def test_create_mcp_client_with_ca_bundle_ref_custom_key(mock_get_ca, mock_mcp_client, mock_make_factory):
+    """Verify create_mcp_client passes a custom key from caBundleRef."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.NONE
+    mock_config.mcp_url = "https://mcp:8080"
+    ca_ref = MagicMock()
+    ca_ref.name = "my-ca-secret"
+    ca_ref.key = "tls.crt"
+    mock_config.ca_bundle_ref = ca_ref
+
+    mock_get_ca.return_value = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    create_mcp_client(mock_config)
+
+    mock_get_ca.assert_called_once_with("my-ca-secret", "tls.crt")
+
+
+@patch('app.services.agent.factory.MultiServerMCPClient')
+def test_create_mcp_client_without_ca_bundle_ref(mock_mcp_client):
+    """Verify create_mcp_client omits httpx_client_factory when no caBundleRef."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.NONE
+    mock_config.mcp_url = "https://mcp:8080"
+    mock_config.ca_bundle_ref = None
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    create_mcp_client(mock_config)
+
+    call_args = mock_mcp_client.call_args[0][0]
+    assert "httpx_client_factory" not in call_args["TestAgent"]
+
+
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.get_ca_cert_from_secret')
+def test_create_mcp_client_ca_bundle_ref_failure_logs_and_continues(mock_get_ca, mock_mcp_client):
+    """Verify create_mcp_client gracefully handles CA secret loading failure."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.NONE
+    mock_config.mcp_url = "https://mcp:8080"
+    ca_ref = MagicMock()
+    ca_ref.name = "bad-secret"
+    ca_ref.key = "ca.crt"
+    mock_config.ca_bundle_ref = ca_ref
+
+    mock_get_ca.side_effect = RuntimeError("secret not found")
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    result = create_mcp_client(mock_config)
+
+    # Should still return a client, just without custom CA
+    assert result == mock_client_instance
+    call_args = mock_mcp_client.call_args[0][0]
+    assert "httpx_client_factory" not in call_args["TestAgent"]
+
+
+def test_make_ca_httpx_factory_returns_async_client():
+    """Verify _make_ca_httpx_factory returns a factory that produces httpx.AsyncClient."""
+    import httpx
+    with patch('app.services.agent.factory.ssl') as mock_ssl:
+        mock_ctx = MagicMock()
+        mock_ssl.create_default_context.return_value = mock_ctx
+
+        factory = _make_ca_httpx_factory("FAKE-PEM")
+
+        mock_ssl.create_default_context.assert_called_once()
+        mock_ctx.load_verify_locations.assert_called_once_with(cadata="FAKE-PEM")
+
+        client = factory(headers={"X-Test": "val"}, timeout=httpx.Timeout(10))
+        assert isinstance(client, httpx.AsyncClient)
+        assert client._transport._pool._ssl_context == mock_ctx

@@ -38,17 +38,10 @@ spec:
         emptyDir: {}
       - name: cert-dir
         emptyDir: {}
-      {{- if or (not .Values.insecureSkipTls) .Values.rag.pvc }}
-      {{- if not .Values.insecureSkipTls }}
-      - name: mcp-ca-volume
-        secret:
-          secretName: cattle-mcp-ca
-      {{- end }}
       {{- if .Values.rag.pvc }}
       - name: rag-storage
         persistentVolumeClaim:
           claimName: "{{ .Values.rag.pvc }}"
-      {{- end }}
       {{- end }}
       containers:
       - image: "{{ template "system_default_registry" . }}{{ .Values.aiAgent.image.repository }}:{{ .Values.aiAgent.image.tag }}"
@@ -180,14 +173,7 @@ spec:
           mountPath: /tmp
         - name: cert-dir
           mountPath: /cert
-        {{- if or (not .Values.insecureSkipTls) .Values.rag.pvc }}
-        {{- if not .Values.insecureSkipTls }}
-        - name: mcp-ca-volume
-          mountPath: /etc/tls
-          readOnly: true
-        {{- end }}
         {{- if .Values.rag.pvc }}
         - name: rag-storage
           mountPath: /app/rag
-        {{- end }}
         {{- end }}

@@ -14,7 +14,7 @@ from app.services.agent.loader import (
     NAMESPACE,
 )
 
-from app.services.agent.loader import get_basic_auth_credentials, get_header_auth_headers, NAMESPACE
+from app.services.agent.loader import get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, NAMESPACE
 
 
 # ============================================================================
@@ -396,5 +396,109 @@ def test_get_header_auth_headers_api_exception(mock_k8s_client, mock_config):
 
     with pytest.raises(ApiException) as exc_info:
         get_header_auth_headers(secret_name)
+
+    assert exc_info.value.status == 404
+
+
+# ============================================================================
+# get_ca_cert_from_secret Tests
+# ============================================================================
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_ca_cert_from_secret_success(mock_k8s_client, mock_config):
+    """Verify get_ca_cert_from_secret successfully retrieves a PEM CA certificate."""
+    secret_name = "my-ca-secret"
+    ca_pem = "-----BEGIN CERTIFICATE-----\nMIIBxTCC...\n-----END CERTIFICATE-----\n"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        'ca.crt': base64.b64encode(ca_pem.encode('utf-8')).decode('utf-8'),
+    }
+    mock_v1.read_namespaced_secret.return_value = mock_secret
+
+    result = get_ca_cert_from_secret(secret_name)
+
+    assert result == ca_pem
+    mock_v1.read_namespaced_secret.assert_called_once_with(secret_name, NAMESPACE)
+
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_ca_cert_from_secret_custom_key(mock_k8s_client, mock_config):
+    """Verify get_ca_cert_from_secret uses a custom key when provided."""
+    secret_name = "my-ca-secret"
+    ca_pem = "-----BEGIN CERTIFICATE-----\nCUSTOM\n-----END CERTIFICATE-----\n"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        'tls.crt': base64.b64encode(ca_pem.encode('utf-8')).decode('utf-8'),
+    }
+    mock_v1.read_namespaced_secret.return_value = mock_secret
+
+    result = get_ca_cert_from_secret(secret_name, key="tls.crt")
+
+    assert result == ca_pem
+
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_ca_cert_from_secret_empty_secret(mock_k8s_client, mock_config):
+    """Verify get_ca_cert_from_secret raises RuntimeError for empty secret."""
+    secret_name = "empty-ca-secret"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_secret = MagicMock()
+    mock_secret.data = None
+    mock_v1.read_namespaced_secret.return_value = mock_secret
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_ca_cert_from_secret(secret_name)
+
+    assert f"CA secret '{secret_name}'" in str(exc_info.value)
+    assert "is empty" in str(exc_info.value)
+
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_ca_cert_from_secret_missing_key(mock_k8s_client, mock_config):
+    """Verify get_ca_cert_from_secret raises RuntimeError when the requested key is missing."""
+    secret_name = "wrong-key-secret"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        'tls.crt': base64.b64encode(b'some cert').decode('utf-8'),
+    }
+    mock_v1.read_namespaced_secret.return_value = mock_secret
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_ca_cert_from_secret(secret_name)
+
+    assert "does not contain a 'ca.crt' key" in str(exc_info.value)
+
+
+@patch('app.services.agent.loader.config')
+@patch('app.services.agent.loader.client')
+def test_get_ca_cert_from_secret_api_exception(mock_k8s_client, mock_config):
+    """Verify get_ca_cert_from_secret propagates ApiException from Kubernetes."""
+    secret_name = "nonexistent-secret"
+
+    mock_v1 = MagicMock()
+    mock_k8s_client.CoreV1Api.return_value = mock_v1
+    mock_v1.read_namespaced_secret.side_effect = ApiException(status=404, reason="Not Found")
+
+    with pytest.raises(ApiException) as exc_info:
+        get_ca_cert_from_secret(secret_name)
 
     assert exc_info.value.status == 404

@@ -65,6 +65,22 @@ spec:
               builtIn:
                 description: BuiltIn indicates if this is a built-in agent configuration
                 type: boolean
+              caBundleRef:
+                description: CABundleRef references a secret key containing a
+                  PEM-encoded CA certificate bundle to trust when connecting to
+                  this agent's MCP server
+                properties:
+                  name:
+                    description: Name is the name of the secret in the agent namespace.
+                    type: string
+                  key:
+                    default: ca.crt
+                    description: Key is the key inside the secret that holds the
+                      data. Defaults to "ca.crt".
+                    type: string
+                required:
+                - name
+                type: object
               description:
                 description: Description provides details about the agent's purpose
                 type: string

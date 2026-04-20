@@ -210,6 +210,12 @@ Examples: <suggestion>How do I scale a deployment?</suggestion><suggestion>Check
 """
 
 
+class CABundleRef(BaseModel):
+    """Reference to a CA certificate stored in a Kubernetes secret."""
+    name: str
+    key: str = "ca.crt"
+
+
 class AgentConfig(BaseModel):
     """Configuration for a single agent."""
     name: str 
@@ -219,6 +225,7 @@ class AgentConfig(BaseModel):
     mcp_url: str
     authentication: AuthenticationType = AuthenticationType.NONE
     authentication_secret: Optional[str] = None
+    ca_bundle_ref: Optional[CABundleRef] = None
     toolset: Optional[str] = None
     human_validation_tools: list[str] = []
     ready: bool = False
@@ -309,6 +316,40 @@ def get_header_auth_headers(secret_name: str) -> dict[str, str]:
     return headers
 
 
+def get_ca_cert_from_secret(secret_name: str, key: str = "ca.crt") -> str:
+    """
+    Retrieve a PEM-encoded CA certificate from a Kubernetes secret.
+
+    Args:
+        secret_name: Name of the secret containing the CA certificate.
+        key: The key inside the secret that holds the PEM data.
+             Defaults to ``ca.crt``.
+
+    Returns:
+        str: PEM-encoded CA certificate.
+    """
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    v1 = client.CoreV1Api()
+    secret = v1.read_namespaced_secret(secret_name, NAMESPACE)
+
+    if not secret.data:
+        raise RuntimeError(
+            f"CA secret '{secret_name}' in namespace '{NAMESPACE}' is empty"
+        )
+
+    if key not in secret.data:
+        raise RuntimeError(
+            f"CA secret '{secret_name}' in namespace '{NAMESPACE}' "
+            f"does not contain a '{key}' key"
+        )
+
+    return base64.b64decode(secret.data[key]).decode('utf-8')
+
+
 def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
     """Convert CRD object to AgentConfig."""
     metadata = crd_obj.get("metadata", {})
@@ -328,6 +369,7 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         mcp_url=spec.get("mcpURL", ""),
         authentication=AuthenticationType[spec.get("authenticationType", "NONE")],
         authentication_secret=spec.get("authenticationSecret", None),
+        ca_bundle_ref=CABundleRef(**spec["caBundleRef"]) if spec.get("caBundleRef") else None,
         toolset=spec.get("toolSet", None),
         human_validation_tools=human_validation_tools,
         ready=status.get("phase", "Failed") == "Ready"
@@ -353,6 +395,10 @@ def _get_default_ai_agent_config_crds() -> list:
                 "authenticationType": "RANCHER",
                 "builtIn": True,
                 "enabled": True,
+                "caBundleRef": {
+                    "name": "cattle-mcp-ca",
+                    "key": "tls.crt"
+                },
                 "humanValidationTools": [
                     "createKubernetesResource", 
                     "patchKubernetesResource",
@@ -376,6 +422,10 @@ def _get_default_ai_agent_config_crds() -> list:
                 "authenticationType": "RANCHER",
                 "builtIn": True,
                 "enabled": True,
+                "caBundleRef": {
+                    "name": "cattle-mcp-ca",
+                    "key": "tls.crt"
+                },
             }
         },
         {
@@ -393,6 +443,10 @@ def _get_default_ai_agent_config_crds() -> list:
                 "authenticationType": "RANCHER",
                 "builtIn": True,
                 "enabled": True,
+                "caBundleRef": {
+                    "name": "cattle-mcp-ca",
+                    "key": "tls.crt"
+                },
                 "toolSet": "provisioning",
                 "humanValidationTools": [
                     "createImportedCluster",

@@ -47,6 +47,25 @@ type AIAgentConfigSpec struct {
 	// ToolSet specifies a predefined set of tools for the agent
 	// +optional
 	ToolSet string `json:"toolSet,omitempty"`
+
+	// CABundleRef references a secret key containing a PEM-encoded CA
+	// certificate bundle to trust when connecting to this agent's MCP server.
+	// The CA is scoped to this agent's connection only.
+	// +optional
+	CABundleRef *SecretKeyRef `json:"caBundleRef,omitempty"`
+}
+
+// SecretKeyRef identifies a key within a Kubernetes secret.
+type SecretKeyRef struct {
+	// Name is the name of the secret in the agent namespace.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key is the key inside the secret that holds the data.
+	// Defaults to "ca.crt".
+	// +optional
+	// +kubebuilder:default="ca.crt"
+	Key string `json:"key,omitempty"`
 }
 
 // AIAgentConfigStatus defines the observed state of AIAgentConfig

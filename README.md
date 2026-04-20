@@ -36,6 +36,17 @@ The **UI Extension** provides the user-facing chat interface within the Rancher 
   * **User Input**: It captures user queries and sends them to the ReAct Agent.
   * **Displaying Responses**: It receives responses from the ReAct Agent and presents them in a chat-like format.
 
+### UI Tools
+
+The **UI Tools** system allows the AI agent to intelligently select and dispatch specialized UI components (viewers, editors, comparators, etc.) to enhance responses. This is a generic mechanism that can be integrated into any user interface.
+
+For comprehensive documentation on defining, configuring, and using UI tools, see [UI Tools Configuration Guide](app/services/ui_tools/README.md). This covers:
+- How to define custom UI tools
+- Publishing tools via ConfigMaps
+- Filtering tools via WebSocket requests
+- Tool validation and schema properties
+- Prompt keywords and best practices
+
 ## How It Works (Flow)
 
 1. **User Request → Agent → LLM**  

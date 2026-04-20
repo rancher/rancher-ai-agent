@@ -4,7 +4,7 @@ import logging
 import json
 
 from ..dependencies import get_llm
-from ..services.agent.factory import NoAgentAvailableError, create_agent
+from ..services.agent.factory import NoAgentAvailableError, create_main_agent
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -74,7 +74,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     logging.debug("ws/messages connection opened")
     
     try:
-        agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket) 
+        agent, agents_metadata =  await create_main_agent(llm=llm, websocket=websocket) 
     except NoAgentAvailableError as e:
         logging.error(f"Error creating agent: {e}")
         await websocket.send_text(f'<chat-error>{json.dumps({"message": str(e)})}</chat-error>')
@@ -161,9 +161,12 @@ async def _call_agent(
 def _extract_streaming_text(stream: dict) -> str | None:
     """
     Extracts text content from a chat model stream event.
-    
-    Only extracts text from 'agent' or 'model' nodes to avoid streaming
-    intermediate processing steps.
+
+    Only streams tokens from the top-level supervisor's model node.
+    Sub-agents invoked as tools have a '|' in their checkpoint_ns
+    (e.g. 'tools:uuid|model:uuid'), while the supervisor's own call
+    is just 'model:uuid' (no pipe). Events with a pipe are suppressed
+    to avoid duplicate output on the websocket.
     
     Args:
         stream: The stream event dictionary from astream_events.
@@ -171,12 +174,19 @@ def _extract_streaming_text(stream: dict) -> str | None:
     Returns:
         The extracted text content, or None if not applicable.
     """
+    metadata = stream.get("metadata", {})
+    node = metadata.get("langgraph_node")
+    checkpoint_ns = metadata.get("langgraph_checkpoint_ns", "")
+
     STREAMABLE_NODES = ("agent", "model")
-    
-    node = stream.get("metadata", {}).get("langgraph_node")
     if node not in STREAMABLE_NODES:
         return None
-    
+
+    # Sub-agents run inside a tool invocation: their ns contains '|'
+    # e.g. 'tools:uuid|model:uuid'. Supervisor ns is just 'model:uuid'.
+    if "|" in checkpoint_ns:
+        return None
+
     chunk = stream.get("data", {}).get("chunk")
     if not chunk or not chunk.content:
         return None

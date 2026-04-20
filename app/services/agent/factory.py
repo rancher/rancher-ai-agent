@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 
 import httpx
 from kubernetes import client, config
+from langchain.agents import create_agent
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers
-from .child import create_child_agent
-from .parent import create_parent_agent, ChildAgent
+from .parent import ChildAgent
+from .supervisor import create_supervisor_agent
 from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -30,7 +31,7 @@ class NoAgentAvailableError(Exception):
     pass
 
 
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
+async def create_main_agent(llm: BaseLanguageModel, websocket: WebSocket):
     """
     Create and configure an agent based on the available builtin agents.
     
@@ -80,7 +81,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
 
                 child_agents.append(ChildAgent(
                     config=agent_cfg,
-                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
+                    agent=create_agent(llm, tools, system_prompt=agent_cfg.system_prompt)
                 ))
                 
                 _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
@@ -111,9 +112,9 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
             logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
             return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket), agents_metadata
 
-        parent_agent = create_parent_agent(llm, child_agents, checkpointer)
+        supervisor_agent = create_supervisor_agent(llm, child_agents, checkpointer)
 
-        return parent_agent, agents_metadata
+        return supervisor_agent, agents_metadata
     else:
         return await _create_single_agent(llm, agents[0], checkpointer, websocket), [{"name": agents[0].name, "status": "active"}]
 

@@ -65,11 +65,11 @@ class UIToolCallValidator:
             logging.warning(f"UI tool call '{call.tool_name}' refers to an unavailable tool.")
             return False
         
-        schema_validator = SchemaValidator(tool.schema)
+        schema_validator = SchemaValidator(tool) 
         if not schema_validator.validate(call):
             return False
         
-        category_validator = CategoryValidator(tool.schema, tool.category)
+        category_validator = CategoryValidator(tool)
         if not category_validator.validate(call):
             return False
 
@@ -80,8 +80,8 @@ class SchemaValidator:
     """
     Validates tool call inputs against their defined schemas.
     """
-    def __init__(self, schema: UIToolSchema):
-        self.schema = schema
+    def __init__(self, tool: UITool):
+        self.tool = tool
     
     def validate(self, call: UIToolCall) -> bool:
         """
@@ -95,7 +95,14 @@ class SchemaValidator:
         """
         
         # Check required fields
-        return self._check_required_fields(call, self.schema)
+        if not self._check_required_fields(call, self.tool.schema):
+            return False
+        
+        # Check enum fields
+        if not self._check_enum_fields(call, self.tool.schema):
+            return False
+        
+        return True
     
     def _check_required_fields(self, call: UIToolCall, schema: UIToolSchema = None) -> bool:
         """
@@ -120,13 +127,65 @@ class SchemaValidator:
                     
         return True
 
+    def _check_enum_fields(self, call: UIToolCall, schema: UIToolSchema = None) -> bool:
+        """
+        Check if enum field values are valid according to metadata definitions.
+        """
+        enum_metadata = self.tool.metadata.get('enum', {})
+        
+        if not enum_metadata:
+            return True
+
+        if schema and hasattr(schema, 'properties'):
+            properties = schema.properties
+        
+            # Check each property for enum type
+            for field_name, field_schema in properties.items():
+                field_type = field_schema.get('type', 'string') if isinstance(field_schema, dict) else None
+                is_enum = field_type == 'string' and 'enum' in field_schema if isinstance(field_schema, dict) else False
+                
+                # Skip if not an enum field or field not in input
+                if not is_enum or field_name not in call.input:
+                    continue
+                
+                # Get the enum definition from metadata
+                enum_definition = enum_metadata.get(field_name)
+                if not enum_definition or not isinstance(enum_definition, dict):
+                    continue
+                
+                field_value = call.input[field_name]
+                if not isinstance(field_value, str):
+                    logging.warning(f"UI tool call '{call.tool_name}' enum field '{field_name}' must be a string, got {type(field_value)}")
+                    return False
+                
+                # Check if value is one of the valid enum options
+                valid_options = list(enum_definition.keys())
+                if field_value not in valid_options:
+                    valid_list = ", ".join([f"'{opt}'" for opt in valid_options])
+                    logging.warning(f"UI tool call '{call.tool_name}' enum field '{field_name}' has invalid value '{field_value}'. Valid options are: {valid_list}")
+                    return False
+                
+                # Check if the selected enum option has required fields
+                selected_option = enum_definition[field_value]
+                if isinstance(selected_option, dict):
+                    required_fields = selected_option.get('requires', [])
+                    if required_fields and isinstance(required_fields, list):
+                        for required_field in required_fields:
+                            if required_field not in call.input:
+                                logging.warning(f"UI tool call '{call.tool_name}' option '{field_value}' requires field '{required_field}', but it is missing from input")
+                                return False
+                            elif call.input[required_field] == "" or call.input[required_field] is None:
+                                logging.warning(f"UI tool call '{call.tool_name}' option '{field_value}' requires field '{required_field}', but it is empty")
+                                return False
+        
+        return True
+
 class CategoryValidator:
     """
     Category-specific validation rules for UI tool calls.
     """
-    def __init__(self, schema: UIToolSchema, category: str):
-        self.schema = schema
-        self.category = category
+    def __init__(self, tool: UITool):
+        self.tool = tool
     
     def validate(self, call: UIToolCall) -> bool:
         """
@@ -138,9 +197,9 @@ class CategoryValidator:
         Returns:
             True if the tool call is valid for the category, False otherwise
         """
-        if self.category == UIToolCategory.SELECTOR.value:
+        if self.tool.category == UIToolCategory.SELECTOR.value:
             # Additional category rules cab be implemented here.
-            return self._check_duplicate_values(call, self.schema)
+            return self._check_duplicate_values(call, self.tool.schema)
         
         # Additional categories can go here
         

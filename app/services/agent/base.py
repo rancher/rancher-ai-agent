@@ -280,6 +280,8 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
             
             try:
                 logging.debug("calling tool")
+                dispatch_custom_event("subagenttool_call", f"subagent {self.agent_config.displayName} is calling tool '{tool_call['name']}' with: {tool_call['args']}\n",)
+
                 tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"])
                 logging.debug("tool call finished")
 

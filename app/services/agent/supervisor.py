@@ -11,11 +11,16 @@ call multiple agents in sequence and synthesize their outputs into a unified res
 
 import logging
 
+from collections.abc import Callable
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
-
+from langchain.agents.middleware import wrap_tool_call
+from langchain.messages import ToolMessage
+from langchain.tools.tool_node import ToolCallRequest
+from langgraph.types import Command
+from langchain_core.callbacks.manager import dispatch_custom_event
 from .parent import ChildAgent
 
 SUPERVISOR_PROMPT = (
@@ -69,6 +74,18 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
         description=agent_description,
     )
 
+@wrap_tool_call
+async def monitor_tool(
+    request: ToolCallRequest,
+    handler: Callable[[ToolCallRequest], ToolMessage | Command],
+) -> ToolMessage | Command:
+    dispatch_custom_event("subagent_call", f"Supervisor is calling agent '{request.tool_call['name']}' with: {request.tool_call['args']}\n",)
+    try:
+        result = await handler(request)
+        return result
+    except Exception as e:
+        raise
+
 
 def create_supervisor_agent(
     llm: BaseChatModel,
@@ -102,4 +119,6 @@ def create_supervisor_agent(
         tools=agent_tools,
         system_prompt=SUPERVISOR_PROMPT,
         checkpointer=checkpointer,
+        name="supervisor",
+        middleware=[monitor_tool],
     )

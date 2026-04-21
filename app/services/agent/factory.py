@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client, config
 from langchain.agents import create_agent
+
+from .child import create_child_agent
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers
 from .parent import ChildAgent
@@ -81,7 +83,7 @@ async def create_main_agent(llm: BaseLanguageModel, websocket: WebSocket):
 
                 child_agents.append(ChildAgent(
                     config=agent_cfg,
-                    agent=create_agent(llm, tools, system_prompt=agent_cfg.system_prompt)
+                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
                 ))
                 
                 _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')

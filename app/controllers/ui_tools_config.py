@@ -1,6 +1,6 @@
 """
 UI Tools Config Controller
-Manages UIToolsConfig CRD reconciliation and watchers.
+Manages UIToolsConfig ConfigMaps in Kubernetes, watches for changes, and updates the UI tools registry accordingly.
 """
 
 import logging
@@ -25,7 +25,7 @@ def _init_k8s_client():
     return client.CoreV1Api()
 
 class UIToolsWatcher:
-    """Manager for watching UIToolsConfig CRD changes and syncing the registry."""
+    """Manager for watching UIToolsConfig ConfigMap changes and syncing the registry."""
     
     def __init__(self):
         self._watcher_thread: Optional[threading.Thread] = None

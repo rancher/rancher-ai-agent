@@ -108,6 +108,111 @@ class BaseAgentBuilder:
             }
         }
 
+    def _extract_context_for_tool_selection(self, state: AgentState, config: RunnableConfig) -> tuple[str, str, str, str]:
+        """
+        Extracts and formats context from conversation for UI tool selection.
+        
+        Collects the most recent user message, assistant message, and MCP response data
+        to provide context for tool selection decisions.
+        
+        Args:
+            state: The current agent state containing messages
+            config: The runtime configuration containing request_id
+            
+        Returns:
+            Tuple of (user_message, ai_message, mcp_response, mcp_data)
+        """
+        request_id = config["configurable"]["request_id"]
+        user_message = ''
+        ai_message = ''
+        mcp_data = ''
+        
+        # Collect recent messages (user, assistant, tool results) for current request
+        for msg in reversed(state["messages"][-10:]):
+            additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
+
+            # Only consider messages from the current request context
+            if request_id != additional_kwargs.get("request_id", ""):
+                break
+
+            # All messages collected, early exit
+            if user_message and ai_message and mcp_data:
+                break
+
+            if hasattr(msg, "text") and isinstance(msg.text, str):
+                if isinstance(msg, HumanMessage) and not user_message:
+                    if "request_metadata" in additional_kwargs:
+                        request_metadata = additional_kwargs["request_metadata"]
+                        user_input = request_metadata.get("user_input", "")
+                        context = request_metadata.get("context", {})
+                        user_message += f"\n[User Message]: {user_input} - ui context: {context}"
+                    if not user_message:
+                        user_message += f"\n[User Message]: {msg.text}"
+                elif isinstance(msg, AIMessage) and not ai_message:
+                    ai_message += f"\n[Assistant Message]: {msg.text}"
+                
+                # Collect the mcp result's payloads
+                elif isinstance(msg, ToolMessage) and not mcp_data:
+                    mcp_data = self._convert_tool_message_to_context(msg.content)
+
+        # Collect MCP response resources from all messages
+        mcp_response = self._extract_mcp_responses(state)
+        
+        return user_message, ai_message, mcp_response, mcp_data
+
+    def _convert_tool_message_to_context(self, content: str) -> str:
+        """
+        Converts a tool message content to formatted context (YAML format).
+        
+        Args:
+            content: The raw tool message content (usually JSON)
+            
+        Returns:
+            Formatted content string with MCP result payloads label
+        """
+        try:
+            parsed = json.loads(content)
+            # Handle both single objects and arrays of objects
+            if isinstance(parsed, list):
+                # Convert array of objects to YAML with document separators
+                yaml_parts = []
+                for item in parsed:
+                    yaml_parts.append(yaml.dump(item, default_flow_style=False, sort_keys=False))
+                content = "---\n".join(yaml_parts)
+                logging.debug(f"Converted ToolMessage array content to YAML format ({len(parsed)} items)")
+            elif isinstance(parsed, dict):
+                # Convert single object to YAML
+                content = yaml.dump(parsed, default_flow_style=False, sort_keys=False)
+                logging.debug(f"Converted ToolMessage dict content to YAML format")
+        except (json.JSONDecodeError, TypeError):
+            # If not valid JSON, use original content
+            pass
+        
+        return f"\n[MCP result payloads]: {content}"
+
+    def _extract_mcp_responses(self, state: AgentState) -> str:
+        """
+        Extracts MCP response resources from all messages in state.
+        
+        Args:
+            state: The current agent state
+            
+        Returns:
+            Formatted MCP response resources string, or empty string if none found
+        """
+        mcp_response = ''
+        for msg in reversed(state["messages"]):
+            additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
+            
+            # Include MCP response data if present (from tool execution)
+            if "mcp_response" in additional_kwargs:
+                mcp_response += f"\n{additional_kwargs['mcp_response'].strip('<mcp-response></mcp-response>')}"
+                
+        if mcp_response:
+            mcp_response = '\n[MCP result resources]: ' + mcp_response
+            
+        return mcp_response
+
     def _dispatch_ui_tools_event(self, state: AgentState, config: RunnableConfig) -> list[dict]:
         """
         Helper method to dispatch UI tools event.
@@ -188,71 +293,8 @@ class BaseAgentBuilder:
                     agent_config = child.config
                     break
 
-            # Construct the context for tool selection using the most recent messages and MCP response if available
-            # Messages are collected in reverse order to get the most recent user and assistant messages, and any MCP responses from tool calls
-            request_id = config["configurable"]["request_id"]
-            user_message = ''
-            ai_message = ''
-            mcp_data = ''
-            for msg in reversed(state["messages"][-10:]):
-                additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
-
-                # Only consider messages from the current request context
-                if request_id != additional_kwargs.get("request_id", ""):
-                    break
-
-                # Message are collected, skip
-                if user_message and ai_message and mcp_data:
-                    break
-
-                if hasattr(msg, "text") and isinstance(msg.text, str):
-                    if isinstance(msg, HumanMessage) and not user_message:
-                        if "request_metadata" in additional_kwargs:
-                            request_metadata = additional_kwargs["request_metadata"]
-                            user_input = request_metadata.get("user_input", "")
-                            context = request_metadata.get("context", {})
-                            user_message += f"\n[User Message]: {user_input} - ui context: {context}"
-                        if not user_message:
-                            user_message += f"\n[User Message]: {msg.text}"
-                    elif isinstance(msg, AIMessage) and not ai_message:
-                        ai_message += f"\n[Assistant Message]: {msg.text}"
-                    
-                    # Collect the mcp result's payloads
-                    elif isinstance(msg, ToolMessage) and not mcp_data:
-                        content = msg.content
-                        try:
-                            parsed = json.loads(content)
-                            # Handle both single objects and arrays of objects
-                            if isinstance(parsed, list):
-                                # Convert array of objects to YAML with document separators
-                                yaml_parts = []
-                                for item in parsed:
-                                    yaml_parts.append(yaml.dump(item, default_flow_style=False, sort_keys=False))
-                                content = "---\n".join(yaml_parts)
-                                logging.debug(f"Converted ToolMessage array content to YAML format ({len(parsed)} items)")
-                            elif isinstance(parsed, dict):
-                                # Convert single object to YAML
-                                content = yaml.dump(parsed, default_flow_style=False, sort_keys=False)
-                                logging.debug(f"Converted ToolMessage dict content to YAML format")
-                        except (json.JSONDecodeError, TypeError):
-                            # If not valid JSON, use original content
-                            pass
-                        
-                        mcp_data += f"\n[MCP result payloads]: {content}"
-            
-            # Collect the resorces from all MCP responses in the messages, if any, to provide more context for tool selection
-            mcp_response = ''
-            for msg in reversed(state["messages"]):
-                additional_kwargs = msg.additional_kwargs if hasattr(msg, "additional_kwargs") else {}
-                
-                # Include MCP response data if present (from tool execution)
-                if hasattr(msg, "additional_kwargs"):
-                    additional_kwargs = msg.additional_kwargs
-                    if "mcp_response" in additional_kwargs:
-                        mcp_response += f"\n{additional_kwargs['mcp_response'].strip('<mcp-response></mcp-response>')}"
-                        
-            if mcp_response:
-                mcp_response = '\n[MCP result resources]: ' + mcp_response
+            # Extract context for tool selection
+            user_message, ai_message, mcp_response, mcp_data = self._extract_context_for_tool_selection(state, config)
                 
             # Dispatch processing message to notify the ui-tools selection is in progress
             # This should become a standard pattern, potentially implemented as a LangGraph event, to notify the UI the status of operations

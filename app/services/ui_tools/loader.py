@@ -1,13 +1,27 @@
 """
 UI Tools Loader
-Loads UI tool definitions from Kubernetes ConfigMaps and registers them in the UI tools registry.
-Expects ConfigMaps with label app=rancher-ai-ui-tools containing JSON-formatted UI tools data.
+Loads UI tool definitions from Kubernetes ConfigMaps.
+Expects ConfigMaps containing JSON-formatted UI tools data.
 """
 
 import json
 import logging
 from typing import List, Optional, Dict, Any
-from .registry import UITool, UIToolSchema, UIToolsConfig, get_ui_tools_registry
+from kubernetes import client, config as k8s_config
+from .models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
+
+NAMESPACE = "cattle-ai-agent-system"
+
+def _init_k8s_client():
+    """Initialize Kubernetes client."""
+    try:
+        # Try in-cluster config first
+        k8s_config.load_incluster_config()
+    except k8s_config.ConfigException:
+        # Fall back to kubeconfig
+        k8s_config.load_kube_config()
+    
+    return client.CoreV1Api()
 
 
 def _get_ui_tools_object(data: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -141,47 +155,32 @@ def _parse_ui_tool_definition(tool_def: Dict[str, Any]) -> Optional[UITool]:
     )
 
 
-def reload_ui_tools_config(resource: Dict[str, Any]) -> None:
+def load_ui_tools_from_configmap(config_name: str) -> UIToolsConfigData | None:
     """
-    Reload UI tools and config from a UI tools ConfigMap into the registry.
-    
-    Extracts the data from the ConfigMap (JSON format), loads tools and config,
-    and syncs them with the global registry. Clears any previous tools for this
-    config before registering the new ones.
+    Load UI tools from a specific ConfigMap and return the ui tools config.
     
     Args:
-        resource: The complete ConfigMap resource object
+        config_name: Specific ConfigMap name to load
         
-    Raises:
-        Exception: If resource is malformed or missing required fields
+    Returns:
+        UIToolsConfigData containing the list of tools and config settings, or None if loading fails
     """
-    resource_name = resource.get('metadata', {}).get('name', 'unknown')
-    data = resource.get('data', {})
+    if config_name:
+        # Load specific ConfigMap by name
+        try:
+            api = _init_k8s_client()
+            cm = api.read_namespaced_config_map(config_name, NAMESPACE)
+            
+            cm_data = cm.data or {}
+            if not cm_data:
+                logging.warning(f"UI tools ConfigMap '{config_name}' has empty data, skipping")
+                return None
+            
+            tools, config = _load_ui_tools_data_from_config_map(cm_data)
+            logging.info(f"Loaded UI tools from ConfigMap '{config_name}' ({len(tools)} tools)")
+            
+            return UIToolsConfigData(config=config, tools=tools)
+        except Exception as e:
+            logging.error(f"Error loading ConfigMap '{config_name}': {e}")
     
-    if not data:
-        logging.warning(f"UI tools ConfigMap '{resource_name}' has empty data, skipping reload")
-        return
-    
-    tools, config = _load_ui_tools_data_from_config_map(data)
-    
-    # Sync with registry
-    registry = get_ui_tools_registry()
-    registry.clear_tools(config_name=resource_name)
-    registry.register_tools_config(tools, config, config_name=resource_name)
-    
-    logging.info(f"Reloaded UI tools ConfigMap '{resource_name}' into registry ({len(tools)} tools)")
-
-
-def clear_ui_tools_config(config_name: str) -> None:
-    """
-    Clear all UI tools for a specific UI tools ConfigMap from the registry.
-    
-    This is called when a ConfigMap with UI tools is deleted. Removes all tools
-    associated with the given config name from the global registry.
-    
-    Args:
-        config_name: The name of the ConfigMap to clear tools for
-    """
-    registry = get_ui_tools_registry()
-    registry.clear_tools(config_name=config_name)
-    logging.info(f"Cleared all UI tools for ConfigMap '{config_name}' from registry")
+    return None

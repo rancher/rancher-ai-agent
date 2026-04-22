@@ -17,8 +17,8 @@ from ollama import ResponseError
 from langchain_core.callbacks.manager import dispatch_custom_event
 from .loader import AgentConfig
 from .state import AgentState
+from app.services.ui_tools.loader import load_ui_tools_from_configmap
 from ..ui_tools.selector import create_ui_tools_selector, filter_tool
-from ..ui_tools.registry import get_ui_tools_registry
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -246,35 +246,22 @@ class BaseAgentBuilder:
                 logging.debug("UI tools list is empty, skipping ui tools dispatch")
                 return []
             
-            # Get the registry first
-            registry = get_ui_tools_registry()
+            ui_tools_config_data = load_ui_tools_from_configmap(name)
             
-            # Get the config data for this config_name
-            ui_tools_config = registry.get_tools_config(name)
-            if not ui_tools_config:
+            if not ui_tools_config_data or not ui_tools_config_data.config:
                 logging.debug(f"UI tools config {name} not found, skipping ui tools dispatch")
-                return
+                return []
             
-            if not ui_tools_config.config.enabled:
+            if not ui_tools_config_data.config.enabled:
                 logging.debug(f"UI tools config {name} are disabled, skipping ui tools dispatch")
-                return
-            
-            # Get the system prompt and max_tools from the config
-            system_prompt = ui_tools_config.config.system_prompt
-            max_tools = ui_tools_config.config.max_tools
-            
-            # Create a UI tools selector using the same LLM and the system prompt
-            selector = create_ui_tools_selector(self.llm, system_prompt=system_prompt, max_tools=max_tools)
-            
-            # Get all available tools from the registry, scoped by config name
-            all_available_tools = registry.get_all_tools(config_name=name)
+                return []
 
             # Filter tools: keep only enabled tools that are in the tool_filters list
             filtered_tools = []
-            for tool in all_available_tools:
+            for tool in ui_tools_config_data.tools:
                 if filter_tool(tool, tool_filters):
                     filtered_tools.append(tool)
-            logging.debug(f"Filtered UI tools: {[t.name for t in filtered_tools]} from {[t.name for t in all_available_tools]} based on filters: {tool_filters}")
+            logging.debug(f"Filtered UI tools: {[t.name for t in filtered_tools]} based on filters: {tool_filters}")
 
             # Skip if filtered tools list is empty
             if len(filtered_tools) == 0:
@@ -300,6 +287,13 @@ class BaseAgentBuilder:
             # This should become a standard pattern, potentially implemented as a LangGraph event, to notify the UI the status of operations
             dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
+            # Get the system prompt and max_tools from the config
+            system_prompt = ui_tools_config_data.config.system_prompt
+            max_tools = ui_tools_config_data.config.max_tools
+            
+            # Create a UI tools selector using the same LLM and the system prompt
+            selector = create_ui_tools_selector(self.llm, system_prompt=system_prompt, max_tools=max_tools)
+            
             # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(
                 agent_config=agent_config,
@@ -311,7 +305,7 @@ class BaseAgentBuilder:
             # Dispatch custom event with all tools
             self._dispatch_ui_tools(ui_tools_list)
             
-            return ui_tools_list            
+            return ui_tools_list
         except Exception as e:
             logging.error(f"Error dispatching UI tools event: {e}", exc_info=True)
             return []

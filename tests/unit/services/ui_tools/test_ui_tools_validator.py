@@ -3,7 +3,7 @@ Unit tests for UI Tools Validator functionality.
 Tests validation of tool calls against schemas, categories, enums, and required fields.
 """
 import pytest
-from app.services.ui_tools.registry import (
+from app.services.ui_tools.models import (
     UITool,
     UIToolSchema,
     UIToolCall,

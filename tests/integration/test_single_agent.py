@@ -327,7 +327,7 @@ def test_summary():
 
 def test_websocket_with_ui_tools():
     """Tests agent with UI tools enabled, verifying both response and dispatch ui-tools messages."""
-    from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
+    from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
     from app.services.agent.loader import AgentConfig, AuthenticationType
     from app.services.agent.root import RootAgentBuilder
     from unittest.mock import patch, MagicMock
@@ -380,18 +380,14 @@ def test_websocket_with_ui_tools():
             with patch('app.services.agent.factory.load_agent_configs') as mock_load:
                 mock_load.return_value = [agent_config]
                 
-                # Patch get_ui_tools_registry where it's USED (in base.py), not where it's defined
-                with patch('app.services.agent.base.get_ui_tools_registry') as mock_get_registry:
-                    mock_registry = MagicMock()
-                    mock_get_registry.return_value = mock_registry
-                    
-                    # Setup registry to return the UI tool and config
-                    mock_registry.get_all_tools.return_value = [ui_tool]
+                # Patch load_ui_tools_from_configmap to return our UI tools config
+                with patch('app.services.agent.base.load_ui_tools_from_configmap') as mock_load_configmap:
+                    # Setup to return the UI tool and config directly
                     ui_tools_config = UIToolsConfigData(
                         tools=[ui_tool],
                         config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Select relevant UI tools")
                     )
-                    mock_registry.get_tools_config.return_value = ui_tools_config
+                    mock_load_configmap.return_value = ui_tools_config
                     
                     # Mock the UI tools selector
                     with patch('app.services.agent.base.create_ui_tools_selector') as mock_selector_factory:
@@ -441,7 +437,7 @@ def test_websocket_with_ui_tools():
                         # Verify UI tools were dispatched
                         assert "<ui-tools>" in full_stream, "Missing <ui-tools> dispatch message"
                         
-                        mock_get_registry.assert_called(), "Registry should be queried for UI tools"
+                        mock_load_configmap.assert_called(), "UI tools config should be loaded from ConfigMap"
                         mock_selector_factory.assert_called(), "Selector factory should be called"
                         mock_selector.select_tools.assert_called(), "Selector should select tools"
     finally:

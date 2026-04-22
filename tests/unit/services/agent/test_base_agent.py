@@ -2,6 +2,7 @@
 Unit tests for agent building functionality including tool execution,
 human validation, conversation summarization, and error handling.
 """
+from app.services.ui_tools.models import UIToolsConfig
 import pytest
 import json
 
@@ -1306,15 +1307,15 @@ def test_call_model_node_no_routing_when_only_one_sibling(mock_llm, mock_tools, 
 class TestDispatchUIToolsEvent:
     """Test _dispatch_ui_tools_event method."""
     
-    @patch('app.services.agent.base.get_ui_tools_registry')
+    @patch('app.services.agent.base.load_ui_tools_from_configmap')
     @patch('app.services.agent.base.create_ui_tools_selector')
     @patch('app.services.agent.base.dispatch_custom_event')
     def test_dispatch_ui_tools_event_success(
-        self, mock_dispatch, mock_create_selector, mock_get_registry,
+        self, mock_dispatch, mock_create_selector, mock_load_configmap,
         mock_llm, mock_checkpointer, mock_config
     ):
         """Test successfully dispatching UI tools."""
-        from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig
+        from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
         
         builder = BaseAgentBuilder(
             llm=mock_llm,
@@ -1325,13 +1326,6 @@ class TestDispatchUIToolsEvent:
         )
         builder.child_agents = []  # Mock child_agents
         
-        # Setup mocks
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        mock_config_data = MagicMock()
-        mock_config_data.config = UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test")
-        mock_registry.get_tools_config.return_value = mock_config_data
         
         schema = UIToolSchema(type="object", properties={}, required=[])
         tool = UITool(
@@ -1343,7 +1337,12 @@ class TestDispatchUIToolsEvent:
             metadata={},
             enabled=True
         )
-        mock_registry.get_all_tools.return_value = [tool]
+        
+        mock_config_data = UIToolsConfigData(
+            config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test"),
+            tools=[tool]
+        )
+        mock_load_configmap.return_value = mock_config_data
         
         mock_selector = MagicMock()
         mock_selector.select_tools.return_value = [
@@ -1398,13 +1397,13 @@ class TestDispatchUIToolsEvent:
         
         assert result == []
     
-    @patch('app.services.agent.base.get_ui_tools_registry')
+    @patch('app.services.agent.base.load_ui_tools_from_configmap')
     @patch('app.services.agent.base.dispatch_custom_event')
     def test_dispatch_ui_tools_event_disabled_config(
-        self, mock_dispatch, mock_get_registry, mock_llm, mock_checkpointer
+        self, mock_dispatch, mock_load_configmap, mock_llm, mock_checkpointer
     ):
         """Test skipping dispatch when config is disabled."""
-        from app.services.ui_tools.registry import UIToolsConfig
+        from app.services.ui_tools.models import UIToolsConfig
         
         builder = BaseAgentBuilder(
             llm=mock_llm,
@@ -1414,12 +1413,12 @@ class TestDispatchUIToolsEvent:
             agent_config=MagicMock()
         )
         
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
+        mock_ui_tools_config = MagicMock()
+        mock_load_configmap.return_value = mock_ui_tools_config
         
         mock_config_data = MagicMock()
         mock_config_data.config = UIToolsConfig(enabled=False)
-        mock_registry.get_tools_config.return_value = mock_config_data
+        mock_ui_tools_config.get_tools_config.return_value = mock_config_data
         
         state = {"messages": [HumanMessage(content="test")]}
         config = {
@@ -1484,15 +1483,15 @@ class TestDispatchUITools:
 class TestUIToolsNode:
     """Test ui_tools_node method."""
     
-    @patch('app.services.agent.base.get_ui_tools_registry')
+    @patch('app.services.agent.base.load_ui_tools_from_configmap')
     @patch('app.services.agent.base.create_ui_tools_selector')
     @patch('app.services.agent.base.dispatch_custom_event')
     def test_ui_tools_node_success(
-        self, mock_dispatch, mock_create_selector, mock_get_registry,
+        self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer, mock_config
     ):
         """Test ui_tools_node successfully selects and saves tools."""
-        from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig
+        from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfigData
         
         builder = BaseAgentBuilder(
             llm=mock_llm,
@@ -1502,13 +1501,6 @@ class TestUIToolsNode:
             agent_config=MagicMock()
         )
         
-        # Setup mocks
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        mock_config_data = MagicMock()
-        mock_config_data.config = UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test")
-        mock_registry.get_tools_config.return_value = mock_config_data
         
         schema = UIToolSchema(type="object", properties={}, required=[])
         tool = UITool(
@@ -1520,7 +1512,12 @@ class TestUIToolsNode:
             metadata={},
             enabled=True
         )
-        mock_registry.get_all_tools.return_value = [tool]
+        
+        mock_config_data = UIToolsConfigData(
+            config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test"),
+            tools=[tool]
+        )
+        mock_ui_tools_config.get_tools_config.return_value = mock_config_data
         
         mock_selector = MagicMock()
         mock_selector.select_tools.return_value = [
@@ -1556,15 +1553,15 @@ class TestUIToolsNode:
 class TestFilteredUITools:
     """Test UI tools with filtered tools from request metadata."""
     
-    @patch('app.services.agent.base.get_ui_tools_registry')
+    @patch('app.services.agent.base.load_ui_tools_from_configmap')
     @patch('app.services.agent.base.create_ui_tools_selector')
     @patch('app.services.agent.base.dispatch_custom_event')
     def test_dispatch_ui_tools_with_filtered_tools(
-        self, mock_dispatch, mock_create_selector, mock_get_registry,
+        self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer
     ):
         """Test that only filtered tools are selected from available tools."""
-        from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig
+        from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
         
         builder = BaseAgentBuilder(
             llm=mock_llm,
@@ -1575,13 +1572,6 @@ class TestFilteredUITools:
         )
         builder.child_agents = []
         
-        # Setup mocks with multiple tools
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        mock_config_data = MagicMock()
-        mock_config_data.config = UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test")
-        mock_registry.get_tools_config.return_value = mock_config_data
         
         schema = UIToolSchema(type="object", properties={}, required=[])
         
@@ -1615,7 +1605,11 @@ class TestFilteredUITools:
         )
         
         # All tools available
-        mock_registry.get_all_tools.return_value = [selector_tool, viewer_tool, other_tool]
+        mock_config_data = UIToolsConfigData(
+            config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test"),
+            tools=[selector_tool, viewer_tool, other_tool]
+        )
+        mock_ui_tools_config.return_value = mock_config_data
         
         # Selector only selects filtered ones
         mock_selector = MagicMock()
@@ -1653,11 +1647,11 @@ class TestFilteredUITools:
         assert "test-viewer" in tool_names
         assert "test-other" not in tool_names
     
-    @patch('app.services.agent.base.get_ui_tools_registry')
+    @patch('app.services.agent.base.load_ui_tools_from_configmap')
     @patch('app.services.agent.base.create_ui_tools_selector')
     @patch('app.services.agent.base.dispatch_custom_event')
     def test_dispatch_ui_tools_empty_filtered_list(
-        self, mock_dispatch, mock_create_selector, mock_get_registry,
+        self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer
     ):
         """Test skipping dispatch when tools filter list is empty."""
@@ -1841,15 +1835,15 @@ class TestPreprocessedUIToolsWithConfirmation:
 class TestUIToolsWithMCPContext:
     """Test UI tools selection with MCP response context."""
     
-    @patch('app.services.agent.base.get_ui_tools_registry')
+    @patch('app.services.agent.base.load_ui_tools_from_configmap')
     @patch('app.services.agent.base.create_ui_tools_selector')
     @patch('app.services.agent.base.dispatch_custom_event')
     def test_ui_tools_selected_with_mcp_response_context(
-        self, mock_dispatch, mock_create_selector, mock_get_registry,
+        self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer
     ):
         """Test that UI tools are selected with MCP response context."""
-        from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig
+        from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
         
         builder = BaseAgentBuilder(
             llm=mock_llm,
@@ -1860,12 +1854,6 @@ class TestUIToolsWithMCPContext:
         )
         builder.child_agents = []
         
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        mock_config_data = MagicMock()
-        mock_config_data.config = UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test")
-        mock_registry.get_tools_config.return_value = mock_config_data
         
         schema = UIToolSchema(type="object", properties={}, required=[])
         tool = UITool(
@@ -1877,7 +1865,12 @@ class TestUIToolsWithMCPContext:
             metadata={},
             enabled=True
         )
-        mock_registry.get_all_tools.return_value = [tool]
+        
+        mock_config_data = UIToolsConfigData(
+            config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Test"),
+            tools=[tool]
+        )
+        mock_ui_tools_config.return_value = mock_config_data
         
         mock_selector = MagicMock()
         mock_selector.select_tools.return_value = [

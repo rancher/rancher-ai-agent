@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from app.services.ui_tools.selector import UIToolsSelector
-from app.services.ui_tools.registry import (
+from app.services.ui_tools.models import (
     UITool,
     UIToolSchema,
     UIToolCall,

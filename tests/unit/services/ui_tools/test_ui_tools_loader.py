@@ -4,16 +4,13 @@ Tests loading and parsing UI tools from Kubernetes ConfigMaps.
 """
 import pytest
 import json
-from unittest.mock import patch, MagicMock
 from app.services.ui_tools.loader import (
     _get_ui_tools_object,
     _load_ui_tools_data_from_config_map,
     _parse_ui_tool_config_definition,
     _parse_ui_tool_definition,
-    reload_ui_tools_config,
-    clear_ui_tools_config,
 )
-from app.services.ui_tools.registry import UIToolsConfig
+from app.services.ui_tools.models import UIToolsConfig
 
 
 @pytest.fixture
@@ -323,89 +320,3 @@ class TestLoadUIToolsDataFromConfigMap:
         
         assert len(tools) == 0
         assert config.enabled is True
-
-
-class TestReloadUIToolsConfig:
-    """Test reload_ui_tools_config function."""
-    
-    @patch('app.services.ui_tools.loader.get_ui_tools_registry')
-    def test_reload_valid_resource(self, mock_get_registry, sample_config_map_data):
-        """Test reloading a valid ConfigMap resource."""
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        resource = {
-            "metadata": {
-                "name": "ui-tools-config",
-                "namespace": "cattle-ai-agent-system"
-            },
-            "data": sample_config_map_data
-        }
-        
-        reload_ui_tools_config(resource)
-        
-        # Verify registry methods were called
-        mock_registry.clear_tools.assert_called_once_with(config_name="ui-tools-config")
-        mock_registry.register_tools_config.assert_called_once()
-        
-        # Verify the tools were registered
-        # register_tools_config(tools, config, config_name=...)
-        call_args = mock_registry.register_tools_config.call_args
-        tools = call_args[0][0]  # First positional argument
-        config = call_args[0][1]  # Second positional argument
-        config_name = call_args[1]["config_name"]  # Keyword argument
-        assert len(tools) == 1
-        assert config_name == "ui-tools-config"
-    
-    @patch('app.services.ui_tools.loader.get_ui_tools_registry')
-    def test_reload_empty_data(self, mock_get_registry):
-        """Test reloading ConfigMap with empty data."""
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        resource = {
-            "metadata": {"name": "config"},
-            "data": {}
-        }
-        
-        reload_ui_tools_config(resource)
-        
-        # Should not register anything
-        mock_registry.register_tools_config.assert_not_called()
-    
-    @patch('app.services.ui_tools.loader.get_ui_tools_registry')
-    def test_reload_missing_metadata(self, mock_get_registry, sample_config_map_data):
-        """Test reloading resource with missing metadata."""
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        resource = {"data": sample_config_map_data}
-        
-        reload_ui_tools_config(resource)
-        
-        # Should use 'unknown' as config name
-        mock_registry.clear_tools.assert_called_once_with(config_name="unknown")
-
-
-class TestClearUIToolsConfig:
-    """Test clear_ui_tools_config function."""
-    
-    @patch('app.services.ui_tools.loader.get_ui_tools_registry')
-    def test_clear_specific_config(self, mock_get_registry):
-        """Test clearing a specific UI tools config."""
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        clear_ui_tools_config("my-config")
-        
-        mock_registry.clear_tools.assert_called_once_with(config_name="my-config")
-    
-    @patch('app.services.ui_tools.loader.get_ui_tools_registry')
-    def test_clear_config_with_empty_name(self, mock_get_registry):
-        """Test clearing with empty config name."""
-        mock_registry = MagicMock()
-        mock_get_registry.return_value = mock_registry
-        
-        clear_ui_tools_config("")
-        
-        mock_registry.clear_tools.assert_called_once_with(config_name="")

@@ -9,7 +9,6 @@ from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .routers import agent, configuration, chat, websocket, ui
 from .controllers.ai_agent_config import create_kopf_manager
-from .controllers.ui_tools_config import create_ui_tools_watcher
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -112,10 +111,6 @@ async def lifespan(app: FastAPI):
         # Start the AIAgentConfig watcher
         app.kopf_manager = create_kopf_manager()
         app.kopf_manager.start()
-        
-        # Start the UIToolsConfig watcher
-        app.ui_tools_watcher = create_ui_tools_watcher()
-        app.ui_tools_watcher.start()
 
         app.state.ready = True
 
@@ -126,7 +121,6 @@ async def lifespan(app: FastAPI):
     
     yield
 
-    app.ui_tools_watcher.stop()
     app.kopf_manager.stop()
     await app.memory_manager.destroy()
     

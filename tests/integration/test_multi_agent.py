@@ -388,7 +388,7 @@ def test_delegate_to_child_agent_with_tool():
 
 def test_delegate_to_child_agent_with_ui_tools():
     """Tests that child agents work with UI tools and dispatch <processing-ui-tools/> message."""
-    from app.services.ui_tools.registry import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
+    from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
     from app.services.agent.child import ChildAgentBuilder
     from unittest.mock import patch, MagicMock
     import json
@@ -456,18 +456,14 @@ def test_delegate_to_child_agent_with_ui_tools():
             with patch('app.services.agent.factory.load_agent_configs') as mock_load:
                 mock_load.return_value = [math_config, calc_config]
                 
-                # Patch the registry to return our UI tool and its config (patch where it's USED, not defined)
-                with patch('app.services.agent.base.get_ui_tools_registry') as mock_get_registry:
-                    mock_registry = MagicMock()
-                    mock_get_registry.return_value = mock_registry
-                    
-                    # Setup registry to return the UI tool and config
-                    mock_registry.get_all_tools.return_value = [ui_tool]
+                # Patch load_ui_tools_from_configmap to return our UI tools config
+                with patch('app.services.agent.base.load_ui_tools_from_configmap') as mock_load_configmap:
+                    # Setup to return the UI tool and config directly
                     ui_tools_config = UIToolsConfigData(
                         tools=[ui_tool],
                         config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Select relevant UI tools")
                     )
-                    mock_registry.get_tools_config.return_value = ui_tools_config
+                    mock_load_configmap.return_value = ui_tools_config
                     
                     # Mock the UI tools selector
                     with patch('app.services.agent.base.create_ui_tools_selector') as mock_selector_factory:
@@ -517,7 +513,7 @@ def test_delegate_to_child_agent_with_ui_tools():
                         # Verify UI tools were dispatched
                         assert "<ui-tools>" in full_stream, "Missing <ui-tools> dispatch message"
                         
-                        mock_get_registry.assert_called(), "Registry should be queried for UI tools"
+                        mock_load_configmap.assert_called(), "UI tools config should be loaded from ConfigMap"
                         mock_selector_factory.assert_called(), "Selector factory should be called"
                         mock_selector.select_tools.assert_called(), "Selector should select tools"
                         

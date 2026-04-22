@@ -105,7 +105,7 @@ The prompt is critical for LLM decision-making. It should:
 
 ## Publishing UI Tools
 
-UI tools are published via Kubernetes **ConfigMaps** labeled with `app=rancher-ai-ui-tools`. The system automatically discovers and loads ConfigMaps with this label.
+UI tools are published via Kubernetes **ConfigMaps** . The system automatically discovers and loads ConfigMaps on each request.
 
 ### ConfigMap Format
 
@@ -140,13 +140,12 @@ data:
 ### Publication Process
 
 1. **Define tools** in ConfigMap `data.config.json`
-2. **Add label** `app: rancher-ai-ui-tools` to ConfigMap metadata (required for discovery)
-3. **Apply ConfigMap** to cluster:
+2. **Apply ConfigMap** to cluster:
    ```bash
    kubectl apply -f ui-tools-configmap.yaml
    ```
-4. **Registry loads** ConfigMaps with the label automatically on startup
-5. **Tools available** to AI agent for selection in subsequent requests
+3. **ConfigMap loads** ConfigMaps automatically loaded on user's request
+4. **Tools available** to AI agent for selection in subsequent requests
 
 ### Configuration Section
 

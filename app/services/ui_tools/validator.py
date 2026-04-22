@@ -6,7 +6,7 @@ which provides methods to validate UI tool calls based on their defined schemas 
 import logging
 from typing import List
 
-from .registry import UITool, UIToolCall, UIToolSchema, UIToolCategory
+from .models import UITool, UIToolCall, UIToolSchema, UIToolCategory
 
 
 class UIToolCallValidator:

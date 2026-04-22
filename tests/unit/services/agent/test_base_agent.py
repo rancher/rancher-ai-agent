@@ -968,7 +968,7 @@ async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpoint
     }
     
     with patch("langgraph.types.interrupt", return_value="no"):
-        should_continue, interrupt_msg = await builder.handle_interrupt(validation_tools, tool_call, {})
+        should_continue, interrupt_msg, _ = await builder.handle_interrupt(validation_tools, tool_call, {})
     
     assert should_continue is False
     assert interrupt_msg is not None
@@ -1000,7 +1000,7 @@ async def test_handle_interrupt_continues_on_yes_response(mock_llm, mock_checkpo
     }
     
     with patch("langgraph.types.interrupt", return_value="yes"):
-        should_continue, interrupt_msg = await builder.handle_interrupt(validation_tools, tool_call, {})
+        should_continue, interrupt_msg, _ = await builder.handle_interrupt(validation_tools, tool_call, {})
     
     assert should_continue is True
     assert interrupt_msg is not None
@@ -1093,7 +1093,7 @@ async def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt,
 
     mock_interrupt.return_value = "yes"
 
-    should_continue, _ = await builder.handle_interrupt(validation_tools, tool_call, state)
+    should_continue, _, _ = await builder.handle_interrupt(validation_tools, tool_call, state)
 
     assert should_continue is True
     
@@ -1697,9 +1697,23 @@ class TestPreprocessedUIToolsWithConfirmation:
         self, mock_interrupt, mock_dispatch, mock_llm, mock_checkpointer
     ):
         """Test that handle_interrupt works with config parameter for UI tools dispatch."""
-        # Setup validator tools
+        # Setup validator tools with proper JSON response structure
         validation_tools = ["patchKubernetesResource"]
-        plan_tool = MockTool("patchKubernetesResourcePlan", "preview patch operation")
+        
+        # Create a plan tool that returns proper JSON structure for UI tools extraction
+        plan_response = json.dumps({
+            "type": "patch",
+            "resource": {
+                "kind": "Pod",
+                "name": "test-pod",
+                "namespace": "default"
+            },
+            "payload": {
+                "original": "apiVersion: v1\nkind: Pod",
+                "patched": "apiVersion: v1\nkind: Pod\nmodified: true"
+            }
+        })
+        plan_tool = MockTool("patchKubernetesResourcePlan", plan_response)
         regular_tool = MockTool("patchKubernetesResource", "patch applied")
         
         builder = BaseAgentBuilder(
@@ -1742,7 +1756,7 @@ class TestPreprocessedUIToolsWithConfirmation:
         mock_interrupt.return_value = "yes"
         
         # Execute handle_interrupt with config (ui tools will be dispatched if path executes)
-        should_continue, interrupt_msg = await builder.handle_interrupt(
+        should_continue, interrupt_msg, ui_tools = await builder.handle_interrupt(
             validation_tools, tool_call, state, config
         )
         
@@ -1750,6 +1764,11 @@ class TestPreprocessedUIToolsWithConfirmation:
         assert should_continue is True
         assert interrupt_msg is not None
         assert "<confirmation-response>" in interrupt_msg
+        assert isinstance(ui_tools, list)
+        # Verify UI tools are populated with show-yaml-diff (for patch operations)
+        assert len(ui_tools) > 0
+        assert ui_tools[0]["toolName"] == "show-yaml-diff"
+        assert "input" in ui_tools[0]
     
     @pytest.mark.asyncio
     @patch('app.services.agent.base.dispatch_custom_event')
@@ -1758,8 +1777,20 @@ class TestPreprocessedUIToolsWithConfirmation:
         self, mock_interrupt, mock_dispatch, mock_llm, mock_checkpointer
     ):
         """Test that preprocessed tools dispatch happens before user rejects confirmation."""
+        # Create a plan tool that returns proper JSON structure for UI tools extraction
+        plan_response = json.dumps({
+            "type": "create",
+            "resource": {
+                "kind": "Pod",
+                "name": "test-pod",
+                "namespace": "default"
+            },
+            "payload": {
+                "yaml": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test-pod"
+            }
+        })
         validation_tools = ["createKubernetesResource"]
-        plan_tool = MockTool("createKubernetesResourcePlan", "preview create operation")
+        plan_tool = MockTool("createKubernetesResourcePlan", plan_response)
         regular_tool = MockTool("createKubernetesResource", "resource created")
         
         builder = BaseAgentBuilder(
@@ -1777,17 +1808,34 @@ class TestPreprocessedUIToolsWithConfirmation:
         
         state = {"messages": [HumanMessage(content="create resource")]}
         
+        config = {
+            "configurable": {
+                "request_id": "req-789",
+                "request_metadata": {
+                    "ui_tools": {
+                        "name": "default",
+                        "tools": ["show-yaml"]
+                    }
+                }
+            }
+        }
+        
         # User rejects confirmation
         mock_interrupt.return_value = "no"
         
-        # Execute
-        should_continue, interrupt_msg = await builder.handle_interrupt(
-            validation_tools, tool_call, state
+        # Execute with config so UI tools can be extracted and dispatched
+        should_continue, interrupt_msg, ui_tools = await builder.handle_interrupt(
+            validation_tools, tool_call, state, config
         )
         
         # Verify execution was rejected
         assert should_continue is False
         assert interrupt_msg is not None
+        assert isinstance(ui_tools, list)
+        # Verify UI tools are populated with show-yaml (for create operations)
+        assert len(ui_tools) > 0
+        assert ui_tools[0]["toolName"] == "show-yaml"
+        assert "input" in ui_tools[0]
 
 
 class TestUIToolsWithMCPContext:

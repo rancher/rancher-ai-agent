@@ -537,7 +537,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         # responses first ensures every tool is executed exactly once.
         interrupt_messages = {}
         for idx, tool_call in enumerate(tool_calls):
-            should_continue, interrupt_message = await self.handle_interrupt(human_validation_tools, tool_call, state, config)
+            should_continue, interrupt_message, ui_tools_list = await self.handle_interrupt(human_validation_tools, tool_call, state, config)
             if not should_continue:
                 # Cancel ALL tool calls: previously approved ones, the rejected one,
                 # and any remaining unevaluated ones — no tools will be executed.
@@ -546,6 +546,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     "request_id": request_id,
                     "selected_agent": state.get("selected_agent", {}),
                     "interrupt_message": interrupt_message,
+                    "ui_tools": ui_tools_list,
                     "confirmation": False
                 }
                 outputs.append(ToolMessage(
@@ -557,7 +558,10 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                 outputs.extend(self._cancel_remaining_tool_calls(tool_calls[idx + 1:], request_id, state, INTERRUPT_CANCEL_MESSAGE))
                 return {"messages": outputs}
             if interrupt_message:
-                interrupt_messages[tool_call["id"]] = interrupt_message
+                interrupt_messages[tool_call["id"]] = {
+                    "message": interrupt_message,
+                    "ui_tools": ui_tools_list
+                }
 
         # Phase 2: Execute tools (all interrupts were approved if we reach here).
         for idx, tool_call in enumerate(tool_calls):
@@ -568,8 +572,9 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
 
             interrupt_message = interrupt_messages.get(tool_call["id"])
             if interrupt_message:
-                additional_kwargs["interrupt_message"] = interrupt_message
+                additional_kwargs["interrupt_message"] = interrupt_message["message"]
                 additional_kwargs["confirmation"] = True
+                additional_kwargs["ui_tools"] = interrupt_message["ui_tools"]
             
             try:
                 logging.debug("calling tool")
@@ -712,7 +717,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
 
         return ""
 
-    async def handle_interrupt(self, human_validation_tools: list[str], tool_call: dict, state: AgentState, config: RunnableConfig = None) -> tuple[bool, str | None]:
+    async def handle_interrupt(self, human_validation_tools: list[str], tool_call: dict, state: AgentState, config: RunnableConfig = None) -> tuple[bool, str | None, list[dict]]:
         """Handles the user confirmation interrupt for a tool call.
         
         Args:
@@ -722,10 +727,13 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
             config: The runtime configuration (optional, needed to dispatch UI tools)
         
         Returns:
-            A tuple of (should_continue, interrupt_message) where:
+            A tuple of (should_continue, interrupt_message, ui_tools_list) where:
             - should_continue: True if execution should continue, False if cancelled
             - interrupt_message: The interrupt message if one was triggered, None otherwise
+            - ui_tools_list: List of UI tools for this confirmation, empty if none
         """
+        ui_tools_list = []
+        
         if interrupt_message := await self.should_interrupt(human_validation_tools, tool_call):
             logging.info(f"Confirmation interrupt triggered for tool '{tool_call.get('name')}', config={'present' if config else 'missing'}")
             
@@ -768,7 +776,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
             
             response = langgraph.types.interrupt(interrupt_message)
             if response != "yes":
-                return False, interrupt_message
+                return False, interrupt_message, ui_tools_list
             
             selected_agent = state.get("selected_agent", {})
             if selected_agent:
@@ -776,9 +784,9 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     "subagent_choice_event",
                     build_agent_metadata(selected_agent.get("name"), selected_agent.get("mode")),
                 )
-            return True, interrupt_message
+            return True, interrupt_message, ui_tools_list
             
-        return True, None 
+        return True, None, ui_tools_list 
 
 
 

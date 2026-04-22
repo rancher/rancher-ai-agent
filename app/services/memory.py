@@ -365,6 +365,7 @@ class MemoryManager:
                                 "agent": selected_agent,
                                 "message": interrupt_str,
                                 "confirmation": confirmation,
+                                "tools": msg.additional_kwargs.get("ui_tools", []),
                                 "createdAt": msg.additional_kwargs.get("created_at"),
                             })
                         else:

@@ -268,10 +268,6 @@ class BaseAgentBuilder:
                 logging.debug("No UI tools available after filtering, skipping ui tools dispatch")
                 return []
             
-            if not state.get("messages"):
-                logging.debug("No messages in state, skipping ui tools dispatch")
-                return []
-            
             # Get the selected agent context
             selected_agent = state.get("selected_agent", {}).get("name", "")
             agent_config = None

@@ -11,6 +11,7 @@ from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.tools import Tool
 from pydantic import create_model, Field
 
+from ..agent.loader import AgentConfig
 from .models import UITool, UIToolCall
 from .validator import create_ui_tools_validator
 
@@ -212,7 +213,7 @@ Each tool's description explains its scope. Follow it strictly."""
         else:
             self.system_prompt = default_prompt
             
-    def _build_text_prompt(self, agent_config: Any, context: str, mcp_response: Optional[str]) -> str:
+    def _build_text_prompt(self, agent_config: AgentConfig, context: str, mcp_response: Optional[str]) -> str:
         """Build the text prompt for the LLM based on the agent context and MCP response if available"""
         return f"""Analyze this CONTEXT + MCP RESPONSE (if available) + the SELECTED AGENT used to perform the task, and select appropriate UI tools to enhance the response.
 
@@ -227,7 +228,7 @@ If no tools are appropriate, do not invoke any tools."""
 
     def select_tools(
         self,
-        agent_config: Any, # The agent used to permorm the user request, used to scope tool selection and for better prompt guidance
+        agent_config: AgentConfig, # The agent used to permorm the user request, used to scope tool selection and for better prompt guidance
         context: str,  # Current response/context from agent
         mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
         available_tools: Optional[List[UITool]] = None,

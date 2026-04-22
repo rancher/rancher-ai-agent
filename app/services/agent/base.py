@@ -17,7 +17,7 @@ from ollama import ResponseError
 from langchain_core.callbacks.manager import dispatch_custom_event
 from .loader import AgentConfig
 from .state import AgentState
-from app.services.ui_tools.loader import load_ui_tools_from_configmap
+from ..ui_tools.loader import load_ui_tools_from_configmap
 from ..ui_tools.selector import create_ui_tools_selector, filter_tool
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"

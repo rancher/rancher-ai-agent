@@ -278,10 +278,6 @@ class BaseAgentBuilder:
 
             # Extract context for tool selection
             user_message, ai_message, mcp_response, mcp_data = self._extract_context_for_tool_selection(state, config)
-                
-            # Dispatch processing message to notify the ui-tools selection is in progress
-            # This should become a standard pattern, potentially implemented as a LangGraph event, to notify the UI the status of operations
-            dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
             # Get the system prompt and max_tools from the config
             system_prompt = ui_tools_config_data.config.system_prompt
@@ -289,6 +285,10 @@ class BaseAgentBuilder:
             
             # Create a UI tools selector using the same LLM and the system prompt
             selector = create_ui_tools_selector(self.llm, system_prompt=system_prompt, max_tools=max_tools)
+            
+            # Dispatch processing message to notify the ui-tools selection is in progress
+            # This should become a standard pattern, potentially implemented as a LangGraph event, to notify the UI the status of operations
+            dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
             
             # select_tools already returns sanitized and validated ui tools
             ui_tools_list = selector.select_tools(

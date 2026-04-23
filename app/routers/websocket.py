@@ -224,6 +224,18 @@ def _extract_interrupt_value(stream: dict) -> str | None:
     value = interrupts[0].value
     if value is None:
         return None
+
+    # Handle HITL interrupt from deepagents middleware (e.g., plan approval).
+    # Extract the description from the first action request so the client
+    # receives the <plan-approval> tag instead of the raw HITLRequest dict.
+    if isinstance(value, dict) and "action_requests" in value:
+        action_requests = value.get("action_requests", [])
+        if action_requests:
+            description = action_requests[0].get("description", "")
+            if description:
+                return description
+        return json.dumps(value)
+
     if isinstance(value, str):
         return value or None
     return json.dumps(value)
@@ -352,6 +364,9 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
     Builds the input data for the agent, handling interrupt resumption.
     
     If the agent is waiting on an interrupt, resumes with the user's response.
+    For HITL interrupts (e.g., plan approval from deepagents middleware), the
+    user's plain-text response is converted to the decision format expected by
+    HumanInTheLoopMiddleware.
     Otherwise, creates a new user message.
     
     Args:
@@ -365,6 +380,14 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
     state = await agent.aget_state(config=config)
     
     if state.interrupts:
+        interrupt_value = state.interrupts[0].value
+
+        # HITL interrupt from deepagents middleware (e.g., plan approval)
+        if isinstance(interrupt_value, dict) and "action_requests" in interrupt_value:
+            resume_value = _build_hitl_resume(ws_request.prompt, interrupt_value)
+            return Command(resume=resume_value)
+
+        # Old-style string interrupt (e.g., confirmation-response)
         return Command(resume=ws_request.prompt)
 
     input_messages = [
@@ -379,4 +402,53 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
 
     return {
         "messages": input_messages,
+    }
+
+
+def _build_hitl_resume(prompt: str, interrupt_value: dict) -> dict:
+    """
+    Convert a user's plain-text response into the HITL decision format
+    expected by HumanInTheLoopMiddleware.
+
+    Supports:
+    - "yes" / "approve" / "ok" / "go ahead" -> approve all actions
+    - "no" / "reject" / "cancel" / "stop" -> reject all actions
+    - Raw JSON with a "decisions" key -> pass through as-is
+    - Any other text -> reject with the text as the rejection message
+
+    Args:
+        prompt: The raw user response string.
+        interrupt_value: The original HITLRequest dict from the interrupt.
+
+    Returns:
+        A dict with a "decisions" list matching the number of action requests.
+    """
+    num_actions = len(interrupt_value.get("action_requests", []))
+
+    normalized = prompt.lower().strip()
+    if normalized in ("yes", "approve", "ok", "go ahead"):
+        return {"decisions": [{"type": "approve"} for _ in range(num_actions)]}
+
+    if normalized in ("no", "reject", "cancel", "stop"):
+        return {
+            "decisions": [
+                {"type": "reject", "message": "User rejected the plan"}
+                for _ in range(num_actions)
+            ]
+        }
+
+    # Allow clients to send raw HITL decision JSON
+    try:
+        parsed = json.loads(prompt)
+        if isinstance(parsed, dict) and "decisions" in parsed:
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Default: treat free-text as a rejection with the user's feedback
+    return {
+        "decisions": [
+            {"type": "reject", "message": prompt}
+            for _ in range(num_actions)
+        ]
     }

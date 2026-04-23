@@ -60,11 +60,10 @@ async def test_create_agent_single_agent(mock_create_single, mock_load_configs):
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_parent_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_three_agents(mock_update_status, mock_create_client, mock_create_parent, mock_create_child, mock_load_configs):
+async def test_create_agent_three_agents(mock_update_status, mock_create_client, mock_create_parent, mock_load_configs):
     """Verify create_agent creates a parent agent when three configs are available."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -97,9 +96,6 @@ async def test_create_agent_three_agents(mock_update_status, mock_create_client,
     mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
     mock_create_client.return_value = mock_client_instance
     
-    mock_child_agent = MagicMock()
-    mock_create_child.return_value = mock_child_agent
-    
     mock_parent_agent = MagicMock()
     mock_create_parent.return_value = mock_parent_agent
     
@@ -108,17 +104,16 @@ async def test_create_agent_three_agents(mock_update_status, mock_create_client,
     
     # Verify
     assert result[0] == mock_parent_agent
-    assert mock_create_child.call_count == 3
     mock_create_parent.assert_called_once()
     
-    # Verify parent was called with correct child agents
+    # Verify parent was called with correct subagents
     call_args = mock_create_parent.call_args
     assert call_args[0][0] == mock_llm
-    child_agents = call_args[0][1]
-    assert len(child_agents) == 3
-    assert child_agents[0].config.name == "RancherAgent"
-    assert child_agents[1].config.name == "FleetAgent"
-    assert child_agents[2].config.name == "HarvesterAgent"
+    subagents = call_args[0][1]
+    assert len(subagents) == 3
+    assert subagents[0]["name"] == "RancherAgent"
+    assert subagents[1]["name"] == "FleetAgent"
+    assert subagents[2]["name"] == "HarvesterAgent"
     
     # Verify metadata includes all agents
     metadata = result[1]
@@ -128,11 +123,10 @@ async def test_create_agent_three_agents(mock_update_status, mock_create_client,
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_parent_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_parent, mock_create_child, mock_load_configs):
+async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_parent, mock_load_configs):
     """Verify create_agent filters tools based on toolset configuration."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -180,9 +174,6 @@ async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_cr
     mock_client_instance.get_tools = AsyncMock(return_value=all_tools)
     mock_create_client.return_value = mock_client_instance
     
-    mock_child_agent = MagicMock()
-    mock_create_child.return_value = mock_child_agent
-    
     mock_parent_agent = MagicMock()
     mock_create_parent.return_value = mock_parent_agent
     
@@ -191,27 +182,28 @@ async def test_create_agent_filters_tools_by_toolset(mock_update_status, mock_cr
     
     # Verify
     assert result[0] == mock_parent_agent
-    assert mock_create_child.call_count == 2
     
-    # Verify first agent (RancherAgent) received only tools matching "rancher-core" toolset
-    first_call_args = mock_create_child.call_args_list[0]
-    first_call_tools = first_call_args[0][1]  # Second positional argument is tools
-    assert len(first_call_tools) == 1
-    assert first_call_tools[0].name == "rancher_tool"
+    # Verify subagents passed to create_parent_agent have correct tools
+    call_args = mock_create_parent.call_args
+    subagents = call_args[0][1]
+    assert len(subagents) == 2
     
-    # Verify second agent (FleetAgent) received all tools (no toolset filter)
-    second_call_args = mock_create_child.call_args_list[1]
-    second_call_tools = second_call_args[0][1]
-    assert len(second_call_tools) == 4  # All tools
+    # First subagent (RancherAgent) should have only rancher-core tools
+    assert subagents[0]["name"] == "RancherAgent"
+    assert len(subagents[0]["tools"]) == 1
+    assert subagents[0]["tools"][0].name == "rancher_tool"
+    
+    # Second subagent (FleetAgent) should have all tools (no toolset filter)
+    assert subagents[1]["name"] == "FleetAgent"
+    assert len(subagents[1]["tools"]) == 4
 
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_parent_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_create_client, mock_create_parent, mock_create_child, mock_load_configs):
+async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_create_client, mock_create_parent, mock_load_configs):
     """Verify create_agent handles MCP connection failure for one agent and continues with others."""
     # Setup mocks
     mock_llm = MagicMock()
@@ -256,29 +248,23 @@ async def test_create_agent_one_fails_mcp_connection(mock_update_status, mock_cr
     # Return different clients on each call
     mock_create_client.side_effect = [mock_client_fail, mock_client_success1, mock_client_success2]
     
-    mock_child_agent = MagicMock()
-    mock_create_child.return_value = mock_child_agent
-    
     mock_parent_agent = MagicMock()
     mock_create_parent.return_value = mock_parent_agent
     
     # Execute
     result = await create_agent(mock_llm, mock_websocket)
     
-    # Verify two child agents were created (the successful ones)
-    assert mock_create_child.call_count == 2
-    
     # Should return parent agent since 2 agents succeeded
     assert result[0] == mock_parent_agent
     mock_create_parent.assert_called_once()
 
-    # Verify parent was called with correct child agents
+    # Verify parent was called with correct subagents
     call_args = mock_create_parent.call_args
     assert call_args[0][0] == mock_llm
-    child_agents = call_args[0][1]
-    assert len(child_agents) == 2
-    assert child_agents[0].config.name == "Agent2"
-    assert child_agents[1].config.name == "Agent3"
+    subagents = call_args[0][1]
+    assert len(subagents) == 2
+    assert subagents[0]["name"] == "Agent2"
+    assert subagents[1]["name"] == "Agent3"
     
     # Verify metadata includes all three agents with correct status
     metadata = result[1]

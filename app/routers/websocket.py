@@ -221,7 +221,12 @@ def _extract_interrupt_value(stream: dict) -> str | None:
     if not interrupts:
         return None
     
-    return interrupts[0].value or None
+    value = interrupts[0].value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return json.dumps(value)
     
 def _extract_text_from_chunk_content(chunk_content: any) -> str:
     """

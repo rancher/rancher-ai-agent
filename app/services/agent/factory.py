@@ -155,7 +155,10 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
         
         mcp_url = os.environ.get("MCP_URL", agent_config.mcp_url)
         if not mcp_url.startswith(("http://", "https://")):
-            mcp_url = "https://" + mcp_url
+            if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == 'true':
+                mcp_url = "http://" + mcp_url
+            else:
+                mcp_url = "https://" + mcp_url
         headers = {
             "R_token": token,
             "R_url": rancher_url

@@ -381,7 +381,7 @@ def test_create_mcp_client_none_auth(mock_mcp_client):
 
 
 @patch('app.services.agent.factory.MultiServerMCPClient')
-@patch.dict(os.environ, {'RANCHER_URL': 'https://rancher.example.com', 'RANCHER_API_TOKEN': 'test-token'})
+@patch.dict(os.environ, {'RANCHER_URL': 'https://rancher.example.com', 'RANCHER_API_TOKEN': 'test-token', 'INSECURE_SKIP_TLS': 'false'})
 def test_create_mcp_client_rancher_auth_with_websocket(mock_mcp_client):
     """Verify create_mcp_client handles Rancher authentication correctly."""
     mock_websocket = MagicMock()
@@ -420,7 +420,7 @@ def test_create_mcp_client_insecure(mock_mcp_client):
     result = create_mcp_client(mock_config)
 
     call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "https://mcp:8080"
+    assert call_args["TestAgent"]["url"] == "http://mcp:8080"
     assert call_args["TestAgent"]["httpx_client_factory"] is not None
 
 

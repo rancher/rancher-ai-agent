@@ -8,8 +8,7 @@ from unittest.mock import MagicMock
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import END
-from app.services.agent.base import BaseAgentBuilder
-from app.services.agent.root import RootAgentBuilder, create_root_agent
+from app.services.agent.child import BaseAgentBuilder, ChildAgentBuilder as RootAgentBuilder, create_child_agent as create_root_agent
 from app.services.agent.loader import AgentConfig, AuthenticationType
 
 
@@ -102,7 +101,6 @@ def test_root_agent_graph_has_correct_nodes(mock_llm, mock_tools, mock_checkpoin
     nodes = graph.nodes
     assert "agent" in nodes
     assert "tools" in nodes
-    assert "summarize_conversation" in nodes
 
 # ============================================================================
 # Factory Function Tests
@@ -157,11 +155,7 @@ def test_create_root_agent_with_custom_system_prompt(mock_llm, mock_tools, mock_
 # ============================================================================
 
 def test_root_agent_has_nodes(mock_llm, mock_tools, mock_checkpointer, agent_config):
-    """Verify that root agent includes a summarize_conversation_node.
-    
-    Root agents handle their own summarization, unlike child agents which
-    delegate to their parent.
-    """
+    """Verify that root agent includes the expected graph nodes."""
     builder = RootAgentBuilder(
         llm=mock_llm,
         tools=mock_tools,
@@ -173,6 +167,5 @@ def test_root_agent_has_nodes(mock_llm, mock_tools, mock_checkpointer, agent_con
     graph = builder.build()
     nodes = graph.nodes
 
-    assert "summarize_conversation" in nodes
     assert "agent" in nodes
     assert "tools" in nodes

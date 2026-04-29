@@ -7,7 +7,7 @@ import pytest
 import json
 
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.agent.base import (
+from app.services.agent.child import (
     process_tool_result,
     convert_to_string_if_needed,
     INTERRUPT_CANCEL_MESSAGE,
@@ -459,7 +459,7 @@ async def test_tool_node_handles_multiple_tool_calls(mock_llm, mock_tools, mock_
     assert result["messages"][1].tool_call_id == "call_2"
 
 @pytest.mark.asyncio
-@patch("app.services.agent.base.dispatch_custom_event")
+@patch("app.services.agent.child.dispatch_custom_event")
 async def test_tool_node_processes_mcp_response(mock_dispatch, mock_llm, mock_checkpointer, mock_config, agent_config_without_validation):
     """Verify that MCP responses with uiContext are properly processed."""
     mcp_result = json.dumps({
@@ -550,26 +550,6 @@ def test_call_model_node_fails_after_retry_limit(mock_llm, mock_tools, mock_chec
     
     assert mock_llm.invoke.call_count == 2
 
-def test_call_model_node_uses_sliding_window_with_summary(mock_llm, mock_tools, mock_checkpointer, mock_config):
-    """Verify that call_model_node uses summary and slices messages correctly."""
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=mock_tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=MagicMock()
-    )
-    messages = [AIMessage(content=f"M{i}") for i in range(10)]
-    state = {
-        "messages": messages,
-        "summary": {"text": "Summary context", "msg_count": 7}
-    }
-    builder.call_model_node(state, mock_config)
-    call_args = mock_llm.invoke.call_args[0][0]
-    assert any("Summary context" in str(m.content) for m in call_args)
-    # 1 system + 1 summary system + (10-7) messages = 5
-    assert len(call_args) == 5
-
 # ============================================================================
 # Consecutive Tool Call Limit Tests
 # ============================================================================
@@ -633,7 +613,7 @@ def test_count_consecutive_tool_rounds_resets_on_human_message(mock_llm, mock_to
 
 def test_call_model_node_forces_answer_at_tool_call_limit(mock_llm, mock_tools, mock_checkpointer, mock_config):
     """Verify that the LLM is called without tools when the consecutive tool call limit is reached."""
-    from app.services.agent.base import MAX_CONSECUTIVE_TOOL_CALLS
+    from app.services.agent.child import MAX_CONSECUTIVE_TOOL_CALLS
 
     # Create a separate mock for llm (no tools) vs llm_with_tools
     llm_no_tools = MagicMock()
@@ -666,7 +646,7 @@ def test_call_model_node_forces_answer_at_tool_call_limit(mock_llm, mock_tools, 
 
 def test_call_model_node_allows_tools_below_limit(mock_llm, mock_tools, mock_checkpointer, mock_config):
     """Verify that tools are still available when under the consecutive tool call limit."""
-    from app.services.agent.base import MAX_CONSECUTIVE_TOOL_CALLS
+    from app.services.agent.child import MAX_CONSECUTIVE_TOOL_CALLS
 
     builder = BaseAgentBuilder(
         llm=mock_llm,
@@ -697,113 +677,6 @@ def test_call_model_node_allows_tools_below_limit(mock_llm, mock_tools, mock_che
 # ============================================================================
 # Conversation Summarization Tests
 # ============================================================================
-
-def test_summarize_conversation_creates_new_summary(mock_llm, mock_tools, mock_checkpointer):
-    """Verify that summarize_conversation creates a new summary when none exists."""
-    summary_response = AIMessage(content="Summary of conversation")
-    mock_llm.invoke = MagicMock(return_value=summary_response)
-    
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=mock_tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=MagicMock()
-    )
-    
-    msg1 = HumanMessage(content="Hello", id="msg1")
-    msg2 = AIMessage(content="Hi there", id="msg2")
-    state = {"messages": [msg1, msg2]}
-
-    result = builder.summarize_conversation_node(state)
-
-    assert result["summary"] == {
-        "text": "Summary of conversation",
-        "msg_count": 2
-    }
-    assert "messages" not in result
-
-def test_summarize_conversation_extends_existing_summary(mock_llm, mock_tools, mock_checkpointer):
-    """Verify that summarize_conversation extends an existing summary."""
-    summary_response = AIMessage(content="Extended summary")
-    mock_llm.invoke = MagicMock(return_value=summary_response)
-    
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=mock_tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=MagicMock()
-    )
-    
-    msg1 = HumanMessage(content="New message", id="msg1")
-    state = {
-        "messages": [msg1],
-        "summary": {
-            "text": "Previous summary",
-            "msg_count": 2
-        },
-        "selected-agent": ""
-    }
-
-    result = builder.summarize_conversation_node(state)
-
-    assert result["summary"]["text"] == "Extended summary"
-    assert result["summary"]["msg_count"] == 1
-    call_args = mock_llm.invoke.call_args[0][0]
-    assert any("Previous summary" in str(msg.content) for msg in call_args)
-
-def test_should_summarize_conversation_returns_summarize_for_long_conversations(mock_llm, mock_tools, mock_checkpointer):
-    """Verify that conversations with > 7 messages trigger summarization."""
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=mock_tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=MagicMock()
-    )
-    
-    messages = [AIMessage(content=f"Message {i}") for i in range(10)]
-    state = {"messages": messages}
-
-    result = builder.should_summarize_conversation(state)
-
-    assert result == "summarize_conversation"
-
-def test_should_summarize_conversation_returns_end_for_short_conversations(mock_llm, mock_tools, mock_checkpointer):
-    """Verify that conversations with ≤ 7 messages end without summarization."""
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=mock_tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=MagicMock()
-    )
-    
-    messages = [AIMessage(content=f"Message {i}") for i in range(5)]
-    state = {"messages": messages, "summary": {"msg_count": 0}}
-
-    result = builder.should_summarize_conversation(state)
-
-    assert result == "end"
-
-def test_should_summarize_conversation_returns_continue_for_tool_calls(mock_llm, mock_tools, mock_checkpointer):
-    """Verify that messages with tool calls continue rather than summarize."""
-    builder = BaseAgentBuilder(
-        llm=mock_llm,
-        tools=mock_tools,
-        system_prompt="system_prompt",
-        checkpointer=mock_checkpointer,
-        agent_config=MagicMock()
-    )
-    
-    msg_with_tool = AIMessage(content="Calling tool")
-    msg_with_tool.tool_calls = [{"id": "1", "name": "test"}]
-    state = {"messages": [msg_with_tool]}
-
-    result = builder.should_summarize_conversation(state)
-
-    assert result == "continue"
 
 # ============================================================================
 # Control Flow Tests
@@ -1013,7 +886,7 @@ def test_process_tool_result_handles_mcp_response_with_ui_context():
         "uiContext": {"display": "data"}
     })
     
-    with patch("app.services.agent.base.dispatch_custom_event"):
+    with patch("app.services.agent.child.dispatch_custom_event"):
         processed, mcp_response = process_tool_result(tool_result, {})
     
     assert processed == "LLM response"
@@ -1045,7 +918,7 @@ def test_process_tool_result_handles_doc_links():
         "docLinks": ["https://docs.example.com"]
     })
     
-    with patch("app.services.agent.base.dispatch_custom_event") as mock_dispatch:
+    with patch("app.services.agent.child.dispatch_custom_event") as mock_dispatch:
         processed, _ = process_tool_result(tool_result, {})
         
         # Check that dock_link event was dispatched
@@ -1054,7 +927,7 @@ def test_process_tool_result_handles_doc_links():
         assert "https://docs.example.com" in calls[0][0][1]
         
 @pytest.mark.asyncio
-@patch("app.services.agent.base.dispatch_custom_event")
+@patch("app.services.agent.child.dispatch_custom_event")
 @patch("langgraph.types.interrupt")
 async def test_handle_interrupt_dispatches_subagent_choice_event(mock_interrupt, mock_dispatch, mock_llm, mock_checkpointer):
     """
@@ -1307,9 +1180,9 @@ def test_call_model_node_no_routing_when_only_one_sibling(mock_llm, mock_tools, 
 class TestDispatchUIToolsEvent:
     """Test _dispatch_ui_tools_event method."""
     
-    @patch('app.services.agent.base.load_ui_tools_from_configmap')
-    @patch('app.services.agent.base.create_ui_tools_selector')
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.load_ui_tools_from_configmap')
+    @patch('app.services.agent.child.create_ui_tools_selector')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_event_success(
         self, mock_dispatch, mock_create_selector, mock_load_configmap,
         mock_llm, mock_checkpointer, mock_config
@@ -1372,7 +1245,7 @@ class TestDispatchUIToolsEvent:
         assert len(result) == 1
         assert result[0]["toolName"] == "test-selector"
     
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_event_missing_config_name(
         self, mock_dispatch, mock_llm, mock_checkpointer
     ):
@@ -1397,8 +1270,8 @@ class TestDispatchUIToolsEvent:
         
         assert result == []
     
-    @patch('app.services.agent.base.load_ui_tools_from_configmap')
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.load_ui_tools_from_configmap')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_event_disabled_config(
         self, mock_dispatch, mock_load_configmap, mock_llm, mock_checkpointer
     ):
@@ -1436,7 +1309,7 @@ class TestDispatchUIToolsEvent:
 class TestDispatchUITools:
     """Test _dispatch_ui_tools method."""
     
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_single_tool(self, mock_dispatch, mock_llm, mock_checkpointer):
         """Test dispatching a single UI tool."""
         builder = BaseAgentBuilder(
@@ -1456,7 +1329,7 @@ class TestDispatchUITools:
         assert call_args[0][0] == "ui_tools"
         assert "selector" in call_args[0][1]
     
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_multiple_tools(self, mock_dispatch, mock_llm, mock_checkpointer):
         """Test dispatching multiple UI tools."""
         builder = BaseAgentBuilder(
@@ -1483,9 +1356,9 @@ class TestDispatchUITools:
 class TestUIToolsNode:
     """Test ui_tools_node method."""
     
-    @patch('app.services.agent.base.load_ui_tools_from_configmap')
-    @patch('app.services.agent.base.create_ui_tools_selector')
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.load_ui_tools_from_configmap')
+    @patch('app.services.agent.child.create_ui_tools_selector')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_ui_tools_node_success(
         self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer, mock_config
@@ -1553,9 +1426,9 @@ class TestUIToolsNode:
 class TestFilteredUITools:
     """Test UI tools with filtered tools from request metadata."""
     
-    @patch('app.services.agent.base.load_ui_tools_from_configmap')
-    @patch('app.services.agent.base.create_ui_tools_selector')
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.load_ui_tools_from_configmap')
+    @patch('app.services.agent.child.create_ui_tools_selector')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_with_filtered_tools(
         self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer
@@ -1647,9 +1520,9 @@ class TestFilteredUITools:
         assert "test-viewer" in tool_names
         assert "test-other" not in tool_names
     
-    @patch('app.services.agent.base.load_ui_tools_from_configmap')
-    @patch('app.services.agent.base.create_ui_tools_selector')
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.load_ui_tools_from_configmap')
+    @patch('app.services.agent.child.create_ui_tools_selector')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_dispatch_ui_tools_empty_filtered_list(
         self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer
@@ -1685,7 +1558,7 @@ class TestPreprocessedUIToolsWithConfirmation:
     """Test preprocessed UI tools (show-yaml, show-yaml-diff) with confirmation workflow."""
     
     @pytest.mark.asyncio
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.dispatch_custom_event')
     @patch('langgraph.types.interrupt')
     async def test_preprocessed_tools_dispatch_before_interrupt(
         self, mock_interrupt, mock_dispatch, mock_llm, mock_checkpointer
@@ -1765,7 +1638,7 @@ class TestPreprocessedUIToolsWithConfirmation:
         assert "input" in ui_tools[0]
     
     @pytest.mark.asyncio
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.dispatch_custom_event')
     @patch('langgraph.types.interrupt')
     async def test_preprocessed_tools_confirmation_rejected(
         self, mock_interrupt, mock_dispatch, mock_llm, mock_checkpointer
@@ -1835,9 +1708,9 @@ class TestPreprocessedUIToolsWithConfirmation:
 class TestUIToolsWithMCPContext:
     """Test UI tools selection with MCP response context."""
     
-    @patch('app.services.agent.base.load_ui_tools_from_configmap')
-    @patch('app.services.agent.base.create_ui_tools_selector')
-    @patch('app.services.agent.base.dispatch_custom_event')
+    @patch('app.services.agent.child.load_ui_tools_from_configmap')
+    @patch('app.services.agent.child.create_ui_tools_selector')
+    @patch('app.services.agent.child.dispatch_custom_event')
     def test_ui_tools_selected_with_mcp_response_context(
         self, mock_dispatch, mock_create_selector, mock_ui_tools_config,
         mock_llm, mock_checkpointer

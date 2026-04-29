@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 import httpx
 from kubernetes import client
-from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
 from .parent import create_supervisor_agent, ChildAgent
 from .child import create_child_agent
@@ -241,7 +240,7 @@ async def _create_single_agent(
     agent_cfg: AgentConfig,
     checkpointer: Checkpointer,
     websocket: WebSocket
-) -> tuple:
+) -> CompiledStateGraph:
     """
     Create a single child agent based on the provided agent configuration.
     
@@ -279,9 +278,7 @@ async def _create_single_agent(
             f"Please check the AI Agents configuration and ensure the MCP server is accessible with the provided connection details."
         )
 
-    agent = create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
-    agent.streamable_nodes = ("agent", "model")
-    return agent
+    return create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
 
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
     """

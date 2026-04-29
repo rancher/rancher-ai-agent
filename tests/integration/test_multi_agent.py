@@ -1,7 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
-from app.services.agent.parent import build_router_prompt
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
 from langchain_core.language_models import FakeMessagesListChatModel

@@ -26,7 +26,7 @@ from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
 from .loader import AgentConfig
-from .base import INTERRUPT_CANCEL_MESSAGE
+from .child import INTERRUPT_CANCEL_MESSAGE
 from langchain.messages import AIMessage
 from langgraph.runtime import Runtime
 

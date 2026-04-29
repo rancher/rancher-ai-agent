@@ -12,7 +12,7 @@ from .child import create_child_agent
 from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.graph.state import Checkpointer
+from langgraph.graph.state import Checkpointer, CompiledStateGraph
 
 NAMESPACE = "cattle-ai-agent-system"
 
@@ -31,7 +31,7 @@ class NoAgentAvailableError(Exception):
     pass
 
 
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
+async def create_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph, list[dict]]:
     """
     Create and configure an agent based on the available builtin agents.
     
@@ -113,6 +113,7 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
             return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket), agents_metadata
 
         supervisor_agent = create_supervisor_agent(llm, child_agents, checkpointer)
+        supervisor_agent.streamable_nodes = ("model",)
 
         return supervisor_agent, agents_metadata
     else:
@@ -278,7 +279,9 @@ async def _create_single_agent(
             f"Please check the AI Agents configuration and ensure the MCP server is accessible with the provided connection details."
         )
 
-    return create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+    agent = create_root_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+    agent.streamable_nodes = ("agent", "model")
+    return agent
 
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
     """

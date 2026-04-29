@@ -62,99 +62,105 @@ SUPERVISOR_PROMPT = (
 )
 
 
+# Config keys forwarded from supervisor to child so the child can access request context.
+_FORWARDED_CONFIG_KEYS = ("request_id", "request_metadata", "user_id")
+
+
+def _build_child_config(agent_name: str) -> dict:
+    """
+    Build a LangGraph run-config for a child agent derived from the current supervisor config.
+
+    - Creates a namespaced thread_id (``<parent>::<agent_name>``) so the child graph
+      can checkpoint its own state independently from the supervisor.
+    - Forwards a fixed set of configurable keys (request_id, user_id, …) from the
+      supervisor so the child has access to request-level context.
+    - Clears callbacks to prevent event leakage from child to supervisor.
+    """
+    parent_configurable = ensure_config().get("configurable", {})
+    parent_thread_id = parent_configurable.get("thread_id", "")
+
+    child_configurable: dict = {
+        "thread_id": f"{parent_thread_id}::{agent_name}" if parent_thread_id else agent_name,
+        **{k: parent_configurable[k] for k in _FORWARDED_CONFIG_KEYS if k in parent_configurable},
+    }
+    return {"configurable": child_configurable, "callbacks": []}
+
+
+def _extract_last_message(result: dict) -> str:
+    """Return the content of the last non-empty message in *result*, or a fallback string."""
+    for msg in reversed(result.get("messages", [])):
+        if hasattr(msg, "content") and msg.content:
+            return msg.content
+    return "No response from agent."
+
+
+async def _resume_child_from_interrupt(
+    compiled_graph: CompiledStateGraph,
+    child_config: dict,
+    child_state: Any,
+    agent_name: str,
+) -> dict:
+    """
+    Resume a child graph that has a pending human-in-the-loop interrupt.
+
+    Calls ``langgraph.types.interrupt()`` at the supervisor level so the runtime
+    delivers the user's ``Command(resume=…)`` value here, then forwards it to the
+    child graph.  Raises ``ChildAgentCancelled`` if the user rejected the action.
+    """
+    logging.debug(f"Child agent '{agent_name}' has a pending interrupt — forwarding resume value from supervisor")
+    resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
+    result = await compiled_graph.ainvoke(Command(resume=resume_value), config=child_config)
+
+    # If the user declined, the child ends with a INTERRUPT_CANCEL_MESSAGE ToolMessage.
+    for msg in reversed(result.get("messages", [])):
+        if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
+            logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
+            raise ChildAgentCancelled(agent_name)
+
+    return result
+
+
 def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
     """
     Wrap a child agent's compiled graph as a LangChain tool.
 
-    The returned tool accepts a ``query`` string, invokes the child agent's graph,
-    and returns the last AI message content.
+    The tool accepts a ``query`` string and returns the last AI message content.
 
-    When the child agent triggers a human-in-the-loop interrupt, the resulting
-    ``GraphInterrupt`` propagates to the supervisor, which saves its own state and
-    forwards the interrupt to the client.  On resume the supervisor re-enters its
-    tool node and re-calls ``_invoke``.  At that point the child's checkpointed
-    state already contains the pending interrupt, so ``_invoke`` detects it and
-    resumes the child graph with the user's response value instead of starting a
-    fresh invocation.
-
-    Args:
-        child_agent: The child agent to expose as a tool.
-
-    Returns:
-        A ``StructuredTool`` that delegates to the child agent.
+    Interrupt / resume flow:
+    - If the child graph has a pending interrupt (human-in-the-loop), the supervisor
+      pauses via ``interrupt()`` to collect the user's decision, then resumes the child.
+    - After any invocation, if the child raised a new interrupt it is re-triggered at
+      the supervisor level so the client receives the confirmation prompt.
     """
     agent_name = child_agent.config.name
-    agent_description = child_agent.config.description or f"Specialized agent '{agent_name}'"
     compiled_graph = child_agent.agent
 
     async def _invoke(query: str) -> str:
-        """Send *query* to the child agent and return its textual response."""
-        # Derive a child-specific thread_id from the parent's thread_id so the
-        # child graph can checkpoint its state (required for interrupt/resume).
-        parent_config = ensure_config()
-        parent_thread_id = parent_config.get("configurable", {}).get("thread_id", "")
-        child_thread_id = f"{parent_thread_id}::{agent_name}" if parent_thread_id else agent_name
-
-        # Forward configurable keys the child graph needs (e.g. request_id)
-        # while suppressing callbacks to prevent event leakage.
-        parent_configurable = parent_config.get("configurable", {})
-        child_configurable = {"thread_id": child_thread_id}
-        for key in ("request_id", "request_metadata", "user_id"):
-            if key in parent_configurable:
-                child_configurable[key] = parent_configurable[key]
-
-        child_config = {
-            "configurable": child_configurable,
-            "callbacks": [],
-        }
-
-        # Check if the child has a pending interrupt (i.e. we are resuming after
-        # a human-in-the-loop confirmation).  If so, consume the supervisor's
-        # resume value via interrupt() and forward it to the child graph.
+        child_config = _build_child_config(agent_name)
         child_state = await compiled_graph.aget_state(config=child_config)
-        if child_state and child_state.interrupts:
-            logging.debug(
-                f"Child agent '{agent_name}' has pending interrupt, "
-                "consuming supervisor resume value and forwarding to child"
-            )
-            # interrupt() is recognised by the supervisor's LangGraph runtime:
-            # on the first execution path the GraphInterrupt from the nested
-            # graph already propagated up, so the supervisor recorded it.  On
-            # resume the runtime delivers the user's Command(resume=…) value
-            # through this interrupt() call.
-            resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
-            result = await compiled_graph.ainvoke(
-                Command(resume=resume_value),
-                config=child_config,
-            )
 
-            # If the user declined, the child graph ended with a cancel
-            # ToolMessage.  Stop immediately — nothing left to do.
-            messages = result.get("messages", [])
-            for msg in reversed(messages):
-                if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
-                    logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
-                    raise ChildAgentCancelled(agent_name)
+        if child_state and child_state.interrupts:
+            result = await _resume_child_from_interrupt(compiled_graph, child_config, child_state, agent_name)
         else:
-            # Normal invocation.  If the child triggers interrupt(), the
-            # resulting GraphInterrupt propagates to the supervisor, which
-            # saves its own state and forwards the interrupt to the client.
             result = await compiled_graph.ainvoke(
                 {"messages": [{"role": "user", "content": query}]},
                 config=child_config,
             )
 
-        messages = result.get("messages", [])
-        # Walk backwards to find the last AI message with content
-        for msg in reversed(messages):
-            if hasattr(msg, "content") and msg.content:
-                return msg.content
-        return "No response from agent."
+        # The child is called via ainvoke() (not as a subgraph), so a GraphInterrupt
+        # raised inside it is suppressed and ainvoke() returns normally.  Re-trigger any
+        # new interrupt at the supervisor level so the client receives the prompt.
+        child_state = await compiled_graph.aget_state(config=child_config)
+        if child_state and child_state.interrupts:
+            logging.debug(f"Child agent '{agent_name}' raised a new interrupt — re-triggering at supervisor level")
+            langgraph.types.interrupt(child_state.interrupts[0].value)
+
+        return _extract_last_message(result)
 
     return StructuredTool.from_function(
         coroutine=_invoke,
         name=agent_name,
-        description=agent_description,
+        description=child_agent.config.description or f"Specialized agent '{agent_name}'",
     )
 
 @before_model(can_jump_to=["end"])

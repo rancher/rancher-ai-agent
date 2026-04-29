@@ -142,6 +142,7 @@ async def _call_agent(
     """
 
     await websocket.send_text("<message>")
+    streamable_nodes = getattr(agent, "streamable_nodes", ("agent", "model"))
     
     async for stream in agent.astream_events(
         input_data,
@@ -149,7 +150,7 @@ async def _call_agent(
         stream_mode=["updates", "messages", "custom", "events"],
     ):
         if stream["event"] == "on_chat_model_stream":
-            if text := _extract_streaming_text(stream):
+            if text := _extract_streaming_text(stream, streamable_nodes):
                 await websocket.send_text(text)
         
         if stream["event"] == "on_custom_event":
@@ -164,23 +165,24 @@ async def _call_agent(
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
 
-def _extract_streaming_text(stream: dict) -> str | None:
+def _extract_streaming_text(stream: dict, streamable_nodes: tuple[str, ...] = ("agent", "model")) -> str | None:
     """
     Extracts text content from a chat model stream event.
     
-    Only extracts text from 'agent' or 'model' nodes to avoid streaming
-    intermediate processing steps.
+    Only extracts text from nodes in *streamable_nodes* to avoid streaming
+    intermediate processing steps.  In multi-agent (supervisor) mode the
+    tuple is narrowed to ("model",) so that child-agent LLM events (which
+    come from their own "agent" node) are not forwarded to the client.
     
     Args:
         stream: The stream event dictionary from astream_events.
+        streamable_nodes: Node names whose LLM tokens should be streamed.
         
     Returns:
         The extracted text content, or None if not applicable.
     """
-    STREAMABLE_NODES = ("agent", "model")
-    
     node = stream.get("metadata", {}).get("langgraph_node")
-    if node not in STREAMABLE_NODES:
+    if node not in streamable_nodes:
         return None
     
     chunk = stream.get("data", {}).get("chunk")

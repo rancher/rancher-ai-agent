@@ -177,12 +177,18 @@ async def test_invoke_returns_fallback_when_no_content(child_agent, mock_compile
 @pytest.mark.asyncio
 async def test_invoke_resume_detects_pending_interrupt(child_agent, mock_compiled_graph):
     """When a child has a pending interrupt, _invoke calls interrupt() and resumes the child."""
-    # Set up aget_state to report a pending interrupt
+    # Set up aget_state: first call returns pending interrupt, second (after
+    # resume ainvoke) returns no interrupts (child completed successfully).
     mock_interrupt = MagicMock()
     mock_interrupt.value = "<confirmation-response>approve creation</confirmation-response>"
-    mock_state = MagicMock()
-    mock_state.interrupts = (mock_interrupt,)
-    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+    mock_state_completed = MagicMock()
+    mock_state_completed.interrupts = ()
+    mock_compiled_graph.aget_state.side_effect = [
+        mock_state_with_interrupt,  # Before invocation: has pending interrupt
+        mock_state_completed,       # After invocation: child completed
+    ]
 
     # After resume, child returns a result
     mock_compiled_graph.ainvoke.return_value = {
@@ -216,9 +222,14 @@ async def test_invoke_resume_passes_user_response_to_child(child_agent, mock_com
     """The user's resume value is forwarded to the child graph via Command(resume=...)."""
     mock_interrupt = MagicMock()
     mock_interrupt.value = "<confirmation-response>some plan</confirmation-response>"
-    mock_state = MagicMock()
-    mock_state.interrupts = (mock_interrupt,)
-    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+    mock_state_completed = MagicMock()
+    mock_state_completed.interrupts = ()
+    mock_compiled_graph.aget_state.side_effect = [
+        mock_state_with_interrupt,
+        mock_state_completed,
+    ]
 
     mock_compiled_graph.ainvoke.return_value = {
         "messages": [AIMessage(content="done")]
@@ -245,9 +256,14 @@ async def test_invoke_resume_uses_same_thread_id(child_agent, mock_compiled_grap
     """On resume the child uses the same derived thread_id as the initial call."""
     mock_interrupt = MagicMock()
     mock_interrupt.value = "confirm?"
-    mock_state = MagicMock()
-    mock_state.interrupts = (mock_interrupt,)
-    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+    mock_state_completed = MagicMock()
+    mock_state_completed.interrupts = ()
+    mock_compiled_graph.aget_state.side_effect = [
+        mock_state_with_interrupt,
+        mock_state_completed,
+    ]
 
     mock_compiled_graph.ainvoke.return_value = {
         "messages": [AIMessage(content="ok")]
@@ -262,10 +278,11 @@ async def test_invoke_resume_uses_same_thread_id(child_agent, mock_compiled_grap
 
     expected_thread_id = "session-xyz::test-agent"
 
-    # aget_state and ainvoke should share the same child thread_id
-    state_config = mock_compiled_graph.aget_state.call_args[1]["config"]
+    # Both aget_state calls and ainvoke should share the same child thread_id
+    aget_state_calls = mock_compiled_graph.aget_state.call_args_list
+    for call in aget_state_calls:
+        assert call[1]["config"]["configurable"]["thread_id"] == expected_thread_id
     invoke_config = mock_compiled_graph.ainvoke.call_args[1]["config"]
-    assert state_config["configurable"]["thread_id"] == expected_thread_id
     assert invoke_config["configurable"]["thread_id"] == expected_thread_id
 
 
@@ -312,3 +329,102 @@ async def test_invoke_no_interrupts_when_state_is_none(child_agent, mock_compile
     # Should have called ainvoke with messages, not Command
     input_data = mock_compiled_graph.ainvoke.call_args[0][0]
     assert "messages" in input_data
+
+
+# ============================================================================
+# Child interrupted during invocation (the core bug fix)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_invoke_normal_child_interrupts_during_invocation(child_agent, mock_compiled_graph):
+    """When a child triggers interrupt() during normal invocation, _invoke
+    re-triggers interrupt at supervisor level so the client receives the prompt.
+
+    Because the child graph is called via ainvoke() (not as a proper LangGraph
+    subgraph), its GraphInterrupt is suppressed internally (is_nested=False) and
+    ainvoke() returns normally.  _invoke must detect the pending interrupt and
+    call interrupt() at the supervisor level.
+    """
+    mock_interrupt = MagicMock()
+    mock_interrupt.value = "<confirmation-response>create resource plan</confirmation-response>"
+
+    mock_state_no_interrupt = MagicMock()
+    mock_state_no_interrupt.interrupts = ()
+
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+
+    # First aget_state: no pending interrupts (fresh invocation)
+    # After ainvoke: child was interrupted (has pending interrupt)
+    mock_compiled_graph.aget_state.side_effect = [
+        mock_state_no_interrupt,    # Before invocation
+        mock_state_with_interrupt,  # After invocation (child interrupted)
+    ]
+
+    # ainvoke returns partial output (interrupt was suppressed by child runtime)
+    mock_compiled_graph.ainvoke.return_value = {
+        "messages": [AIMessage(content="partial output")]
+    }
+
+    tool = _create_agent_tool(child_agent)
+
+    with patch("app.services.agent.parent.ensure_config", return_value={
+        "configurable": {"thread_id": "parent-thread-789"}
+    }), patch("app.services.agent.parent.langgraph.types.interrupt") as mock_interrupt_fn:
+        # interrupt() at the supervisor level raises GraphInterrupt,
+        # but our mock just records the call and returns (won't raise).
+        # In production this would propagate the interrupt to the client.
+        mock_interrupt_fn.return_value = None  # simulate the raise path
+        await tool.ainvoke({"query": "create resource"})
+
+    # Verify interrupt() was re-triggered at supervisor level with child's value
+    mock_interrupt_fn.assert_called_once_with(
+        "<confirmation-response>create resource plan</confirmation-response>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_invoke_resume_child_interrupts_again(child_agent, mock_compiled_graph):
+    """When a child triggers a second interrupt during resume (e.g. multiple
+    tools requiring validation), _invoke re-triggers interrupt at supervisor level."""
+    mock_interrupt_first = MagicMock()
+    mock_interrupt_first.value = "<confirmation-response>first tool plan</confirmation-response>"
+    mock_interrupt_second = MagicMock()
+    mock_interrupt_second.value = "<confirmation-response>second tool plan</confirmation-response>"
+
+    mock_state_first_interrupt = MagicMock()
+    mock_state_first_interrupt.interrupts = (mock_interrupt_first,)
+    mock_state_second_interrupt = MagicMock()
+    mock_state_second_interrupt.interrupts = (mock_interrupt_second,)
+
+    # First aget_state: has pending interrupt (resume path)
+    # After resume ainvoke: child was interrupted again (second tool)
+    mock_compiled_graph.aget_state.side_effect = [
+        mock_state_first_interrupt,   # Before invocation (triggers resume)
+        mock_state_second_interrupt,  # After invocation (interrupted again)
+    ]
+
+    mock_compiled_graph.ainvoke.return_value = {
+        "messages": [AIMessage(content="partial after first approve")]
+    }
+
+    tool = _create_agent_tool(child_agent)
+
+    interrupt_calls = []
+    def mock_interrupt_side_effect(value):
+        interrupt_calls.append(value)
+        if len(interrupt_calls) == 1:
+            return "yes"  # First call: user approved first interrupt
+        return None  # Second call: re-trigger for the second interrupt
+
+    with patch("app.services.agent.parent.ensure_config", return_value={
+        "configurable": {"thread_id": "parent-thread-multi"}
+    }), patch("app.services.agent.parent.langgraph.types.interrupt", side_effect=mock_interrupt_side_effect):
+        await tool.ainvoke({"query": "multi-tool operation"})
+
+    # interrupt() should have been called twice:
+    # 1. To consume resume value for the first interrupt
+    # 2. To re-trigger the second interrupt at supervisor level
+    assert len(interrupt_calls) == 2
+    assert interrupt_calls[0] == "<confirmation-response>first tool plan</confirmation-response>"
+    assert interrupt_calls[1] == "<confirmation-response>second tool plan</confirmation-response>"

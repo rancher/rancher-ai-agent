@@ -71,6 +71,13 @@ def ui_tool_to_langchain_tool(ui_tool: UITool) -> Tool:
         field_description = field_schema.get('description', '')
         is_required = field_schema.get('required', False)
         
+        # Handle array types: extract the item type from the items schema
+        if field_type == 'array':
+            items_schema = field_schema.get('items', {})
+            items_type = items_schema.get('type', 'string')
+            items_python_type = type_map.get(items_type, str)
+            python_type = list[items_python_type]  # Use generic list syntax for array of items
+        
         # Patch ui_tool description for enum fields
         is_enum = field_type == 'string' and 'enum' in field_schema
         if is_enum:       

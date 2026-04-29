@@ -22,7 +22,7 @@ from ..ui_tools.selector import create_ui_tools_selector, filter_tool
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
-MAX_CONSECUTIVE_TOOL_CALLS = 5
+MAX_CONSECUTIVE_TOOL_CALLS = 10
 
 class BaseAgentBuilder:
     """Base class for agent builders with shared logic."""
@@ -727,7 +727,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         if interrupt_message := await self.should_interrupt(human_validation_tools, tool_call):
             logging.info(f"Confirmation interrupt triggered for tool '{tool_call.get('name')}', config={'present' if config else 'missing'}")
             
-            if interrupt_message:
+            """ if interrupt_message:
                 # Dispatch UI tools before the interrupt, so they're available to the client
                 if config is not None:
                     try:
@@ -762,7 +762,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                         logging.debug(f"Could not extract precomputed fields from interrupt message and dispatch UI tools: {e}")
 
                 else:
-                    logging.warning("config is None, cannot dispatch UI tools before confirmation")
+                    logging.warning("config is None, cannot dispatch UI tools before confirmation") """
             
             response = langgraph.types.interrupt(interrupt_message)
             if response != "yes":

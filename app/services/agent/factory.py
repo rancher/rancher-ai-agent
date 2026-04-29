@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from kubernetes import client, config
+from kubernetes import client
 from .root import create_root_agent
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
-from .parent import create_parent_agent
-from deepagents.middleware.subagents import SubAgent
+from .parent import create_supervisor_agent, ChildAgent
+from .child import create_child_agent
 from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -64,9 +64,8 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
     
     if len(agents) > 1:
         logging.info(f"Multi-agent setup detected, creating parent agent with {len(agents)} agents.")  
-        subagents: list[SubAgent] = []
+        child_agents = []
         agents_metadata = []
-        agent_data: dict[str, tuple[AgentConfig, list]] = {}  # name -> (config, tools)
 
         for agent_cfg in agents:
             client = create_mcp_client(agent_cfg, websocket)
@@ -80,17 +79,10 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                     ]
                     logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
 
-                subagent: SubAgent = {
-                    "name": agent_cfg.name,
-                    "description": agent_cfg.description,
-                    "system_prompt": agent_cfg.system_prompt,
-                    "tools": tools,
-                }
-                if agent_cfg.human_validation_tools:
-                    subagent["interrupt_on"] = {t: True for t in agent_cfg.human_validation_tools}
-
-                subagents.append(subagent)
-                agent_data[agent_cfg.name] = (agent_cfg, tools)
+                child_agents.append(ChildAgent(
+                    config=agent_cfg,
+                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
+                ))
                 
                 _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
 
@@ -112,19 +104,17 @@ async def create_agent(llm: BaseLanguageModel, websocket: WebSocket):
                     "description": f"{error_message}"
                 })
 
-        if len(subagents) == 0:
+        if len(child_agents) == 0:
             logging.error("Failed to create any child agents due to MCP connection issues")
             raise NoAgentAvailableError("No agents could be created. Please check the MCP server connections and configurations for each agent.")
         
-        if len(subagents) == 1:
+        if len(child_agents) == 1:
             logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
-            name = subagents[0]["name"]
-            cfg, tools = agent_data[name]
-            return create_root_agent(llm, tools, cfg.system_prompt, checkpointer, cfg), agents_metadata
+            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket), agents_metadata
 
-        parent_agent = create_parent_agent(llm, subagents, checkpointer)
+        supervisor_agent = create_supervisor_agent(llm, child_agents, checkpointer)
 
-        return parent_agent, agents_metadata
+        return supervisor_agent, agents_metadata
     else:
         return await _create_single_agent(llm, agents[0], checkpointer, websocket), [{"name": agents[0].name, "status": "active"}]
 

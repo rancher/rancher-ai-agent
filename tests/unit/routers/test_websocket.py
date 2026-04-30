@@ -36,7 +36,7 @@ class MockWebSocket:
 # TODO add more tests for different scenarios
 @pytest.fixture
 def mock_dependencies():
-    with patch('app.routers.websocket.create_agent') as mock_create_agent, \
+    with patch('app.routers.websocket.build_agent') as mock_create_agent, \
          patch('app.routers.websocket.stream_agent_response', new_callable=AsyncMock) as mock_stream_response:
 
         # Mock the create_agent to return an async context manager

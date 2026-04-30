@@ -4,7 +4,7 @@ import logging
 import json
 
 from ..dependencies import get_llm
-from ..services.agent.factory import NoAgentAvailableError, create_agent
+from ..services.agent.factory import NoAgentAvailableError, build_agent
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -75,7 +75,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     logging.debug("ws/messages connection opened")
     
     try:
-        agent, agents_metadata =  await create_agent(llm=llm, websocket=websocket) 
+        agent, agents_metadata =  await build_agent(llm=llm, websocket=websocket) 
     except NoAgentAvailableError as e:
         logging.error(f"Error creating agent: {e}")
         await websocket.send_text(f'<chat-error>{json.dumps({"message": str(e)})}</chat-error>')

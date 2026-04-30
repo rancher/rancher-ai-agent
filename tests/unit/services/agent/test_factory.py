@@ -9,10 +9,11 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from contextlib import AsyncExitStack
 
 from app.services.agent.factory import (
+    build_agent,
     create_agent,
     NoAgentAvailableError,
     create_mcp_client,
-    _create_single_agent,
+    _load_mcp_tools,
     _make_ca_httpx_factory,
 )
 from app.services.agent.loader import AuthenticationType
@@ -24,9 +25,10 @@ from app.services.agent.loader import AuthenticationType
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.load_agent_configs')
-@patch('app.services.agent.factory._create_single_agent')
-async def test_create_agent_single_agent(mock_create_single, mock_load_configs):
-    """Verify create_agent creates a root agent when one config is available."""
+@patch('app.services.agent.factory._load_mcp_tools')
+@patch('app.services.agent.factory.create_child_agent')
+async def test_create_agent_single_agent(mock_create_child, mock_load_tools, mock_load_configs):
+    """Verify build_agent creates a child agent when one config is available."""
     # Setup mocks
     mock_llm = MagicMock()
     mock_websocket = MagicMock()
@@ -40,21 +42,20 @@ async def test_create_agent_single_agent(mock_create_single, mock_load_configs):
     mock_agent_config.system_prompt = "Test prompt"
     mock_load_configs.return_value = [mock_agent_config]
     
+    mock_tools = [MagicMock()]
+    mock_load_tools.return_value = mock_tools
     mock_agent = MagicMock()
-    mock_metadata = [{"name": "RancherAgent", "status": "active"}]
-    mock_create_single.return_value = mock_agent
+    mock_create_child.return_value = mock_agent
     
     # Execute
-    result = await create_agent(mock_llm, mock_websocket)
+    result = await build_agent(mock_llm, mock_websocket)
     
     # Verify
     assert result[0] == mock_agent
-    assert result[1] == mock_metadata
-    mock_create_single.assert_called_once_with(
-        mock_llm, 
-        mock_agent_config,
-        mock_checkpointer, 
-        mock_websocket
+    assert result[1] == [{"name": "RancherAgent", "status": "active"}]
+    mock_load_tools.assert_called_once_with(mock_agent_config, mock_websocket)
+    mock_create_child.assert_called_once_with(
+        mock_llm, mock_tools, "Test prompt", mock_checkpointer, mock_agent_config
     )
 
 
@@ -468,80 +469,64 @@ def test_create_mcp_client_basic_auth(mock_get_creds, mock_mcp_client):
 
 
 # ============================================================================
-# _create_single_agent Tests  
+# _load_mcp_tools Tests  
 # ============================================================================
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_single_agent_success(mock_update_status, mock_create_client, mock_create_root):
-    """Verify _create_single_agent creates agent successfully."""
-    mock_llm = MagicMock()
+async def test_load_mcp_tools_success(mock_update_status, mock_create_client):
+    """Verify _load_mcp_tools loads and returns tools successfully."""
     mock_websocket = MagicMock()
-    mock_checkpointer = MagicMock()
     
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
-    mock_config.system_prompt = "Test prompt"
     mock_config.toolset = None
     
-    # Mock MCP client
     mock_client_instance = MagicMock()
     mock_tools = [MagicMock()]
     mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
     mock_create_client.return_value = mock_client_instance
     
-    mock_agent = MagicMock()
-    mock_create_root.return_value = mock_agent
-    
     # Execute
-    result = await _create_single_agent(mock_llm, mock_config, mock_checkpointer, mock_websocket)
+    result = await _load_mcp_tools(mock_config, mock_websocket)
     
     # Verify
-    assert result == mock_agent
-    mock_create_root.assert_called_once_with(mock_llm, mock_tools, "Test prompt", mock_checkpointer, mock_config)
-    mock_update_status.assert_called_once()
+    assert result == mock_tools
+    mock_update_status.assert_called_once_with(mock_config, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
 
 
 @pytest.mark.asyncio
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_single_agent_mcp_failure(mock_update_status, mock_create_client):
-    """Verify _create_single_agent raises error when MCP connection fails."""
-    mock_llm = MagicMock()
+async def test_load_mcp_tools_mcp_failure(mock_update_status, mock_create_client):
+    """Verify _load_mcp_tools raises NoAgentAvailableError when MCP connection fails."""
     mock_websocket = MagicMock()
-    mock_checkpointer = MagicMock()
     
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     
-    # Mock MCP client to fail
     mock_client_instance = MagicMock()
     mock_client_instance.get_tools = AsyncMock(side_effect=Exception("Connection failed"))
     mock_create_client.return_value = mock_client_instance
     
     # Execute and verify exception
     with pytest.raises(NoAgentAvailableError) as exc_info:
-        await _create_single_agent(mock_llm, mock_config, mock_checkpointer, mock_websocket)
+        await _load_mcp_tools(mock_config, mock_websocket)
     
     assert "Failed to load MCP tools" in str(exc_info.value)
     mock_update_status.assert_called()
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_create_single_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_root):
-    """Verify _create_single_agent filters tools by toolset when toolset is configured."""
-    mock_llm = MagicMock()
+async def test_load_mcp_tools_filters_by_toolset(mock_update_status, mock_create_client):
+    """Verify _load_mcp_tools filters tools by toolset when configured."""
     mock_websocket = MagicMock()
-    mock_checkpointer = MagicMock()
 
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
-    mock_config.system_prompt = "Test prompt"
     mock_config.toolset = "rancher-core"
 
     tool_matching = MagicMock()
@@ -560,15 +545,10 @@ async def test_create_single_agent_filters_tools_by_toolset(mock_update_status, 
     mock_client_instance.get_tools = AsyncMock(return_value=[tool_matching, tool_other, tool_no_meta])
     mock_create_client.return_value = mock_client_instance
 
-    mock_agent = MagicMock()
-    mock_create_root.return_value = mock_agent
+    result = await _load_mcp_tools(mock_config, mock_websocket)
 
-    result = await _create_single_agent(mock_llm, mock_config, mock_checkpointer, mock_websocket)
-
-    assert result == mock_agent
-    filtered_tools = mock_create_root.call_args[0][1]
-    assert len(filtered_tools) == 1
-    assert filtered_tools[0].name == "matching_tool"
+    assert len(result) == 1
+    assert result[0].name == "matching_tool"
 
 
 @patch('app.services.agent.factory.MultiServerMCPClient')

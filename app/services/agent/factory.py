@@ -15,108 +15,118 @@ from langgraph.graph.state import Checkpointer, CompiledStateGraph
 
 NAMESPACE = "cattle-ai-agent-system"
 
-
-def _make_insecure_http_client(
-    headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
-    """httpx_client_factory that disables TLS certificate verification."""
-    return httpx.AsyncClient(headers=headers or {}, timeout=timeout, auth=auth, verify=False)
-
-
 class NoAgentAvailableError(Exception):
     """Exception raised when loading MCP tools fails."""
     pass
 
 
-async def create_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph, list[dict]]:
+async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph, list[dict]]:
     """
-    Create and configure an agent based on the available builtin agents.
-    
-    This factory function determines whether to create a parent agent with multiple
-    child agents or a single child agent, depending on the agent configurations loaded
-    from CRDs or fallback to built-in agents.
-    
+    Build an agent graph from AIAgentConfig CRDs.
+
+    Loads agent configurations and creates either a supervisor (multi-agent) or a
+    single child agent depending on how many configs are available and successfully
+    connect to their MCP servers.
+
     Args:
-        llm: The language model to use for agent reasoning and responses.
-        websocket: WebSocket connection used to extract authentication cookies and URL info.
-    
+        llm: The language model to use for agent reasoning.
+        websocket: WebSocket connection for authentication context.
+
     Returns:
-        CompiledStateGraph: Either a parent agent managing multiple child agents,
-            or a single child agent for the Rancher Core Agent.
-    
-    Note:
-        This is an async context manager that properly manages the lifecycle of
-        MCP (Model Context Protocol) connections and tools.
+        A tuple of (compiled agent graph, agent metadata list).
+
+    Raises:
+        NoAgentAvailableError: If no agent configurations exist or all MCP connections fail.
     """
     checkpointer = websocket.app.memory_manager.get_checkpointer()
-    
-    # Load agent configs from CRDs (or create defaults if none exist)
-    agents = load_agent_configs()
-    
-    if len(agents) == 0:
+    agent_configs = load_agent_configs()
+
+    if not agent_configs:
         logging.error("Failed to load any agent configurations from CRDs")
-        raise NoAgentAvailableError("No agent configurations available. ")
+        raise NoAgentAvailableError("No agent configurations available.")
 
-    logging.info(f"Loaded {len(agents)} agent configuration(s)")
-    
-    if len(agents) > 1:
-        logging.info(f"Multi-agent setup detected, creating parent agent with {len(agents)} agents.")  
-        child_agents = []
-        agents_metadata = []
+    logging.info(f"Loaded {len(agent_configs)} agent configuration(s)")
 
-        for agent_cfg in agents:
-            client = create_mcp_client(agent_cfg, websocket)
-            try:
-                tools = await client.get_tools()
-                # Filter tools by toolset if specified in agent config
-                if agent_cfg.toolset:
-                    tools = [
-                        tool for tool in tools 
-                        if tool.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset
-                    ]
-                    logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
+    if len(agent_configs) == 1:
+        agent_cfg = agent_configs[0]
+        tools = await _load_mcp_tools(agent_cfg, websocket)
+        graph = create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+        return graph, [{"name": agent_cfg.name, "status": "active"}]
 
-                child_agents.append(ChildAgent(
-                    config=agent_cfg,
-                    agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg, all_children_agents=agents)
-                ))
-                
-                _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
+    # Multi-agent setup
+    logging.info(f"Multi-agent setup detected, creating supervisor with {len(agent_configs)} agents.")
+    child_agents, agents_metadata = await _build_child_agents(llm, agent_configs, checkpointer, websocket)
 
-                agents_metadata.append({
-                    "name": agent_cfg.name,
-                    "status": "active",
-                })
-            except* Exception as eg:
-                error_message = ""
-                for e in eg.exceptions:
-                    error_message += f"{str(e)} "
-                logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}")
-                
-                _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
+    if not child_agents:
+        logging.error("Failed to create any child agents due to MCP connection issues")
+        raise NoAgentAvailableError(
+            "No agents could be created. Please check the MCP server connections and configurations for each agent."
+        )
 
-                agents_metadata.append({
-                    "name": agent_cfg.name,
-                    "status": "error",
-                    "description": f"{error_message}"
-                })
+    if len(child_agents) == 1:
+        logging.warning("Only one child agent connected successfully. Using it directly instead of a supervisor.")
+        return child_agents[0].agent, agents_metadata
 
-        if len(child_agents) == 0:
-            logging.error("Failed to create any child agents due to MCP connection issues")
-            raise NoAgentAvailableError("No agents could be created. Please check the MCP server connections and configurations for each agent.")
-        
-        if len(child_agents) == 1:
-            logging.warning("Only one child agent was successfully created. Returning the child agent directly instead of a parent agent.")
-            return await _create_single_agent(llm, child_agents[0].config, checkpointer, websocket), agents_metadata
+    supervisor = create_supervisor_agent(llm, child_agents, checkpointer)
+    supervisor.streamable_nodes = ("model",)
+    return supervisor, agents_metadata
 
-        supervisor_agent = create_supervisor_agent(llm, child_agents, checkpointer)
-        supervisor_agent.streamable_nodes = ("model",)
 
-        return supervisor_agent, agents_metadata
-    else:
-        return await _create_single_agent(llm, agents[0], checkpointer, websocket), [{"name": agents[0].name, "status": "active"}]
+async def _build_child_agents(
+    llm: BaseLanguageModel,
+    agent_configs: list[AgentConfig],
+    checkpointer: Checkpointer,
+    websocket: WebSocket,
+) -> tuple[list[ChildAgent], list[dict]]:
+    """
+    Attempt to build a child agent for each config, collecting successes and failures.
+
+    Returns:
+        A tuple of (successfully created ChildAgents, metadata for all agents).
+    """
+    child_agents: list[ChildAgent] = []
+    agents_metadata: list[dict] = []
+
+    for agent_cfg in agent_configs:
+        try:
+            tools = await _load_mcp_tools(agent_cfg, websocket)
+            child_agents.append(ChildAgent(
+                config=agent_cfg,
+                agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg),
+            ))
+            agents_metadata.append({"name": agent_cfg.name, "status": "active"})
+        except (NoAgentAvailableError, Exception) as e:
+            logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {e}")
+            agents_metadata.append({"name": agent_cfg.name, "status": "error", "description": str(e)})
+
+    return child_agents, agents_metadata
+
+
+async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
+    """
+    Connect to the MCP server for an agent config, load tools, filter by toolset,
+    and update the CRD status accordingly.
+
+    Raises:
+        NoAgentAvailableError: If the MCP connection fails.
+    """
+    mcp_client = create_mcp_client(agent_cfg, websocket)
+    try:
+        tools = await mcp_client.get_tools()
+    except* Exception as eg:
+        error_message = " ".join(str(e) for e in eg.exceptions)
+        _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
+        raise NoAgentAvailableError(
+            f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}\n"
+            f"Please check the AI Agents configuration and ensure the MCP server is accessible."
+        ) from eg
+
+    if agent_cfg.toolset:
+        tools = [t for t in tools if t.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset]
+        logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
+
+    _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
+    return tools
 
 
 
@@ -235,51 +245,6 @@ def _make_ca_httpx_factory(ca_pem: str):
     return factory
 
 
-async def _create_single_agent(
-    llm: BaseLanguageModel,
-    agent_cfg: AgentConfig,
-    checkpointer: Checkpointer,
-    websocket: WebSocket
-) -> CompiledStateGraph:
-    """
-    Create a single child agent based on the provided agent configuration.
-    
-    This function is used when only one agent configuration is available. It establishes
-    the MCP connection, loads the tools, and creates a child agent accordingly.
-    
-    Args:
-        llm: The language model to use for the agent.
-        agent_cfg: The configuration object for the agent, containing MCP connection details and system prompt.
-        checkpointer: Checkpointer for persisting agent state.
-        websocket: WebSocket connection used to extract cookies and URL information for Rancher authentication.
-    """
-
-    client = create_mcp_client(agent_cfg, websocket)
-    try:
-        tools = await client.get_tools()
-        # Filter tools by toolset if specified in agent config
-        if agent_cfg.toolset:
-            tools = [
-                tool for tool in tools 
-                if tool.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset
-            ]
-            logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
-        _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
-    except* Exception as eg:
-        error_message = ""
-        for e in eg.exceptions:
-            error_message += f"{str(e)} "
-        logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}")
-        
-        _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
-        
-        raise NoAgentAvailableError(
-            f"Failed to load MCP tools for all enabled agents.\\n"
-            f"Please check the AI Agents configuration and ensure the MCP server is accessible with the provided connection details."
-        )
-
-    return create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
-
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
     """
     Update the status of an AIAgentConfig CRD in Kubernetes.
@@ -320,3 +285,12 @@ def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, me
         logging.info(f"Updated status for AIAgentConfig '{agent_cfg.name}' to {status['phase']}")
     except Exception as e:
         logging.error(f"Failed to update status for AIAgentConfig '{agent_cfg.name}': {str(e)}")
+
+
+def _make_insecure_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """httpx_client_factory that disables TLS certificate verification."""
+    return httpx.AsyncClient(headers=headers or {}, timeout=timeout, auth=auth, verify=False)

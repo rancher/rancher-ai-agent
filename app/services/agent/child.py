@@ -52,7 +52,6 @@ class ChildAgentBuilder:
         system_prompt: str,
         checkpointer: Checkpointer,
         agent_config: AgentConfig,
-        all_children_agents: list[AgentConfig] | None = None,
     ):
         self.llm = llm
         self.planning_tools = [t for t in tools if t.name.endswith("Plan")]
@@ -63,8 +62,6 @@ class ChildAgentBuilder:
         self.planning_tools_by_name = {t.name: t for t in self.planning_tools}
         self.tools_by_name = {t.name: t for t in self.tools}
         self.agent_config = agent_config
-        self.all_children_agents = all_children_agents or []
-        self.child_agents = self.all_children_agents
 
     def build(self) -> CompiledStateGraph:
         """Build and compile the agent graph.
@@ -100,51 +97,12 @@ class ChildAgentBuilder:
         """Invoke the LLM with the system prompt and conversation history."""
         logging.debug("calling model")
 
-        messages: list = []
+        messages = [
+            *([SystemMessage(content=self.system_prompt)] if self.system_prompt.strip() else []),
+            *state["messages"],
+        ]
 
-        if self.system_prompt.strip():
-            selected_agent = state.get("selected_agent", {})
-            if selected_agent and self.all_children_agents:
-                available_children = [
-                    f"- {child.name}: {child.description}\n"
-                    for child in self.all_children_agents
-                    if child.name != selected_agent.get("name")
-                ]
-                if available_children:
-                    children_description = "\n".join(available_children)
-                    prompt = (
-                        f"{self.system_prompt}\n\n"
-                        "You are a highly specialized Assistant. Your primary goal is to provide "
-                        "accurate information within your domain. To maintain accuracy, you must "
-                        "never guess. If a user's request falls outside your expertise, you are "
-                        "required to direct them to the appropriate specialized agent from the "
-                        "following list of available child agents:\n\n"
-                        f"{children_description}"
-                    )
-                    messages.append(SystemMessage(content=prompt))
-                else:
-                    messages.append(SystemMessage(content=self.system_prompt))
-            else:
-                messages.append(SystemMessage(content=self.system_prompt))
-
-        messages.extend(state["messages"])
-
-        # Enforce consecutive tool-call limit
-        consecutive_rounds = self._count_consecutive_tool_rounds(state)
-        if consecutive_rounds >= MAX_CONSECUTIVE_TOOL_CALLS:
-            logging.warning(
-                f"Reached maximum consecutive tool calls ({MAX_CONSECUTIVE_TOOL_CALLS}). "
-                "Forcing LLM to respond without tools."
-            )
-            messages.append(HumanMessage(content=(
-                "You have reached the maximum number of consecutive tool calls. "
-                "You MUST now provide a final answer based on the information gathered so far. "
-                "Do NOT request any more tool calls. "
-                "If you need more information, ask the user to provide it."
-            )))
-            response = self.llm.invoke(messages, config)
-        else:
-            response = self._invoke_llm_with_retry(messages, config)
+        response = self._invoke_llm_with_retry(messages, config)
 
         response.additional_kwargs["request_id"] = config["configurable"]["request_id"]
         response.additional_kwargs["selected_agent"] = state.get("selected_agent", {})
@@ -601,12 +559,10 @@ def create_child_agent(
     system_prompt: str,
     checkpointer: Checkpointer,
     agent_config: AgentConfig,
-    all_children_agents: list[AgentConfig] | None = None,
 ) -> CompiledStateGraph:
     """Create and compile a child agent graph."""
     builder = ChildAgentBuilder(
         llm, tools, system_prompt, checkpointer, agent_config,
-        all_children_agents=all_children_agents or [],
     )
     return builder.build()
 

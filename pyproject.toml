@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "asyncio==4.0.0",
     "fastapi[standard]==0.135.1",
-    "langchain==1.2.10",
+    "langchain==1.2.15",
     "langchain-google-genai==4.2.1",
     "langchain-mcp-adapters==0.2.1",
     "langchain-ollama==1.0.1",
@@ -15,7 +15,7 @@ dependencies = [
     "langchain-text-splitters==1.1.1",
     "langchain-community==0.4.1",
     "langfuse==3.14.5",
-    "langgraph==1.0.10",
+    "langgraph==1.1.9",
     "langgraph-checkpoint-postgres==3.0.4",
     "mcp==1.26.0",
     "unstructured==0.21.5",

@@ -692,7 +692,11 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                 plan_tool = self.planning_tools_by_name.get(plan_tool_name)
                 if plan_tool is None:
                     raise ValueError(f"planning tool '{plan_tool_name}' not found for tool '{tool_call['name']}'")
-                plan_response = await plan_tool.ainvoke(tool_call["args"])
+                try:
+                    plan_response = await plan_tool.ainvoke(tool_call["args"])
+                except Exception as e:
+                    logging.error(f"error invoking planning tool '{plan_tool_name}' for interrupt: {e}")
+                    raise Exception(e)
 
                 # Normalize list response from MCP tools: [{"type": "text", "text": "..."}]
                 if isinstance(plan_response, list) and len(plan_response) > 0:
@@ -703,7 +707,8 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     safe_response = json.dumps(json.loads(plan_response))
                 except (json.JSONDecodeError, TypeError):
                     safe_response = json.dumps(plan_response)
-                return f'<confirmation-response>{safe_response}</confirmation-response>'
+
+                return safe_response
 
         return ""
 

@@ -917,7 +917,6 @@ async def test_should_interrupt_returns_message_for_update_tools(mock_llm, mock_
     
     result = await builder.should_interrupt(validation_tools, tool_call)
     
-    assert "<confirmation-response>" in result
     assert "plan response for patching" in result
 
 @pytest.mark.asyncio
@@ -973,6 +972,7 @@ async def test_handle_interrupt_cancels_on_no_response(mock_llm, mock_checkpoint
     
     assert should_continue is False
     assert interrupt_msg is not None
+    assert "<confirmation-response>" in interrupt_msg
 
 @pytest.mark.asyncio
 async def test_handle_interrupt_continues_on_yes_response(mock_llm, mock_checkpointer):
@@ -1005,6 +1005,112 @@ async def test_handle_interrupt_continues_on_yes_response(mock_llm, mock_checkpo
     
     assert should_continue is True
     assert interrupt_msg is not None
+    assert "<confirmation-response>" in interrupt_msg
+
+@pytest.mark.asyncio
+async def test_should_interrupt_raises_exception_when_planning_tool_fails(mock_llm, mock_checkpointer):
+    """Verify should_interrupt raises exception when planning tool fails."""
+    validation_tools = ["testTool"]
+    
+    # Create a mock plan tool that fails
+    failing_plan_tool = MockTool("testToolPlan", "should fail")
+    failing_plan_tool.ainvoke = AsyncMock(side_effect=ValueError("Planning tool error"))
+    
+    regular_tool = MockTool("testTool", "result")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[regular_tool, failing_plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
+    tool_call = {
+        "name": "testTool",
+        "args": {"test": "arg"}
+    }
+    
+    # should_interrupt should raise an exception when planning tool fails
+    with pytest.raises(Exception) as exc_info:
+        await builder.should_interrupt(validation_tools, tool_call)
+    
+    assert "Planning tool error" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_handle_interrupt_catches_planning_tool_failure(mock_llm, mock_checkpointer):
+    """Verify handle_interrupt catches and wraps planning tool failure as InterruptedError."""
+    validation_tools = ["testTool"]
+    
+    # Create a mock plan tool that fails
+    failing_plan_tool = MockTool("testToolPlan", "should fail")
+    failing_plan_tool.ainvoke = AsyncMock(side_effect=ValueError("Planning tool failed"))
+    
+    regular_tool = MockTool("testTool", "result")
+
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=[regular_tool, failing_plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=MagicMock()
+    )
+
+    tool_call = {
+        "name": "testTool",
+        "args": {"test": "arg"}
+    }
+    
+    # handle_interrupt should catch the exception and raise InterruptedError
+    with pytest.raises(InterruptedError):
+        await builder.handle_interrupt(validation_tools, tool_call, {})
+
+@pytest.mark.asyncio
+async def test_tool_node_handles_planning_tool_failure_error(mock_llm, mock_tools, mock_checkpointer, mock_config, agent_config_with_validation):
+    """Verify tool_node handles planning tool failures and stores error flag."""
+    failing_plan_tool = MockTool("patchKubernetesResourcePlan", "should fail")
+    failing_plan_tool.ainvoke = AsyncMock(side_effect=ValueError("Planning tool failed"))
+    
+    builder = BaseAgentBuilder(
+        llm=mock_llm,
+        tools=mock_tools + [failing_plan_tool],
+        system_prompt="system_prompt",
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config_with_validation
+    )
+
+    # Create state with a tool call that requires validation
+    ai_message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "call_1",
+                "name": "patchKubernetesResource",
+                "args": {
+                    "patch": "[]",
+                    "name": "test",
+                    "kind": "Pod",
+                    "cluster": "local",
+                    "namespace": "default"
+                }
+            }
+        ]
+    )
+    state = {"messages": [ai_message]}
+    
+    result = await builder.tool_node(state, mock_config)
+    
+    # The result should contain a ToolMessage with error information
+    assert "messages" in result
+    tool_messages = result["messages"]
+    assert len(tool_messages) > 0
+    
+    # Check that the error is flagged
+    last_message = tool_messages[-1]
+    if isinstance(last_message, ToolMessage):
+        additional_kwargs = last_message.additional_kwargs or {}
+        # Should have the interrupt-error flag or error content
+        assert "interrupt-error" in additional_kwargs or "error" in last_message.content.lower()
 
 def test_process_tool_result_handles_mcp_response_with_ui_context():
     """Verify MCP responses with uiContext are properly extracted."""

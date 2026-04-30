@@ -256,6 +256,39 @@ class TestUIToolToLangchainTool:
         assert "bool_field" in schema_json["properties"]
         assert "array_field" in schema_json["properties"]
         assert "obj_field" in schema_json["properties"]
+    
+    def test_convert_tool_with_array_of_strings(self):
+        """Test converting tool with array of strings field (with items schema)."""
+        from app.services.ui_tools.selector import ui_tool_to_langchain_tool
+        schema = UIToolSchema(
+            type="object",
+            properties={
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of keywords for autocomplete"
+                }
+            },
+            required=["keywords"]
+        )
+        tool = UITool(
+            name="autocomplete",
+            description="Provides autocomplete suggestions",
+            prompt="Select autocomplete keywords",
+            category="selector",
+            schema=schema,
+            metadata={},
+            enabled=True
+        )
+        
+        langchain_tool = ui_tool_to_langchain_tool(tool)
+        
+        # Verify the tool was created with the array field
+        assert langchain_tool.name == "autocomplete"
+        schema_json = langchain_tool.args_schema.model_json_schema()
+        assert "keywords" in schema_json["properties"]
+        # Verify it's defined as an array type
+        assert schema_json["properties"]["keywords"]["type"] == "array"
 
 
 # ============================================================================

@@ -25,8 +25,8 @@ INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previ
 MAX_CONSECUTIVE_TOOL_CALLS = 5
 
 
-class InterruptError(Exception):
-    """Exception raised when interrupt message generation fails."""
+class InterruptToolException(Exception):
+    """Exception raised when invoking a tool that should trigger an interrupt."""
     pass
 
 class BaseAgentBuilder:
@@ -536,7 +536,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
             
             try:
                 should_continue, interrupt_message, ui_tools_list = await self.handle_interrupt(human_validation_tools, tool_call, state, config)
-            except InterruptedError as e:
+            except InterruptToolException as e:
                 logging.error(f"Error during confirmation interrupt: {e}")
                 interrupt_messages[tool_call["id"]] = {
                     "message": f"{e}",
@@ -717,7 +717,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     plan_response = await plan_tool.ainvoke(tool_call["args"])
                 except Exception as e:
                     logging.error(f"error invoking planning tool '{plan_tool_name}' for interrupt: {e}")
-                    raise Exception(e)
+                    raise InterruptToolException(e)
 
                 # Normalize list response from MCP tools: [{"type": "text", "text": "..."}]
                 if isinstance(plan_response, list) and len(plan_response) > 0:
@@ -752,9 +752,9 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
 
         try:
             interrupt_message = await self.should_interrupt(human_validation_tools, tool_call)
-        except Exception as e:
+        except InterruptToolException as e:
             logging.error(f"Error during interrupt message generation: {e}")
-            raise InterruptedError(e)
+            raise e
 
         if interrupt_message:
             logging.info(f"Confirmation interrupt triggered for tool '{tool_call.get('name')}', config={'present' if config else 'missing'}")

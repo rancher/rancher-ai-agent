@@ -8,6 +8,7 @@ import json
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.agent.base import (
+    InterruptToolException,
     process_tool_result,
     convert_to_string_if_needed,
     INTERRUPT_CANCEL_MESSAGE,
@@ -1039,7 +1040,7 @@ async def test_should_interrupt_raises_exception_when_planning_tool_fails(mock_l
 
 @pytest.mark.asyncio
 async def test_handle_interrupt_catches_planning_tool_failure(mock_llm, mock_checkpointer):
-    """Verify handle_interrupt catches and wraps planning tool failure as InterruptedError."""
+    """Verify handle_interrupt catches and wraps planning tool failure as InterruptToolException."""
     validation_tools = ["testTool"]
     
     # Create a mock plan tool that fails
@@ -1061,8 +1062,8 @@ async def test_handle_interrupt_catches_planning_tool_failure(mock_llm, mock_che
         "args": {"test": "arg"}
     }
     
-    # handle_interrupt should catch the exception and raise InterruptedError
-    with pytest.raises(InterruptedError):
+    # handle_interrupt should catch the exception and raise InterruptToolException
+    with pytest.raises(InterruptToolException):
         await builder.handle_interrupt(validation_tools, tool_call, {})
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
-from .parent import create_supervisor_agent, ChildAgent
+from .parent import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
 from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel
@@ -20,7 +20,7 @@ class NoAgentAvailableError(Exception):
     pass
 
 
-async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph, list[dict]]:
+async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
     Build an agent graph from AIAgentConfig CRDs.
 
@@ -67,8 +67,11 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
         logging.warning("Only one child agent connected successfully. Using it directly instead of a supervisor.")
         return child_agents[0].agent, agents_metadata
 
-    supervisor = create_supervisor_agent(llm, child_agents, checkpointer)
-    supervisor.streamable_nodes = ("model",)
+    graph = create_supervisor_agent(llm, child_agents, checkpointer)
+    supervisor = SupervisorGraph(
+        graph=graph,
+        child_agents={ca.config.name: ca.agent for ca in child_agents},
+    )
     return supervisor, agents_metadata
 
 

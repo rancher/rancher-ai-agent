@@ -48,6 +48,33 @@ class ChildAgent:
     agent: CompiledStateGraph
 
 
+class SupervisorGraph:
+    """
+    Typed wrapper around the compiled supervisor agent graph.
+
+    Provides properly typed attributes for supervisor-specific metadata
+    (streamable_nodes, child_agents) while delegating all CompiledStateGraph
+    methods to the underlying graph.
+
+    Attributes:
+        streamable_nodes: Node names whose LLM tokens should be streamed to the client.
+        child_agents: Mapping of agent names to their compiled graphs for direct routing.
+    """
+
+    def __init__(
+        self,
+        graph: CompiledStateGraph,
+        child_agents: dict[str, CompiledStateGraph],
+        streamable_nodes: tuple[str, ...] = ("model",),
+    ):
+        self._graph = graph
+        self.streamable_nodes = streamable_nodes
+        self.child_agents = child_agents
+
+    def __getattr__(self, name):
+        return getattr(self._graph, name)
+
+
 SUPERVISOR_PROMPT = """\
 You are exclusively Liz, the native AI assistant for SUSE Rancher. Your primary goal is to \
 assist users in managing their Kubernetes clusters and resources through the Rancher interface. \

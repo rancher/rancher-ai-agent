@@ -5,6 +5,7 @@ import json
 
 from ..dependencies import get_llm
 from ..services.agent.factory import NoAgentAvailableError, build_agent
+from ..services.agent.parent import SupervisorGraph
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -102,12 +103,13 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
             ws_request = _parse_websocket_request(request)
             config = _build_config(base_config, request_id, ws_request)
-            input_data = await _build_input_data(agent, config, ws_request)
+            target_agent, target_config = _resolve_target_agent(agent, config, ws_request)
+            input_data = await _build_input_data(target_agent, target_config, ws_request)
 
             await _call_agent(
-                agent=agent,
+                agent=target_agent,
                 input_data=input_data,
-                config=config,
+                config=target_config,
                 websocket=websocket)
             
         except WebSocketDisconnect:
@@ -348,6 +350,76 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
         config["configurable"]["thread_id"] = ""
     
     return config
+
+def _resolve_target_agent(
+    agent: CompiledStateGraph | SupervisorGraph,
+    config: dict,
+    ws_request: WebSocketRequest,
+) -> tuple[CompiledStateGraph, dict]:
+    """
+    Resolve which agent to call based on the request.
+
+    If ws_request.agent names a known child agent, returns that child's compiled graph
+    along with a config using the namespaced thread_id (matching the convention used by
+    the supervisor). Otherwise, returns the supervisor agent and the original config.
+
+    Args:
+        agent: The supervisor (or single-agent) compiled graph.
+        config: The current run config.
+        ws_request: The parsed WebSocket request.
+
+    Returns:
+        A tuple of (target agent graph, config for that agent).
+    """
+    requested_agent = ws_request.agent
+    if not requested_agent:
+        return agent, config
+
+    if not isinstance(agent, SupervisorGraph):
+        return agent, config
+
+    if requested_agent not in agent.child_agents:
+        logging.debug(f"Requested agent '{requested_agent}' not found in child_agents, falling back to supervisor")
+        return agent, config
+
+    logging.info(f"Routing directly to child agent '{requested_agent}' (bypassing supervisor)")
+    child_graph = agent.child_agents[requested_agent]
+    child_config = _build_child_direct_config(config, requested_agent)
+    return child_graph, child_config
+
+
+def _build_child_direct_config(parent_config: dict, agent_name: str) -> dict:
+    """
+    Build a run config for calling a child agent directly from the websocket.
+
+    Uses the same thread_id namespacing convention as the supervisor
+    (``{parent_thread_id}::{agent_name}``) so that state is shared regardless of
+    whether the child was invoked via the supervisor or directly.
+
+    Unlike the supervisor's internal _build_child_config, this preserves callbacks
+    (e.g. Langfuse) so that tracing works when calling the child directly.
+
+    Args:
+        parent_config: The supervisor-level config with thread_id, user_id, etc.
+        agent_name: The name of the child agent to call.
+
+    Returns:
+        A config dict ready for the child agent.
+    """
+    parent_configurable = parent_config.get("configurable", {})
+    parent_thread_id = parent_configurable.get("thread_id", "")
+
+    child_config = {
+        **parent_config,
+        "configurable": {
+            "thread_id": f"{parent_thread_id}::{agent_name}" if parent_thread_id else agent_name,
+            "request_id": parent_configurable.get("request_id", ""),
+            "request_metadata": parent_configurable.get("request_metadata", {}),
+            "user_id": parent_configurable.get("user_id", ""),
+        },
+    }
+    return child_config
+
 
 async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:
     """

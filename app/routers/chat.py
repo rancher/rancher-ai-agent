@@ -26,7 +26,7 @@ async def get_chats(request: Request, sort: str = "createdAt:desc"):
             user_id=user_id
         )
 
-        chats = sorted(chats, key=lambda c: c.get("createdAt", 0), reverse=(sort != "createdAt:asc"))
+        chats = sorted(chats, key=lambda c: c.get("createdAt") or "", reverse=(sort != "createdAt:asc"))
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,

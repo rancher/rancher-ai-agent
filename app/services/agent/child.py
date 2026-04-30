@@ -283,11 +283,12 @@ class ChildAgentBuilder:
 
             # Get the selected agent context
             selected_agent = state.get("selected_agent", {}).get("name", "")
-            agent_config = None
-            for child in self.child_agents:
-                if child.config.name == selected_agent:
-                    agent_config = child.config
-                    break
+            agent_config = self.agent_config
+            if hasattr(self, 'child_agents'):
+                for child in self.child_agents:
+                    if child.config.name == selected_agent:
+                        agent_config = child.config
+                        break
 
             user_message, ai_message, mcp_response, mcp_data = self._extract_context_for_tool_selection(
                 state, config

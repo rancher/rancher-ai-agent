@@ -532,7 +532,19 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
         # responses first ensures every tool is executed exactly once.
         interrupt_messages = {}
         for idx, tool_call in enumerate(tool_calls):
-            should_continue, interrupt_message, ui_tools_list = await self.handle_interrupt(human_validation_tools, tool_call, state, config)
+            should_continue, interrupt_message, ui_tools_list = None, None, []
+            
+            try:
+                should_continue, interrupt_message, ui_tools_list = await self.handle_interrupt(human_validation_tools, tool_call, state, config)
+            except InterruptedError as e:
+                logging.error(f"Error during confirmation interrupt: {e}")
+                interrupt_messages[tool_call["id"]] = {
+                    "message": f"{e}",
+                    "ui_tools": [],
+                    "interrupt-error": True
+                }
+                break
+
             if not should_continue:
                 # Cancel ALL tool calls: previously approved ones, the rejected one,
                 # and any remaining unevaluated ones — no tools will be executed.
@@ -558,7 +570,7 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                     "ui_tools": ui_tools_list
                 }
 
-        # Phase 2: Execute tools (all interrupts were approved if we reach here).
+        # Phase 2: Execute tools (all interrupts were approved OR interrupt errors occurred if we reach here).
         for idx, tool_call in enumerate(tool_calls):
             additional_kwargs = {
                 "request_id": request_id,
@@ -572,6 +584,10 @@ You are a highly specialized Assistant. Your primary goal is to provide accurate
                 additional_kwargs["ui_tools"] = interrupt_message["ui_tools"]
             
             try:
+                # Skip execution and return the exception as information for the next nodes to handle
+                if interrupt_message and interrupt_message.get("interrupt-error", False):
+                    raise ToolException(interrupt_message['message'])
+
                 logging.debug("calling tool")
                 tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"])
                 logging.debug("tool call finished")

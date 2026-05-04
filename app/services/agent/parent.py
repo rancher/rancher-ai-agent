@@ -12,17 +12,19 @@ call multiple agents in sequence and synthesize their outputs into a unified res
 
 import logging
 
+from datetime import datetime
 from collections.abc import Callable
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
-from langchain.agents.middleware import wrap_tool_call, before_model, AgentState
+from langchain.agents.middleware import wrap_tool_call, before_model, after_model, AgentState
 from langchain.messages import AIMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 import langgraph.types
 from langgraph.types import Command
+from langgraph.config import get_config
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
 from .loader import AgentConfig
@@ -247,11 +249,25 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
 @before_model(can_jump_to=["end"])
 def human_in_the_loop_loop(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     logging.info(f"Supervisor agent state before model call: {state}")
-    if state["messages"][-1].content == INTERRUPT_CANCEL_MESSAGE: # TODO check if ToolMessage? 
+    if state["messages"][-1].content == INTERRUPT_CANCEL_MESSAGE:
         return {
-            "messages": [AIMessage("Previous tool cancel by the user.")],
+            "messages": [AIMessage("Previous tool canceled by the user.")],
             "jump_to": "end"
         }
+    return None
+
+@after_model
+def inject_request_id(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    """Inject request_id into the last AIMessage's additional_kwargs."""
+    config = get_config()
+    request_id = config.get("configurable", {}).get("request_id")
+    if request_id and state["messages"]:
+        last_message = state["messages"][-1]
+        if isinstance(last_message, AIMessage):
+            last_message.additional_kwargs["request_id"] = request_id
+            last_message.additional_kwargs["created_at"] = datetime.now().isoformat()
+
+            return {"messages": [last_message]}
     return None
 
 @wrap_tool_call
@@ -311,5 +327,5 @@ def create_supervisor_agent(
         system_prompt=SUPERVISOR_PROMPT,
         checkpointer=checkpointer,
         name="supervisor",
-        middleware=[monitor_tool, human_in_the_loop_loop],
+        middleware=[monitor_tool, human_in_the_loop_loop, inject_request_id],
     )

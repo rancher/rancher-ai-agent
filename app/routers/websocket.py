@@ -2,6 +2,7 @@ import os
 import uuid
 import logging
 import json
+from datetime import datetime
 
 from ..dependencies import get_llm
 from ..services.agent.factory import NoAgentAvailableError, build_agent
@@ -26,7 +27,7 @@ async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     Retrieves the user ID from the Rancher API using the session token from the WebSocket cookies.
     """
     cookies = websocket.cookies
-    rancher_url = os.environ.get("RANCHER_URL","https://"+websocket.url.hostname)
+    rancher_url = os.environ.get("RANCHER_URL","https://rancher.cattle-system.svc")
     token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
 
     return await get_user_id(rancher_url, token)
@@ -446,7 +447,9 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
             content=ws_request.prompt,
             additional_kwargs={
                 "request_id": config["configurable"]["request_id"],
-                "request_metadata": config["configurable"]["request_metadata"]
+                "request_metadata": config["configurable"]["request_metadata"],
+                "created_at": datetime.now().isoformat(),
+                "is_parent": True,
             }
         )
     ]

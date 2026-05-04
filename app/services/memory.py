@@ -112,6 +112,7 @@ class MemoryManager:
 
         name = metadata.get("chat_name", "")
         created_at = None
+        is_parent = False
         
         messages = channel_values.get("messages", [])
         if messages and len(messages) > 0:
@@ -120,6 +121,7 @@ class MemoryManager:
 
             additional_kwargs = message.additional_kwargs
             created_at = additional_kwargs.get("created_at") if additional_kwargs else None
+            is_parent = additional_kwargs.get("is_parent", False) if additional_kwargs else False
 
             if not name:
                 request_metadata = message.additional_kwargs.get("request_metadata", {})
@@ -137,7 +139,8 @@ class MemoryManager:
 
         return {
             "name": name,
-            "created_at": created_at
+            "created_at": created_at,
+            "is_parent": is_parent,
         }
 
     async def fetch_chats(self, user_id: str, filters: dict = {}) -> list:
@@ -177,6 +180,7 @@ class MemoryManager:
                     "userId": user_id,
                     "name": chat_metadata.get("name"),
                     "createdAt": chat_metadata.get("created_at"),
+                    "isParent": chat_metadata.get("is_parent", False),
                 })
 
         return rows
@@ -225,6 +229,7 @@ class MemoryManager:
                 "userId": user_id,
                 "name": chat_metadata.get("name"),
                 "createdAt": chat_metadata.get("created_at"),
+                "isParent": chat_metadata.get("is_parent", False),
             }
             return chat
 
@@ -309,7 +314,7 @@ class MemoryManager:
         # Group messages by request_id
         messages_map = {}
         for message in all_messages:
-            request_id = message.additional_kwargs["request_id"]
+            request_id = message.additional_kwargs.get("request_id")
             if request_id:
                 if request_id not in messages_map:
                     messages_map[request_id] = []

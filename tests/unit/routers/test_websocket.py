@@ -242,26 +242,6 @@ class TestExtractStreamingText:
         result = _extract_streaming_text(stream)
         assert result is None
 
-    def test_custom_streamable_nodes(self):
-        chunk = MagicMock()
-        chunk.content = "data"
-        stream = {
-            "metadata": {"langgraph_node": "model"},
-            "data": {"chunk": chunk},
-        }
-        result = _extract_streaming_text(stream, streamable_nodes=("model",))
-        assert result == "data"
-
-    def test_rejects_non_matching_custom_streamable_nodes(self):
-        chunk = MagicMock()
-        chunk.content = "data"
-        stream = {
-            "metadata": {"langgraph_node": "agent"},
-            "data": {"chunk": chunk},
-        }
-        result = _extract_streaming_text(stream, streamable_nodes=("model",))
-        assert result is None
-
     def test_missing_metadata(self):
         chunk = MagicMock()
         chunk.content = "data"

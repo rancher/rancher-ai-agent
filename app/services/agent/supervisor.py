@@ -55,11 +55,10 @@ class SupervisorGraph:
     Typed wrapper around the compiled supervisor agent graph.
 
     Provides properly typed attributes for supervisor-specific metadata
-    (streamable_nodes, child_agents) while delegating all CompiledStateGraph
+    (child_agents) while delegating all CompiledStateGraph
     methods to the underlying graph.
 
     Attributes:
-        streamable_nodes: Node names whose LLM tokens should be streamed to the client.
         child_agents: Mapping of agent names to their compiled graphs for direct routing.
     """
 
@@ -67,10 +66,8 @@ class SupervisorGraph:
         self,
         graph: CompiledStateGraph,
         child_agents: dict[str, CompiledStateGraph],
-        streamable_nodes: tuple[str, ...] = ("model",),
     ):
         self._graph = graph
-        self.streamable_nodes = streamable_nodes
         self.child_agents = child_agents
 
     def __getattr__(self, name):
@@ -227,6 +224,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
         if child_state and child_state.interrupts:
             result = await _resume_child_from_interrupt(compiled_graph, child_config, child_state, agent_name)
         else:
+            child_config["tags"] = ["no-stream"]
             result = await compiled_graph.ainvoke(
                 {"messages": [{"role": "user", "content": query}]},
                 config=child_config,

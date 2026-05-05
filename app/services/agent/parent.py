@@ -19,7 +19,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
-from langchain.agents.middleware import wrap_tool_call, before_model, after_model, AgentState
+from langchain.agents.middleware import wrap_tool_call, before_model, after_model, AgentState, SummarizationMiddleware
 from langchain.messages import AIMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 import langgraph.types
@@ -161,9 +161,11 @@ def _build_child_config(agent_name: str) -> dict:
     """
     parent_configurable = ensure_config().get("configurable", {})
     parent_thread_id = parent_configurable.get("thread_id", "")
+    if not parent_thread_id:
+        raise ValueError("thread_id is required in configurable but was not provided")
 
     child_configurable: dict = {
-        "thread_id": f"{parent_thread_id}::{agent_name}" if parent_thread_id else agent_name,
+        "thread_id": f"{parent_thread_id}::{agent_name}",
         **{k: parent_configurable[k] for k in _FORWARDED_CONFIG_KEYS if k in parent_configurable},
     }
     return {"configurable": child_configurable, "callbacks": []}
@@ -248,7 +250,6 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
 
 @before_model(can_jump_to=["end"])
 def human_in_the_loop_loop(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-    logging.info(f"Supervisor agent state before model call: {state}")
     if state["messages"][-1].content == INTERRUPT_CANCEL_MESSAGE:
         return {
             "messages": [AIMessage("Previous tool canceled by the user.")],
@@ -327,5 +328,5 @@ def create_supervisor_agent(
         system_prompt=SUPERVISOR_PROMPT,
         checkpointer=checkpointer,
         name="supervisor",
-        middleware=[monitor_tool, human_in_the_loop_loop, inject_request_id],
+        middleware=[monitor_tool, human_in_the_loop_loop, inject_request_id, SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 6000)])],
     )

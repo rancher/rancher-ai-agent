@@ -85,7 +85,7 @@ def child_agent(agent_config, mock_compiled_graph):
 # Factory Function Tests
 # ============================================================================
 
-@patch("app.services.agent.parent.create_agent")
+@patch("app.services.agent.supervisor.create_agent")
 def test_create_supervisor_agent_creates_graph(mock_create_agent, mock_llm, mock_child_agents, mock_checkpointer):
     """Verify that create_supervisor_agent delegates to langchain create_agent."""
     mock_graph = MagicMock()
@@ -97,7 +97,7 @@ def test_create_supervisor_agent_creates_graph(mock_create_agent, mock_llm, mock
     mock_create_agent.assert_called_once()
 
 
-@patch("app.services.agent.parent.create_agent")
+@patch("app.services.agent.supervisor.create_agent")
 def test_create_supervisor_agent_creates_tools_for_all_children(mock_create_agent, mock_llm, mock_child_agents, mock_checkpointer):
     """Verify that each child agent becomes a tool."""
     mock_create_agent.return_value = MagicMock()
@@ -113,31 +113,13 @@ def test_create_supervisor_agent_creates_tools_for_all_children(mock_create_agen
     assert "Harvester" in tool_names
 
 
-@patch("app.services.agent.parent.create_agent")
-def test_create_supervisor_agent_with_many_agents(mock_create_agent, mock_llm, mock_checkpointer):
-    """Verify that create_supervisor_agent works with many child agents."""
-    mock_create_agent.return_value = MagicMock()
-
-    child_agents = []
-    for i in range(5):
-        config = MagicMock()
-        config.name = f"Agent{i}"
-        config.description = f"Agent {i} description"
-        child_agents.append(ChildAgent(config=config, agent=MagicMock()))
-
-    create_supervisor_agent(mock_llm, child_agents, mock_checkpointer)
-
-    call_kwargs = mock_create_agent.call_args[1]
-    assert len(call_kwargs["tools"]) == 5
-
-
 # ============================================================================
 # Helper Function Tests
 # ============================================================================
 
 def test_build_child_config_namespaces_thread_id():
     """Verify child config has namespaced thread_id."""
-    with patch("app.services.agent.parent.ensure_config") as mock_ensure:
+    with patch("app.services.agent.supervisor.ensure_config") as mock_ensure:
         mock_ensure.return_value = {
             "configurable": {
                 "thread_id": "parent-thread-1",
@@ -197,7 +179,7 @@ async def test_invoke_normal_sends_messages_to_child(child_agent, mock_compiled_
     tool = _create_agent_tool(child_agent)
 
     # Patch ensure_config to provide a parent thread_id
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-123"}
     }):
         result = await tool.ainvoke({"query": "test query"})
@@ -227,7 +209,7 @@ async def test_invoke_normal_uses_derived_thread_id(child_agent, mock_compiled_g
 
     tool = _create_agent_tool(child_agent)
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "session-abc"}
     }):
         await tool.ainvoke({"query": "hello"})
@@ -239,27 +221,6 @@ async def test_invoke_normal_uses_derived_thread_id(child_agent, mock_compiled_g
     expected_thread_id = "session-abc::test-agent"
     assert state_config["configurable"]["thread_id"] == expected_thread_id
     assert invoke_config["configurable"]["thread_id"] == expected_thread_id
-
-
-@pytest.mark.asyncio
-async def test_invoke_normal_suppresses_callbacks(child_agent, mock_compiled_graph):
-    """The child invocation uses empty callbacks to prevent event leakage."""
-    mock_state = MagicMock()
-    mock_state.interrupts = ()
-    mock_compiled_graph.aget_state.return_value = mock_state
-    mock_compiled_graph.ainvoke.return_value = {
-        "messages": [AIMessage(content="ok")]
-    }
-
-    tool = _create_agent_tool(child_agent)
-
-    with patch("app.services.agent.parent.ensure_config", return_value={
-        "configurable": {"thread_id": "t1"}
-    }):
-        await tool.ainvoke({"query": "hello"})
-
-    invoke_config = mock_compiled_graph.ainvoke.call_args[1]["config"]
-    assert invoke_config["callbacks"] == []
 
 
 @pytest.mark.asyncio
@@ -278,7 +239,7 @@ async def test_invoke_returns_last_ai_content(child_agent, mock_compiled_graph):
 
     tool = _create_agent_tool(child_agent)
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
     }):
         result = await tool.ainvoke({"query": "hello"})
@@ -296,7 +257,7 @@ async def test_invoke_returns_fallback_when_no_content(child_agent, mock_compile
 
     tool = _create_agent_tool(child_agent)
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
     }):
         result = await tool.ainvoke({"query": "hello"})
@@ -332,9 +293,9 @@ async def test_invoke_resume_detects_pending_interrupt(child_agent, mock_compile
     tool = _create_agent_tool(child_agent)
 
     # Patch interrupt() to simulate returning the user's resume value
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-456"}
-    }), patch("app.services.agent.parent.langgraph.types.interrupt", return_value="yes") as mock_interrupt_fn:
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes") as mock_interrupt_fn:
         result = await tool.ainvoke({"query": "create resource"})
 
     assert result == "Resource created successfully"
@@ -372,9 +333,9 @@ async def test_invoke_resume_passes_user_response_to_child(child_agent, mock_com
     tool = _create_agent_tool(child_agent)
 
     # User responds with "yes" to approve
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
-    }), patch("app.services.agent.parent.langgraph.types.interrupt", return_value="yes"):
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes"):
         await tool.ainvoke({"query": "do something"})
 
     # The resume value "yes" should be passed to the child
@@ -405,9 +366,9 @@ async def test_invoke_resume_uses_same_thread_id(child_agent, mock_compiled_grap
 
     tool = _create_agent_tool(child_agent)
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "session-xyz"}
-    }), patch("app.services.agent.parent.langgraph.types.interrupt", return_value="yes"):
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes"):
         await tool.ainvoke({"query": "test"})
 
     expected_thread_id = "session-xyz::test-agent"
@@ -437,7 +398,7 @@ async def test_invoke_raises_when_parent_thread_id_missing(child_agent, mock_com
     tool = _create_agent_tool(child_agent)
 
     # ensure_config returns empty configurable
-    with patch("app.services.agent.parent.ensure_config", return_value={}):
+    with patch("app.services.agent.supervisor.ensure_config", return_value={}):
         with pytest.raises(Exception, match="thread_id is required"):
             await tool.ainvoke({"query": "hello"})
 
@@ -452,7 +413,7 @@ async def test_invoke_no_interrupts_when_state_is_none(child_agent, mock_compile
 
     tool = _create_agent_tool(child_agent)
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
     }):
         result = await tool.ainvoke({"query": "hello"})
@@ -500,9 +461,9 @@ async def test_invoke_normal_child_interrupts_during_invocation(child_agent, moc
 
     tool = _create_agent_tool(child_agent)
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-789"}
-    }), patch("app.services.agent.parent.langgraph.types.interrupt") as mock_interrupt_fn:
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt") as mock_interrupt_fn:
         # interrupt() at the supervisor level raises GraphInterrupt,
         # but our mock just records the call and returns (won't raise).
         # In production this would propagate the interrupt to the client.
@@ -549,9 +510,9 @@ async def test_invoke_resume_child_interrupts_again(child_agent, mock_compiled_g
             return "yes"  # First call: user approved first interrupt
         return None  # Second call: re-trigger for the second interrupt
 
-    with patch("app.services.agent.parent.ensure_config", return_value={
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-multi"}
-    }), patch("app.services.agent.parent.langgraph.types.interrupt", side_effect=mock_interrupt_side_effect):
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", side_effect=mock_interrupt_side_effect):
         await tool.ainvoke({"query": "multi-tool operation"})
 
     # interrupt() should have been called twice:

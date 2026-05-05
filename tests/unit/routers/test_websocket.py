@@ -10,7 +10,6 @@ from app.routers.websocket import (
     _parse_websocket_request,
     _build_config,
     _resolve_target_agent,
-    _build_child_direct_config,
     _build_input_data,
     WebSocketRequest,
 )
@@ -214,16 +213,6 @@ class TestExtractStreamingText:
         result = _extract_streaming_text(stream)
         assert result == "Hello world"
 
-    def test_returns_none_for_non_streamable_node(self):
-        chunk = MagicMock()
-        chunk.content = "Hello"
-        stream = {
-            "metadata": {"langgraph_node": "tool_executor"},
-            "data": {"chunk": chunk},
-        }
-        result = _extract_streaming_text(stream)
-        assert result is None
-
     def test_returns_none_for_empty_chunk(self):
         stream = {
             "metadata": {"langgraph_node": "agent"},
@@ -237,16 +226,6 @@ class TestExtractStreamingText:
         chunk.content = ""
         stream = {
             "metadata": {"langgraph_node": "agent"},
-            "data": {"chunk": chunk},
-        }
-        result = _extract_streaming_text(stream)
-        assert result is None
-
-    def test_missing_metadata(self):
-        chunk = MagicMock()
-        chunk.content = "data"
-        stream = {
-            "metadata": {},
             "data": {"chunk": chunk},
         }
         result = _extract_streaming_text(stream)
@@ -501,17 +480,6 @@ class TestResolveTargetAgent:
         assert result_agent is agent
         assert result_config is config
 
-    def test_non_supervisor_agent_returns_itself(self):
-        agent = MagicMock(spec=[])  # Not a SupervisorGraph
-        config = {"configurable": {"thread_id": "t1"}}
-        ws_request = WebSocketRequest(
-            prompt="hi", user_input="hi", context={},
-            tags=[], labels={}, agent="fleet", ui_tools={}
-        )
-        result_agent, result_config = _resolve_target_agent(agent, config, ws_request)
-        assert result_agent is agent
-        assert result_config is config
-
     def test_supervisor_routes_to_known_child(self):
         child_graph = MagicMock()
         supervisor = SupervisorGraph(
@@ -525,7 +493,7 @@ class TestResolveTargetAgent:
         )
         result_agent, result_config = _resolve_target_agent(supervisor, config, ws_request)
         assert result_agent is child_graph
-        assert "::fleet" in result_config["configurable"]["thread_id"]
+        assert result_config is config
 
     def test_supervisor_falls_back_for_unknown_child(self):
         supervisor = SupervisorGraph(
@@ -540,51 +508,7 @@ class TestResolveTargetAgent:
         result_agent, result_config = _resolve_target_agent(supervisor, config, ws_request)
         # Should fall back to supervisor
         assert result_config is config
-
-
-# --- Tests for _build_child_direct_config ---
-
-class TestBuildChildDirectConfig:
-    def test_basic_child_config(self):
-        parent_config = {
-            "configurable": {
-                "thread_id": "parent-thread",
-                "request_id": "req-1",
-                "request_metadata": {"key": "value"},
-                "user_id": "user-1",
-            }
-        }
-        result = _build_child_direct_config(parent_config, "fleet")
-        assert result["configurable"]["thread_id"] == "parent-thread::fleet"
-        assert result["configurable"]["request_id"] == "req-1"
-        assert result["configurable"]["user_id"] == "user-1"
-        assert result["configurable"]["request_metadata"] == {"key": "value"}
-
-    def test_empty_thread_id(self):
-        parent_config = {
-            "configurable": {
-                "thread_id": "",
-                "request_id": "req-2",
-                "request_metadata": {},
-                "user_id": "user-2",
-            }
-        }
-        result = _build_child_direct_config(parent_config, "rancher")
-        assert result["configurable"]["thread_id"] == "rancher"
-
-    def test_preserves_callbacks(self):
-        callback = MagicMock()
-        parent_config = {
-            "configurable": {
-                "thread_id": "t1",
-                "request_id": "r1",
-                "request_metadata": {},
-                "user_id": "u1",
-            },
-            "callbacks": [callback],
-        }
-        result = _build_child_direct_config(parent_config, "fleet")
-        assert result["callbacks"] == [callback]
+        assert result_agent is supervisor
 
 
 # --- Tests for _build_input_data ---

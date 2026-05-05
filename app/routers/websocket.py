@@ -375,41 +375,8 @@ def _resolve_target_agent(
 
     logging.info(f"Routing directly to child agent '{requested_agent}' (bypassing supervisor)")
     child_graph = agent.child_agents[requested_agent]
-    # TODO remove func child_config = _build_child_direct_config(config, requested_agent)
+
     return child_graph, config
-
-
-def _build_child_direct_config(parent_config: dict, agent_name: str) -> dict:
-    """
-    Build a run config for calling a child agent directly from the websocket.
-
-    Uses the same thread_id namespacing convention as the supervisor
-    (``{parent_thread_id}::{agent_name}``) so that state is shared regardless of
-    whether the child was invoked via the supervisor or directly.
-
-    Unlike the supervisor's internal _build_child_config, this preserves callbacks
-    (e.g. Langfuse) so that tracing works when calling the child directly.
-
-    Args:
-        parent_config: The supervisor-level config with thread_id, user_id, etc.
-        agent_name: The name of the child agent to call.
-
-    Returns:
-        A config dict ready for the child agent.
-    """
-    parent_configurable = parent_config.get("configurable", {})
-    parent_thread_id = parent_configurable.get("thread_id", "")
-
-    child_config = {
-        **parent_config,
-        "configurable": {
-            "thread_id": f"{parent_thread_id}",
-            "request_id": parent_configurable.get("request_id", ""),
-            "request_metadata": parent_configurable.get("request_metadata", {}),
-            "user_id": parent_configurable.get("user_id", ""),
-        },
-    }
-    return child_config
 
 
 async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:

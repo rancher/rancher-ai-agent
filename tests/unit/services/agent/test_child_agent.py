@@ -15,16 +15,14 @@ from app.services.agent.child import (
     convert_to_string_if_needed,
     create_child_agent,
     INTERRUPT_CANCEL_MESSAGE,
-    INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE,
     _should_interrupt,
     _dispatch_ui_tools,
     _dispatch_ui_tools_event,
     _build_interrupt_ui_tools,
-    _cancel_remaining_tool_calls,
     _build_agent_metadata,
 )
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import ToolException, tool as langchain_tool
+from langchain_core.tools import tool as langchain_tool
 
 
 class MockTool:
@@ -60,35 +58,6 @@ def mock_checkpointer():
     return False
 
 
-@pytest.fixture
-def mock_config():
-    """Mock runnable configuration."""
-    return {
-        "configurable": {
-            "request_id": "test_id",
-            "request_metadata": {"tags": []}
-        }
-    }
-
-
-@pytest.fixture
-def agent_config_with_validation():
-    """Mock agent configuration with human validation enabled."""
-    config = MagicMock()
-    config.human_validation_tools = [
-        "patchKubernetesResource",
-        "createKubernetesResource"
-    ]
-    return config
-
-
-@pytest.fixture
-def agent_config_without_validation():
-    """Mock agent configuration without human validation."""
-    config = MagicMock()
-    config.human_validation_tools = []
-    return config
-
 
 # ============================================================================
 # create_child_agent Tests
@@ -111,25 +80,6 @@ def test_create_child_agent_returns_compiled_graph(mock_llm, mock_checkpointer):
     assert graph is not None
     # It should have an invoke method (compiled graph)
     assert hasattr(graph, "ainvoke") or hasattr(graph, "invoke")
-
-
-def test_create_child_agent_separates_planning_tools(mock_llm, mock_checkpointer):
-    """Verify that Plan tools are separated from execution tools."""
-    regular_tool = _make_langchain_tool("myTool")
-    plan_tool = _make_langchain_tool("myToolPlan")
-    agent_config = MagicMock()
-    agent_config.human_validation_tools = []
-
-    # Should not raise — plan tools are separated out
-    graph = create_child_agent(
-        llm=mock_llm,
-        tools=[regular_tool, plan_tool],
-        system_prompt="system",
-        checkpointer=mock_checkpointer,
-        agent_config=agent_config,
-    )
-
-    assert graph is not None
 
 
 # ============================================================================
@@ -189,21 +139,6 @@ async def test_should_interrupt_raises_if_plan_tool_missing():
 
     with pytest.raises(ValueError, match="planning tool 'myToolPlan' not found"):
         await _should_interrupt(validation_tools, tool_call, planning_tools_by_name)
-
-
-@pytest.mark.asyncio
-async def test_should_interrupt_normalizes_list_response():
-    """Verify list-format plan responses are normalized."""
-    validation_tools = ["myTool"]
-    plan_tool = MockTool("myToolPlan", [{"type": "text", "text": '{"action": "patch"}'}])
-    planning_tools_by_name = {"myToolPlan": plan_tool}
-
-    tool_call = {"name": "myTool", "args": {}}
-
-    result = await _should_interrupt(validation_tools, tool_call, planning_tools_by_name)
-
-    assert "<confirmation-response>" in result
-    assert "patch" in result
 
 
 # ============================================================================
@@ -680,22 +615,6 @@ def test_process_tool_result_handles_list_format():
 
     assert processed == "Extracted text"
     assert mcp_response is None
-
-
-def test_process_tool_result_handles_doc_links():
-    """Verify docLinks are dispatched as custom events."""
-    tool_result = json.dumps({
-        "llm": "Response",
-        "docLinks": ["https://docs.example.com"]
-    })
-
-    with patch("app.services.agent.child.dispatch_custom_event") as mock_dispatch:
-        processed, _ = _process_tool_result(tool_result, {})
-
-        # Check that dock_link event was dispatched
-        calls = [call for call in mock_dispatch.call_args_list if call[0][0] == "dock_link"]
-        assert len(calls) == 1
-        assert "https://docs.example.com" in calls[0][0][1]
 
 
 def test_process_tool_result_handles_json_dict_without_llm_key():

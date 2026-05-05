@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage
 
-from app.services.agent.parent import (
+from app.services.agent.supervisor import (
     ChildAgent,
     create_supervisor_agent,
     _build_child_config,
@@ -425,8 +425,8 @@ async def test_invoke_resume_uses_same_thread_id(child_agent, mock_compiled_grap
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_invoke_fallback_thread_id_when_parent_missing(child_agent, mock_compiled_graph):
-    """If parent config has no thread_id, the agent name is used as fallback."""
+async def test_invoke_raises_when_parent_thread_id_missing(child_agent, mock_compiled_graph):
+    """If parent config has no thread_id, a ValueError is raised."""
     mock_state = MagicMock()
     mock_state.interrupts = ()
     mock_compiled_graph.aget_state.return_value = mock_state
@@ -438,10 +438,8 @@ async def test_invoke_fallback_thread_id_when_parent_missing(child_agent, mock_c
 
     # ensure_config returns empty configurable
     with patch("app.services.agent.parent.ensure_config", return_value={}):
-        await tool.ainvoke({"query": "hello"})
-
-    state_config = mock_compiled_graph.aget_state.call_args[1]["config"]
-    assert state_config["configurable"]["thread_id"] == "test-agent"
+        with pytest.raises(Exception, match="thread_id is required"):
+            await tool.ainvoke({"query": "hello"})
 
 
 @pytest.mark.asyncio

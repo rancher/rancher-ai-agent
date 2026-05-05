@@ -105,7 +105,7 @@ async def test_build_agent_three_agents(mock_update_status, mock_create_client, 
     result = await build_agent(mock_llm, mock_websocket)
     
     # Verify - build_agent wraps multi-agent result in SupervisorGraph
-    from app.services.agent.parent import SupervisorGraph
+    from app.services.agent.supervisor import SupervisorGraph
     assert isinstance(result[0], SupervisorGraph)
     assert result[0]._graph == mock_parent_agent
     mock_create_parent.assert_called_once()
@@ -187,7 +187,7 @@ async def test_build_agent_filters_tools_by_toolset(mock_update_status, mock_cre
     result = await build_agent(mock_llm, mock_websocket)
     
     # Verify - build_agent wraps multi-agent result in SupervisorGraph
-    from app.services.agent.parent import SupervisorGraph
+    from app.services.agent.supervisor import SupervisorGraph
     assert isinstance(result[0], SupervisorGraph)
     
     # Verify subagents passed to create_supervisor_agent have correct tools
@@ -272,7 +272,7 @@ async def test_build_agent_one_fails_mcp_connection(mock_update_status, mock_cre
     result = await build_agent(mock_llm, mock_websocket)
     
     # Should return supervisor since 2 agents succeeded
-    from app.services.agent.parent import SupervisorGraph
+    from app.services.agent.supervisor import SupervisorGraph
     assert isinstance(result[0], SupervisorGraph)
     mock_create_parent.assert_called_once()
 

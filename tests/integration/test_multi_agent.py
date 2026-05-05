@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
-from app.services.agent.parent import SUPERVISOR_PROMPT
+from app.services.agent.supervisor import SUPERVISOR_PROMPT
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
 from langchain_core.language_models import FakeMessagesListChatModel
@@ -462,7 +462,6 @@ def test_delegate_to_child_agent_with_tool():
 def test_delegate_to_child_agent_with_ui_tools():
     """Tests that child agents work with UI tools and dispatch <processing-ui-tools/> message."""
     from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
-    from app.services.agent.child import ChildAgentBuilder
     from unittest.mock import patch, MagicMock
     import json
 

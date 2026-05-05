@@ -19,7 +19,6 @@ from langchain.agents.middleware import (
     AgentState,
     SummarizationMiddleware,
     after_model,
-    before_model,
     wrap_tool_call,
 )
 from langchain.messages import AIMessage, ToolMessage
@@ -36,8 +35,12 @@ from langgraph.types import Command
 from ..ui_tools.loader import load_ui_tools_from_configmap
 from ..ui_tools.selector import create_ui_tools_selector, filter_tool
 from .loader import AgentConfig
+from .middleware import (
+    INTERRUPT_CANCEL_MESSAGE,
+    create_cancel_check_middleware,
+    create_inject_request_id_middleware,
+)
 
-INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
 
 
@@ -60,8 +63,9 @@ def create_child_agent(
 
     middleware = [
         _create_tool_execution_middleware(llm, planning_tools_by_name, agent_config),
-        _create_cancel_check_middleware(agent_config),
-        _create_inject_metadata_middleware(agent_config),
+        create_cancel_check_middleware(),
+        create_inject_request_id_middleware(),
+        _create_inject_selected_agent_middleware(agent_config),
         _create_ui_tools_middleware(llm, agent_config),
         SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 6000)]),
     ]
@@ -81,44 +85,23 @@ def create_child_agent(
 # =============================================================================
 
 
-def _create_cancel_check_middleware(agent_config: AgentConfig):
-    """Before-model middleware: skip LLM call if the last tool was cancelled."""
-
-    @before_model(can_jump_to=["end"])
-    def cancel_check(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-        if not state["messages"]:
-            return None
-        last = state["messages"][-1]
-        if isinstance(last, ToolMessage) and last.content == INTERRUPT_CANCEL_MESSAGE:
-            return {
-                "messages": [AIMessage("Previous tool canceled by the user.")],
-                "jump_to": "end",
-            }
-        return None
-
-    return cancel_check
-
-
-def _create_inject_metadata_middleware(agent_config: AgentConfig):
-    """After-model middleware: inject request_id and selected_agent into AIMessage."""
+def _create_inject_selected_agent_middleware(agent_config: AgentConfig):
+    """After-model middleware: inject selected_agent into the last AIMessage."""
 
     @after_model
-    def inject_metadata(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-        config = get_config()
-        request_id = config.get("configurable", {}).get("request_id")
-        if not request_id or not state["messages"]:
+    def inject_selected_agent(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+        if not state["messages"]:
             return None
 
         last_message = state["messages"][-1]
         if not isinstance(last_message, AIMessage):
             return None
 
-        last_message.additional_kwargs["request_id"] = request_id
         last_message.additional_kwargs["selected_agent"] = state.get("selected_agent", {})
 
         return {"messages": [last_message]}
 
-    return inject_metadata
+    return inject_selected_agent
 
 
 def _create_ui_tools_middleware(llm: BaseChatModel, agent_config: AgentConfig):
@@ -311,27 +294,6 @@ def _build_interrupt_ui_tools(
     _dispatch_ui_tools(ui_tools_list)
     return ui_tools_list
 
-
-def _cancel_remaining_tool_calls(
-    remaining: list[dict],
-    request_id: str,
-    state: dict,
-    message: str,
-) -> list[ToolMessage]:
-    """Create cancel ToolMessages for tool calls that will not be executed."""
-    return [
-        ToolMessage(
-            content=message,
-            name=tc["name"],
-            tool_call_id=tc["id"],
-            additional_kwargs={
-                "request_id": request_id,
-                "selected_agent": state.get("selected_agent", {}),
-                "confirmation": False,
-            },
-        )
-        for tc in remaining
-    ]
 
 
 def _dispatch_ui_tools_event(

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from ..dependencies import get_llm
 from ..services.agent.factory import NoAgentAvailableError, build_agent
-from ..services.agent.parent import SupervisorGraph
+from ..services.agent.supervisor import SupervisorGraph
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -376,17 +376,14 @@ def _resolve_target_agent(
     if not requested_agent:
         return agent, config
 
-    if not isinstance(agent, SupervisorGraph):
-        return agent, config
-
     if requested_agent not in agent.child_agents:
         logging.debug(f"Requested agent '{requested_agent}' not found in child_agents, falling back to supervisor")
         return agent, config
 
     logging.info(f"Routing directly to child agent '{requested_agent}' (bypassing supervisor)")
     child_graph = agent.child_agents[requested_agent]
-    child_config = _build_child_direct_config(config, requested_agent)
-    return child_graph, child_config
+    # TODO remove func child_config = _build_child_direct_config(config, requested_agent)
+    return child_graph, config
 
 
 def _build_child_direct_config(parent_config: dict, agent_name: str) -> dict:
@@ -413,7 +410,7 @@ def _build_child_direct_config(parent_config: dict, agent_name: str) -> dict:
     child_config = {
         **parent_config,
         "configurable": {
-            "thread_id": f"{parent_thread_id}::{agent_name}" if parent_thread_id else agent_name,
+            "thread_id": f"{parent_thread_id}",
             "request_id": parent_configurable.get("request_id", ""),
             "request_metadata": parent_configurable.get("request_metadata", {}),
             "user_id": parent_configurable.get("user_id", ""),

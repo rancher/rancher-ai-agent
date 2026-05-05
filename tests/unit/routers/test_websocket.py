@@ -14,7 +14,7 @@ from app.routers.websocket import (
     _build_input_data,
     WebSocketRequest,
 )
-from app.services.agent.parent import SupervisorGraph
+from app.services.agent.supervisor import SupervisorGraph
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState

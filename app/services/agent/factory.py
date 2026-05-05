@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
-from .parent import create_supervisor_agent, ChildAgent, SupervisorGraph
+from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
 from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel

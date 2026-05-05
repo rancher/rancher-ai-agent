@@ -263,33 +263,6 @@ def test_build_interrupt_ui_tools_missing_name_returns_empty():
 
 
 # ============================================================================
-# _cancel_remaining_tool_calls Tests
-# ============================================================================
-
-def test_cancel_remaining_tool_calls_creates_messages():
-    """Verify cancel messages are created for each tool call."""
-    remaining = [
-        {"id": "call_1", "name": "tool1"},
-        {"id": "call_2", "name": "tool2"},
-    ]
-    state = {"selected_agent": {"name": "test"}}
-
-    result = _cancel_remaining_tool_calls(remaining, "req-1", state, INTERRUPT_CANCEL_MESSAGE)
-
-    assert len(result) == 2
-    assert result[0].tool_call_id == "call_1"
-    assert result[0].content == INTERRUPT_CANCEL_MESSAGE
-    assert result[0].additional_kwargs["confirmation"] is False
-    assert result[1].tool_call_id == "call_2"
-
-
-def test_cancel_remaining_tool_calls_empty_list():
-    """Verify empty list when no remaining tool calls."""
-    result = _cancel_remaining_tool_calls([], "req-1", {}, INTERRUPT_CANCEL_MESSAGE)
-    assert result == []
-
-
-# ============================================================================
 # _dispatch_ui_tools Tests
 # ============================================================================
 

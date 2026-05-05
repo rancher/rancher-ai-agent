@@ -12,25 +12,25 @@ call multiple agents in sequence and synthesize their outputs into a unified res
 
 import logging
 
-from datetime import datetime
 from collections.abc import Callable
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
-from langchain.agents.middleware import wrap_tool_call, before_model, after_model, AgentState, SummarizationMiddleware
+from langchain.agents.middleware import wrap_tool_call, SummarizationMiddleware
 from langchain.messages import AIMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 import langgraph.types
 from langgraph.types import Command
-from langgraph.config import get_config
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
 from .loader import AgentConfig
-from .child import INTERRUPT_CANCEL_MESSAGE
-from langchain.messages import AIMessage
-from langgraph.runtime import Runtime
+from .middleware import (
+    INTERRUPT_CANCEL_MESSAGE,
+    create_cancel_check_middleware,
+    create_inject_request_id_middleware,
+)
 
 
 class ChildAgentCancelled(Exception):
@@ -248,51 +248,38 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
         description=child_agent.config.description or f"Specialized agent '{agent_name}'",
     )
 
-@before_model(can_jump_to=["end"])
-def human_in_the_loop_loop(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-    if state["messages"][-1].content == INTERRUPT_CANCEL_MESSAGE:
-        return {
-            "messages": [AIMessage("Previous tool canceled by the user.")],
-            "jump_to": "end"
-        }
-    return None
+# =============================================================================
+# Middleware factories
+# =============================================================================
 
-@after_model
-def inject_request_id(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-    """Inject request_id into the last AIMessage's additional_kwargs."""
-    config = get_config()
-    request_id = config.get("configurable", {}).get("request_id")
-    if request_id and state["messages"]:
-        last_message = state["messages"][-1]
-        if isinstance(last_message, AIMessage):
-            last_message.additional_kwargs["request_id"] = request_id
-            last_message.additional_kwargs["created_at"] = datetime.now().isoformat()
 
-            return {"messages": [last_message]}
-    return None
+def _create_monitor_tool_middleware():
+    """Wrap-tool-call middleware: log and dispatch events for supervisor tool calls."""
 
-@wrap_tool_call
-async def monitor_tool(
-    request: ToolCallRequest,
-    handler: Callable[[ToolCallRequest], ToolMessage | Command],
-) -> ToolMessage | Command:
-    dispatch_custom_event("subagent_call", f"Supervisor is calling agent '{request.tool_call['name']}' with: {request.tool_call['args']}\n",)
-    try:
-        logging.info(f"Supervisor is invoking tool '{request.tool_call['name']}' with args: {request.tool_call['args']}")
-        result = await handler(request)
-        logging.info(f"Tool '{request.tool_call['name']}' returned: {result}")
-        return result
-    except ChildAgentCancelled:
-        # Create a proper ToolMessage so the supervisor's state stays clean,
-        # then use Command to route directly to END — skipping the LLM call.
-        tool_message = ToolMessage(
-            content=INTERRUPT_CANCEL_MESSAGE,
-            name=request.tool_call["name"],
-            tool_call_id=request.tool_call["id"],
-        )
-        return Command(goto="__end__", update={"messages": [tool_message]})
-    except Exception as e:
-        raise
+    @wrap_tool_call
+    async def monitor_tool(
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
+        dispatch_custom_event("subagent_call", f"Supervisor is calling agent '{request.tool_call['name']}' with: {request.tool_call['args']}\n")
+        try:
+            logging.info(f"Supervisor is invoking tool '{request.tool_call['name']}' with args: {request.tool_call['args']}")
+            result = await handler(request)
+            logging.info(f"Tool '{request.tool_call['name']}' returned: {result}")
+            return result
+        except ChildAgentCancelled:
+            # Create a proper ToolMessage so the supervisor's state stays clean,
+            # then use Command to route directly to END — skipping the LLM call.
+            tool_message = ToolMessage(
+                content=INTERRUPT_CANCEL_MESSAGE,
+                name=request.tool_call["name"],
+                tool_call_id=request.tool_call["id"],
+            )
+            return Command(goto="__end__", update={"messages": [tool_message]})
+        except Exception as e:
+            raise
+
+    return monitor_tool
 
 
 def create_supervisor_agent(
@@ -328,5 +315,10 @@ def create_supervisor_agent(
         system_prompt=SUPERVISOR_PROMPT,
         checkpointer=checkpointer,
         name="supervisor",
-        middleware=[monitor_tool, human_in_the_loop_loop, inject_request_id, SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 6000)])],
+        middleware=[
+            _create_monitor_tool_middleware(),
+            create_cancel_check_middleware(),
+            create_inject_request_id_middleware(),
+            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 6000)]),
+        ],
     )

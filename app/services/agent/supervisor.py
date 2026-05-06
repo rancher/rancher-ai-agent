@@ -262,9 +262,9 @@ def _create_monitor_tool_middleware():
         if query := request.tool_call["args"].get("query"):
             dispatch_custom_event("subagent_call", f"<processing-subagent>{{'name':'{request.tool_call['name']}', 'query':'{query}'}}</processing-subagent>")
         try:
-            logging.info(f"Supervisor is invoking tool '{request.tool_call['name']}' with args: {request.tool_call['args']}")
+            logging.debug(f"Supervisor is invoking tool '{request.tool_call['name']}' with args: {request.tool_call['args']}")
             result = await handler(request)
-            logging.info(f"Tool '{request.tool_call['name']}' returned: {result}")
+            
             return result
         except ChildAgentCancelled:
             # Create a proper ToolMessage so the supervisor's state stays clean,

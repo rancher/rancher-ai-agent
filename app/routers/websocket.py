@@ -405,8 +405,7 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
             additional_kwargs={
                 "request_id": config["configurable"]["request_id"],
                 "request_metadata": config["configurable"]["request_metadata"],
-                "created_at": datetime.now().isoformat(),
-                "is_parent": True,
+                "created_at": datetime.now().isoformat()
             }
         )
     ]

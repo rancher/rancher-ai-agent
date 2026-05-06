@@ -75,7 +75,6 @@ def create_child_agent(
         tools=execution_tools,
         system_prompt=system_prompt,
         checkpointer=checkpointer,
-        name="child",
         middleware=middleware,
     )
 

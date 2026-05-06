@@ -317,12 +317,10 @@ def test_conversation_history():
         LLMManager._instance = None
 
 
-@pytest.mark.skip(reason="UI tools node removed — test references deleted RootAgentBuilder and base.py ui_tools infrastructure")
 def test_websocket_with_ui_tools():
     """Tests agent with UI tools enabled, verifying both response and dispatch ui-tools messages."""
     from app.services.ui_tools.models import UITool, UIToolSchema, UIToolsConfig, UIToolsConfigData
     from app.services.agent.loader import AgentConfig, AuthenticationType
-    from app.services.agent.child import ChildAgentBuilder
     from unittest.mock import patch, MagicMock
     import json
 
@@ -361,77 +359,68 @@ def test_websocket_with_ui_tools():
             ui_tools_selectors=["show-yaml"]  # Enable UI tools
         )
         
-        # Patch ChildAgentBuilder to include child_agents attribute
-        original_init = ChildAgentBuilder.__init__
-
-        def patched_init(self, *args, **kwargs):
-            original_init(self, *args, **kwargs)
-            if not hasattr(self, 'child_agents'):
-                self.child_agents = []
-
-        with patch.object(ChildAgentBuilder, '__init__', patched_init):
-            with patch('app.services.agent.factory.load_agent_configs') as mock_load:
-                mock_load.return_value = [agent_config]
+        with patch('app.services.agent.factory.load_agent_configs') as mock_load:
+            mock_load.return_value = [agent_config]
+            
+            # Patch load_ui_tools_from_configmap to return our UI tools config
+            with patch('app.services.agent.child.load_ui_tools_from_configmap') as mock_load_configmap:
+                # Setup to return the UI tool and config directly
+                ui_tools_config = UIToolsConfigData(
+                    tools=[ui_tool],
+                    config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Select relevant UI tools")
+                )
+                mock_load_configmap.return_value = ui_tools_config
                 
-                # Patch load_ui_tools_from_configmap to return our UI tools config
-                with patch('app.services.agent.child.load_ui_tools_from_configmap') as mock_load_configmap:
-                    # Setup to return the UI tool and config directly
-                    ui_tools_config = UIToolsConfigData(
-                        tools=[ui_tool],
-                        config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Select relevant UI tools")
-                    )
-                    mock_load_configmap.return_value = ui_tools_config
+                # Mock the UI tools selector
+                with patch('app.services.agent.child.create_ui_tools_selector') as mock_selector_factory:
+                    mock_selector = MagicMock()
+                    mock_selector_factory.return_value = mock_selector
+                    # Mock select_tools to return a formatted UI tool
+                    mock_selector.select_tools.return_value = [
+                        {
+                            "toolName": "show-yaml",
+                            "description": "Display resource in YAML format",
+                            "prompt": "Show resource YAML",
+                        }
+                    ]
                     
-                    # Mock the UI tools selector
-                    with patch('app.services.agent.child.create_ui_tools_selector') as mock_selector_factory:
-                        mock_selector = MagicMock()
-                        mock_selector_factory.return_value = mock_selector
-                        # Mock select_tools to return a formatted UI tool
-                        mock_selector.select_tools.return_value = [
-                            {
-                                "toolName": "show-yaml",
-                                "description": "Display resource in YAML format",
-                                "prompt": "Show resource YAML",
-                            }
-                        ]
-                        
-                        messages = []
-                        with client.websocket_connect("/v1/ws/messages") as websocket:
-                            # Consume any initial messages from the server (chat-metadata)
-                            websocket.receive_text()
+                    messages = []
+                    with client.websocket_connect("/v1/ws/messages") as websocket:
+                        # Consume any initial messages from the server (chat-metadata)
+                        websocket.receive_text()
 
-                            # Send JSON request with tools configuration
-                            request = json.dumps({
-                                "prompt": "show me the resource",
-                                "tools": {"name": "default", "tools": ["show-yaml"]}
-                            })
-                            websocket.send_text(request)
-                            
-                            # Collect ALL messages from the websocket until we get </message>
-                            msg = ""
-                            while True:
-                                chunk = websocket.receive_text()
-                                messages.append(chunk)
-                                msg += chunk
-                                if msg.endswith("</message>"):
-                                    break
+                        # Send JSON request with tools configuration
+                        request = json.dumps({
+                            "prompt": "show me the resource",
+                            "tools": {"name": "default", "tools": ["show-yaml"]}
+                        })
+                        websocket.send_text(request)
                         
-                        full_stream = "".join(messages)
-                        
-                        # Verify workflow correctness: response content in stream
-                        assert "Here is the resource information" in full_stream, "Response should contain LLM response"
-                        assert len(fake_llm.all_calls) == 1, "Expected 1 LLM call"
-                        assert fake_llm.all_calls[0][0].content == RANCHER_AGENT_PROMPT, "LLM should receive system prompt"
-                        assert "show me the resource" in fake_llm.all_calls[0][1].content, "LLM should receive user prompt"
-                        
-                        # Verify dispatch correctness: processing message sent
-                        assert "<processing-ui-tools/>" in full_stream, "Missing <processing-ui-tools/> dispatch message"
-                        
-                        # Verify UI tools were dispatched
-                        assert "<ui-tools>" in full_stream, "Missing <ui-tools> dispatch message"
-                        
-                        mock_load_configmap.assert_called(), "UI tools config should be loaded from ConfigMap"
-                        mock_selector_factory.assert_called(), "Selector factory should be called"
-                        mock_selector.select_tools.assert_called(), "Selector should select tools"
+                        # Collect ALL messages from the websocket until we get </message>
+                        msg = ""
+                        while True:
+                            chunk = websocket.receive_text()
+                            messages.append(chunk)
+                            msg += chunk
+                            if msg.endswith("</message>"):
+                                break
+                    
+                    full_stream = "".join(messages)
+                    
+                    # Verify workflow correctness: response content in stream
+                    assert "Here is the resource information" in full_stream, "Response should contain LLM response"
+                    assert len(fake_llm.all_calls) == 1, "Expected 1 LLM call"
+                    assert fake_llm.all_calls[0][0].content == RANCHER_AGENT_PROMPT, "LLM should receive system prompt"
+                    assert "show me the resource" in fake_llm.all_calls[0][1].content, "LLM should receive user prompt"
+                    
+                    # Verify dispatch correctness: processing message sent
+                    assert "<processing-ui-tools/>" in full_stream, "Missing <processing-ui-tools/> dispatch message"
+                    
+                    # Verify UI tools were dispatched
+                    assert "<ui-tools>" in full_stream, "Missing <ui-tools> dispatch message"
+                    
+                    mock_load_configmap.assert_called(), "UI tools config should be loaded from ConfigMap"
+                    mock_selector_factory.assert_called(), "Selector factory should be called"
+                    mock_selector.select_tools.assert_called(), "Selector should select tools"
     finally:
         LLMManager._instance = None

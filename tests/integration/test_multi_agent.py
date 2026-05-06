@@ -275,7 +275,7 @@ def test_single_prompt():
         assert full_message.endswith("</message>"), "Message should end with </message>"
         
         # The supervisor dispatches a subagent_call custom event
-        assert f"Supervisor is calling agent '{MATH_AGENT_NAME}'" in full_message, \
+        assert f"<processing-subagent>{{'name':'{MATH_AGENT_NAME}', 'query':'{fake_prompt}'}}</processing-subagent>" in full_message, \
             "Should contain supervisor's subagent call notification"
         
         # The supervisor's final response should be streamed
@@ -360,11 +360,11 @@ def test_multiple_prompts():
                 messages.extend(msgs)
             
         # Verify first message
-        assert f"Supervisor is calling agent '{MATH_AGENT_NAME}'" in messages[0]
+        assert f"<processing-subagent>{{'name':'{MATH_AGENT_NAME}', 'query':'{fake_prompt_1}'}}</processing-subagent>" in messages[0]
         assert fake_supervisor_response_1 in messages[0]
         
         # Verify second message
-        assert f"Supervisor is calling agent '{CALCULATOR_AGENT_NAME}'" in messages[1]
+        assert f"<processing-subagent>{{'name':'{CALCULATOR_AGENT_NAME}', 'query':'{fake_prompt_2}'}}</processing-subagent>" in messages[1]
         assert fake_supervisor_response_2 in messages[1]
         
         # 6 LLM calls: 2 supervisor + 1 child per prompt = 3 * 2 = 6
@@ -428,7 +428,7 @@ def test_delegate_to_child_agent_with_tool():
         full_message = messages[0]
         
         # Verify supervisor's subagent call notification
-        assert f"Supervisor is calling agent '{MATH_AGENT_NAME}'" in full_message
+        assert f"<processing-subagent>{{'name':'{MATH_AGENT_NAME}', 'query':'{fake_prompt}'}}</processing-subagent>" in full_message
         
         # Verify supervisor's final response
         assert "The math agent calculated that 4 + 5 = 9." in full_message

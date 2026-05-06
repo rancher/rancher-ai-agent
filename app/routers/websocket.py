@@ -354,8 +354,8 @@ def _resolve_target_agent(
     Resolve which agent to call based on the request.
 
     If ws_request.agent names a known child agent, returns that child's compiled graph
-    along with a config using the namespaced thread_id (matching the convention used by
-    the supervisor). Otherwise, returns the supervisor agent and the original config.
+    along with a config using the namespaced thread_id ``<parent>::child::<agent>`` (matching
+    the convention used by the supervisor). Otherwise, returns the supervisor agent and the original config.
 
     Args:
         agent: The supervisor (or single-agent) compiled graph.

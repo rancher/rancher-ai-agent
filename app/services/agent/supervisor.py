@@ -150,7 +150,7 @@ def _build_child_config(agent_name: str) -> dict:
     """
     Build a LangGraph run-config for a child agent derived from the current supervisor config.
 
-    - Creates a namespaced thread_id (``<parent>::<agent_name>``) so the child graph
+    - Creates a namespaced thread_id (``<parent>::child::<agent_name>``) so the child graph
       can checkpoint its own state independently from the supervisor.
     - Forwards a fixed set of configurable keys (request_id, user_id, …) from the
       supervisor so the child has access to request-level context.
@@ -162,7 +162,7 @@ def _build_child_config(agent_name: str) -> dict:
         raise ValueError("thread_id is required in configurable but was not provided")
 
     child_configurable: dict = {
-        "thread_id": f"{parent_thread_id}::{agent_name}",
+        "thread_id": f"{parent_thread_id}::child::{agent_name}",
         **{k: parent_configurable[k] for k in _FORWARDED_CONFIG_KEYS if k in parent_configurable},
     }
     return {"configurable": child_configurable, "callbacks": []}
@@ -259,7 +259,8 @@ def _create_monitor_tool_middleware():
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        dispatch_custom_event("subagent_call", f"Supervisor is calling agent '{request.tool_call['name']}' with: {request.tool_call['args']}\n")
+        if query := request.tool_call["args"].get("query"):
+            dispatch_custom_event("subagent_call", f"<processing-subagent>{{'name':'{request.tool_call['name']}', 'query':'{query}'}}</processing-subagent>")
         try:
             logging.info(f"Supervisor is invoking tool '{request.tool_call['name']}' with args: {request.tool_call['args']}")
             result = await handler(request)

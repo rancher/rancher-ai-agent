@@ -127,7 +127,7 @@ def test_build_child_config_namespaces_thread_id():
             }
         }
         config = _build_child_config("rancher")
-        assert config["configurable"]["thread_id"] == "parent-thread-1::rancher"
+        assert config["configurable"]["thread_id"] == "parent-thread-1::child::rancher"
         assert config["configurable"]["request_id"] == "req-123"
         assert config["callbacks"] == []
 
@@ -194,7 +194,7 @@ async def test_invoke_normal_sends_messages_to_child(child_agent, mock_compiled_
 
     # Verify child gets a derived thread_id
     config_arg = call_args[1].get("config") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1]["config"]
-    assert "parent-thread-123::test-agent" in config_arg["configurable"]["thread_id"]
+    assert "parent-thread-123::child::test-agent" in config_arg["configurable"]["thread_id"]
 
 
 @pytest.mark.asyncio
@@ -218,7 +218,7 @@ async def test_invoke_normal_uses_derived_thread_id(child_agent, mock_compiled_g
     state_config = mock_compiled_graph.aget_state.call_args[1]["config"]
     invoke_config = mock_compiled_graph.ainvoke.call_args[1]["config"]
 
-    expected_thread_id = "session-abc::test-agent"
+    expected_thread_id = "session-abc::child::test-agent"
     assert state_config["configurable"]["thread_id"] == expected_thread_id
     assert invoke_config["configurable"]["thread_id"] == expected_thread_id
 
@@ -371,7 +371,7 @@ async def test_invoke_resume_uses_same_thread_id(child_agent, mock_compiled_grap
     }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes"):
         await tool.ainvoke({"query": "test"})
 
-    expected_thread_id = "session-xyz::test-agent"
+    expected_thread_id = "session-xyz::child::test-agent"
 
     # Both aget_state calls and ainvoke should share the same child thread_id
     aget_state_calls = mock_compiled_graph.aget_state.call_args_list

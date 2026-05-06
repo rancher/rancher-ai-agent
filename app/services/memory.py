@@ -165,6 +165,9 @@ class MemoryManager:
             if not chat_id or not user_id:
                 continue
 
+            if "::child::" in chat_id: # skip child threads
+                continue
+
             if self._is_empty_chat(checkpoint_tuple):
                 logging.debug(f"Chat_id: {chat_id}, user_id: {user_id} is empty, skipping")
                 continue

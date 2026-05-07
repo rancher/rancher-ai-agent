@@ -24,7 +24,7 @@ type AIAgentConfigSpec struct {
 	MCPURL string `json:"mcpURL,omitempty"`
 
 	// AuthenticationType specifies the authentication method
-	// +kubebuilder:validation:Enum=RANCHER;NONE;BASIC;HEADER
+	// +kubebuilder:validation:Enum=RANCHER;NONE;BASIC;HEADER;OAUTH2
 	// +optional
 	AuthenticationType string `json:"authenticationType,omitempty"`
 

@@ -5,8 +5,10 @@ import json
 from datetime import datetime
 
 from ..dependencies import get_llm
-from ..services.agent.factory import NoAgentAvailableError, build_agent
+from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
+from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.supervisor import SupervisorGraph
+from ..services.oauth2 import OAuthSecretError, handle_oauth_authentication
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -92,6 +94,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
     await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
 
+
     base_config = {
         "configurable": {
             "thread_id": thread_id,
@@ -104,6 +107,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         base_config["callbacks"] = [langfuse_handler]
 
     while True:
+        ws_request = None
         try:
             request = await websocket.receive_text()
             request_id = str(uuid.uuid4())
@@ -115,16 +119,44 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             target_agent, target_config = _resolve_target_agent(agent, config, ws_request)
             input_data = await _build_input_data(target_agent, target_config, ws_request)
 
-            await _call_agent(
-                agent=target_agent,
-                input_data=input_data,
-                config=target_config,
-                websocket=websocket)
+            try:
+                await _call_agent(
+                    agent=target_agent,
+                    input_data=input_data,
+                    config=target_config,
+                    websocket=websocket)
+            except NeedsOauth2 as e:
+                try:
+                    await handle_oauth_authentication(e.agent_cfg, websocket)
+                except OAuthSecretError as secret_err:
+                    logging.error(f"OAuth secret not found for agent '{e.agent_cfg.name}': {secret_err}")
+                    await websocket.send_text(f'<error>{json.dumps({"message": str(secret_err)})}</error>')
+                    continue
+                child_graph = await reload_agent_tools(llm, e.agent_cfg, websocket)
+                if isinstance(agent, SupervisorGraph):
+                    child_agent_obj = agent.child_agents.get(e.agent_cfg.name)
+                    if child_agent_obj:
+                        child_agent_obj.needs_oauth2 = False
+                        child_agent_obj.agent = child_graph
+                else:
+                    agent = child_graph
+                logging.debug(f"Successfully authenticated and reloaded agent '{e.agent_cfg.name}'")
+
+                # Resume the agent from its last checkpoint (the tool call that
+                # triggered OAuth). Passing None lets LangGraph retry from the
+                # saved state rather than starting a new turn.
+                await _call_agent(
+                    agent=target_agent,
+                    input_data=None,
+                    config=target_config,
+                    websocket=websocket)
+
             
         except WebSocketDisconnect:
-            logging.info(f"Client {websocket.client.host} disconnected.")
+            logging.debug(f"Client disconnected.")
 
             break
+
         except Exception as e:
             logging.error(f"An error occurred: {e}", exc_info=True)
             if websocket.client_state == WebSocketState.CONNECTED:
@@ -176,6 +208,7 @@ async def _call_agent(
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
+
 
 def _should_stream_text(stream: dict) -> bool:
     """
@@ -400,9 +433,9 @@ def _resolve_target_agent(
         logging.debug(f"Requested agent '{requested_agent}' not found in child_agents, falling back to supervisor")
         return agent, config
 
-    child_graph = agent.child_agents[requested_agent]
+    child_agent = agent.child_agents[requested_agent]
 
-    return child_graph, config
+    return child_agent.agent, config
 
 
 async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
-from .routers import agent, configuration, chat, llm, websocket, ui
+from .routers import agent, configuration, chat, llm, websocket, ui, oauth2
 from .controllers.ai_agent_config import create_kopf_manager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -67,7 +67,8 @@ NOISY_LOGGERS = [
     "boto3",
     "asyncio",
     "mcp.client.streamable_http",
-    "openai._base_client"
+    "openai._base_client",
+    "httpcore.connection"
 ]
 
 @asynccontextmanager
@@ -107,6 +108,7 @@ app.include_router(agent.router)
 app.include_router(configuration.router)
 app.include_router(chat.router)
 app.include_router(llm.router)
+app.include_router(oauth2.router)
 
 if os.environ.get("ENABLE_TEST_UI", "").lower() == "true":
     app.include_router(ui.router)

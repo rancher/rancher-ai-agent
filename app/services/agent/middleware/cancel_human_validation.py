@@ -4,7 +4,7 @@ from langchain.agents.middleware import AgentState, before_model
 from langchain.messages import AIMessage, ToolMessage
 from langgraph.runtime import Runtime
 
-from ._constants import INTERRUPT_CANCEL_MESSAGE
+from .._constants import INTERRUPT_CANCEL_MESSAGE
 from ....constants import INTERRUPT_CANCEL_REPLY
 
 

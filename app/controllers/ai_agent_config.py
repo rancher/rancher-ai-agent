@@ -13,7 +13,7 @@ import httpx
 
 from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
-from ..services.agent.loader import AgentConfig, CABundleRef
+from ..services.agent.loader import AgentConfig, AuthenticationType, CABundleRef
 from ..services.agent.factory import create_mcp_client
 
 # Transient exception types that indicate the MCP server may not be ready yet.
@@ -167,7 +167,7 @@ async def _validate(agent_config: AgentConfig) -> None:
     Raises:
         Exception: If the MCP server connection fails or tools cannot be retrieved
     """
-    client = create_mcp_client(agent_config)
+    client = await create_mcp_client(agent_config)
 
     # Test the connection by fetching available tools
     await client.get_tools()
@@ -219,10 +219,15 @@ async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
         for e in eg.exceptions:
             error_message += f"{str(e)} "
         error_msg = f"Failed to load MCP tools: {error_message}"
-        
-        # Update status to reflect the failure
-        _set_status(patch, False, 'ConfigurationFailed', error_msg)
-        logger.warning(error_msg)
+
+        if agent_config.authentication == AuthenticationType.OAUTH2 and (
+            "401" in error_message or "Unauthorized" in error_message
+        ):
+            _set_status(patch, True, 'ConfigurationSucceeded', 'Needs OAuth2 authentication')
+        else:
+            # Update status to reflect the failure
+            _set_status(patch, False, 'ConfigurationFailed', error_msg)
+            logger.warning(error_msg)
 
         # If any exception in the group is transient, retry with exponential backoff
         if any(isinstance(e, _TRANSIENT_EXCEPTIONS) for e in eg.exceptions):

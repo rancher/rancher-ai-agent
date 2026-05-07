@@ -4182,6 +4182,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "asyncio" },
+    { name = "authlib" },
     { name = "boto3" },
     { name = "fastapi", extra = ["standard"] },
     { name = "fastmcp" },
@@ -4216,6 +4217,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "asyncio", specifier = "==4.0.0" },
+    { name = "authlib", specifier = ">=1.7.0" },
     { name = "boto3", specifier = "==1.42.61" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.135.1" },
     { name = "fastmcp", specifier = "==3.1.0" },

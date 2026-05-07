@@ -30,6 +30,24 @@
 
             let currentMessageLi;
 
+               // Listen for OAuth token from popup window
+            window.addEventListener('message', function(event) {
+                if (event.data.type === 'oauth_success' && event.data.access_token) {
+                    const messages = document.getElementById('messages');
+
+                    // Send the access token via websocket
+                    ws.send('{"access_token": "' + event.data.access_token + '", "refresh_token": "' + event.data.refresh_token + '"}');
+
+                    // Update UI to show authentication completed
+                    const successLi = document.createElement('li');
+                    successLi.textContent = 'Authentication successful! Token received.';
+                    successLi.style.color = '#4caf50';
+                    successLi.style.fontStyle = 'italic';
+                    messages.appendChild(successLi);
+                    messages.scrollTop = messages.scrollHeight;
+                }
+            });
+
             ws.onmessage = function(event) {
                 console.log("msg received."+ event.data);
                 const messages = document.getElementById('messages');
@@ -37,6 +55,36 @@
 
                 if (data.startsWith("<error>")) {
                     alert(data.substring(7)); // Show alert without the <error> tag
+                    return;
+                }
+
+                // Handle OAuth2 authentication
+                if (data.startsWith("<authentication>")) {
+                    const authData = data.substring(16, data.indexOf("</authentication>"));
+                    try {
+                        const authInfo = JSON.parse(authData);
+                        if (authInfo.type === "oauth2" && authInfo.url) {
+                            // Open OAuth popup
+                            const width = 800;
+                            const height = 900;
+                            const left = (screen.width - width) / 2;
+                            const top = (screen.height - height) / 2;
+                            const popup = window.open(
+                                authInfo.url,
+                                'OAuth2 Authentication',
+                                `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+                            );
+
+                            // Display authentication message
+                            const authLi = document.createElement('li');
+                            authLi.textContent = 'Authentication required. Please complete the OAuth2 flow in the popup window.';
+                            authLi.style.color = '#ff9800';
+                            authLi.style.fontStyle = 'italic';
+                            messages.appendChild(authLi);
+                        }
+                    } catch (e) {
+                        console.error("Failed to parse authentication data:", e);
+                    }
                     return;
                 }
 

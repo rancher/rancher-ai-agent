@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
+from ..oauth2 import discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_cookie_names
 from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
 from fastapi import  WebSocket
@@ -113,6 +114,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     Raises:
         NoAgentAvailableError: If the MCP connection fails.
     """
+
     mcp_client = create_mcp_client(agent_cfg, websocket)
     try:
         tools = await mcp_client.get_tools()
@@ -192,6 +194,19 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
             headers = get_header_auth_headers(agent_config.authentication_secret)
         except Exception as e:
             logging.error(f"Failed to get header auth headers: {str(e)}")
+
+    elif agent_config.authentication == AuthenticationType.OAUTH2:
+        mcp_url = agent_config.mcp_url
+
+        discovery = await discover_oauth_metadata(agent_cfg.mcp_url)
+        cookie_key = generate_oauth_cookie_key(discovery.authorization_endpoint)
+        cookie_name = get_oauth_cookie_names(cookie_key)["access_token"]
+        oauth_token = websocket.cookies.get(cookie_name)
+
+        mcp_url = agent_config.mcp_url
+        headers = {
+            "Authorization": f"Bearer {oauth_token or ''}"
+        }
 
     else:
         mcp_url = agent_config.mcp_url

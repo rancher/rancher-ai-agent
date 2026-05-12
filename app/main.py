@@ -58,12 +58,25 @@ _sensitive_filter = _SensitiveHeaderFilter()
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(_sensitive_filter)
 logging.getLogger("uvicorn.access").addFilter(_NoisyEndpointFilter())
-        
+NOISY_LOGGERS = [
+    "kubernetes.client.rest",
+    "kopf.objects",
+    "httpcore.http11",
+    "urllib3", 
+    "botocore",
+    "boto3",
+    "asyncio",
+    "mcp.client.streamable_http"
+]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
         logging.getLogger().setLevel(LOG_LEVEL)
+        if LOG_LEVEL == 'DEBUG':
+            for logger_name in NOISY_LOGGERS:
+                logging.getLogger(logger_name).setLevel(logging.INFO)
 
         configs = ensure_default_ai_agent_config_crds()
         logging.info(f"Startup: {len(configs)} AIAgentConfig CRDs in the cluster.")

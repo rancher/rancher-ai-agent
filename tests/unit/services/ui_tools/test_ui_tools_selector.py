@@ -396,7 +396,7 @@ class TestUIToolsSelectorToolSelection:
         ]
         mock_validator.return_value = mock_validator_instance
         
-        result = selector.select_tools("test context", None, [sample_ui_tool])
+        result = selector.select_tools("test context", None, available_tools=[sample_ui_tool])
         
         assert len(result) == 1
         assert result[0]["toolName"] == "show-yaml"
@@ -407,7 +407,7 @@ class TestUIToolsSelectorToolSelection:
         from app.services.ui_tools.selector import UIToolsSelector
         selector = UIToolsSelector(mock_llm, "", max_tools=5)
         
-        result = selector.select_tools("test context", None, [])
+        result = selector.select_tools("test context", None, available_tools=[])
         
         assert result == []
     
@@ -419,7 +419,7 @@ class TestUIToolsSelectorToolSelection:
         
         mock_llm.invoke.side_effect = Exception("LLM error")
         
-        result = selector.select_tools("test context", None, [sample_ui_tool])
+        result = selector.select_tools("test context", None, available_tools=[sample_ui_tool])
         
         assert result == []
     
@@ -439,7 +439,7 @@ class TestUIToolsSelectorToolSelection:
         mock_validator_instance.validate_tool_calls.return_value = []
         mock_validator.return_value = mock_validator_instance
         
-        result = selector.select_tools("test context", None, [sample_ui_tool])
+        result = selector.select_tools("test context", None, available_tools=[sample_ui_tool])
         
         assert result == []
 
@@ -684,7 +684,7 @@ class TestUIToolsSelectorIntegration:
         result = selector.select_tools(
             "Deploy nginx pod to default namespace",
             None,
-            [sample_ui_tool]
+            available_tools=[sample_ui_tool]
         )
         
         assert len(result) == 1
@@ -722,7 +722,7 @@ class TestUIToolsSelectorIntegration:
         result = selector.select_tools(
             "Show yaml for nginx pod",
             mcp_response,
-            [sample_ui_tool]
+            available_tools=[sample_ui_tool]
         )
         
         assert len(result) == 1

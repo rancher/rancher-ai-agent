@@ -181,8 +181,13 @@ def _dispatch_ui_tools_event(
 
         context = _collect_context_until_human(state)
 
+        mcp_response = _collect_all_mcp_responses(state)
+        mcp_data = _find_last_mcp_data(state)
+
         ui_tools_list = selector.select_tools(
             context=context,
+            mcp_response=mcp_response,
+            mcp_data=mcp_data,
             available_tools=filtered_tools,
         )
 
@@ -191,6 +196,32 @@ def _dispatch_ui_tools_event(
     except Exception as e:
         logging.error(f"Error dispatching UI tools event: {e}", exc_info=True)
         return []
+
+
+def _collect_all_mcp_responses(state: dict) -> str | None:
+    """Collect all ``mcp_response`` values from ToolMessages since the last HumanMessage."""
+    responses = []
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            break
+        if isinstance(msg, ToolMessage):
+            mcp = getattr(msg, "additional_kwargs", {}).get("mcp_response")
+            if mcp:
+                responses.append(mcp)
+    responses.reverse()
+    return "\n".join(responses) if responses else None
+
+
+def _find_last_mcp_data(state: dict) -> str | None:
+    """Return the last ``mcp_data`` (full MCP server response) from ToolMessages since the last HumanMessage."""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            break
+        if isinstance(msg, ToolMessage):
+            data = getattr(msg, "additional_kwargs", {}).get("mcp_data")
+            if data:
+                return data
+    return None
 
 
 def _collect_context_until_human(state: dict) -> str:

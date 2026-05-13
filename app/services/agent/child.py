@@ -172,10 +172,12 @@ def _create_tool_execution_middleware(
 
             # Process result for MCP responses
             if isinstance(result, ToolMessage):
-                processed_content, mcp_response = _process_tool_result(result.content, state)
+                processed_content, mcp_response, mcp_data = _process_tool_result(result.content, state)
                 result.content = processed_content
                 if mcp_response:
                     additional_kwargs["mcp_response"] = mcp_response
+                if mcp_data:
+                    additional_kwargs["mcp_data"] = mcp_data
                 result.additional_kwargs = {**result.additional_kwargs, **additional_kwargs}
 
             return result
@@ -275,13 +277,16 @@ def _build_agent_metadata(agent_name: str, selection_mode: str, extra_metadata: 
     )
 
 
-def _process_tool_result(tool_result: str | list, state: dict) -> tuple[str, str | None]:
+def _process_tool_result(tool_result: str | list, state: dict) -> tuple[str, str | None, str | None]:
     """Process the raw tool result, extracting UI context and doc links if present.
 
     Returns:
-        ``(processed_result, mcp_response)`` where *mcp_response* is ``None`` if no uiContext.
+        ``(processed_result, mcp_response, mcp_data)`` where *mcp_response* is the
+        uiContext wrapper (``None`` if absent) and *mcp_data* is the full raw JSON
+        returned by the MCP server (``None`` if the result is not valid JSON).
     """
     mcp_response = None
+    mcp_data = None
     try:
         # Handle list format: [{"type": "text", "text": "..."}]
         if isinstance(tool_result, list) and tool_result:
@@ -290,13 +295,18 @@ def _process_tool_result(tool_result: str | list, state: dict) -> tuple[str, str
 
         json_result = json.loads(tool_result)
 
+        if isinstance(json_result, dict) and "llm" in json_result:
+            mcp_data = convert_to_string_if_needed(json_result["llm"])
+        else:
+            mcp_data = tool_result if isinstance(tool_result, str) else json.dumps(json_result)
+
         if "uiContext" in json_result:
             mcp_response = f"<mcp-response>{json.dumps(json_result['uiContext'])}</mcp-response>"
             dispatch_custom_event("ui_context", mcp_response)
         llm_result = json_result.get("llm", json_result) if isinstance(json_result, dict) else json_result
-        return convert_to_string_if_needed(llm_result), mcp_response
+        return convert_to_string_if_needed(llm_result), mcp_response, mcp_data
     except (json.JSONDecodeError, TypeError):
-        return tool_result, mcp_response
+        return tool_result, mcp_response, mcp_data
 
 
 def convert_to_string_if_needed(var):

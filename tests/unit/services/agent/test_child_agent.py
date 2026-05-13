@@ -585,7 +585,7 @@ def test_process_tool_result_handles_mcp_response_with_ui_context():
     })
 
     with patch("app.services.agent.child.dispatch_custom_event"):
-        processed, mcp_response = _process_tool_result(tool_result, {})
+        processed, mcp_response, mcp_data = _process_tool_result(tool_result, {})
 
     assert processed == "LLM response"
     assert mcp_response is not None
@@ -596,7 +596,7 @@ def test_process_tool_result_handles_plain_string():
     """Verify plain string tool results are returned as-is."""
     tool_result = "Simple string response"
 
-    processed, mcp_response = _process_tool_result(tool_result, {})
+    processed, mcp_response, mcp_data = _process_tool_result(tool_result, {})
 
     assert processed == "Simple string response"
     assert mcp_response is None
@@ -606,7 +606,7 @@ def test_process_tool_result_handles_list_format():
     """Verify list-formatted tool results are properly extracted."""
     tool_result = [{"type": "text", "text": "Extracted text", "id": "123"}]
 
-    processed, mcp_response = _process_tool_result(tool_result, {})
+    processed, mcp_response, mcp_data = _process_tool_result(tool_result, {})
 
     assert processed == "Extracted text"
     assert mcp_response is None
@@ -616,7 +616,7 @@ def test_process_tool_result_handles_json_dict_without_llm_key():
     """Verify JSON dict without 'llm' key is returned as JSON string."""
     tool_result = json.dumps({"key": "value", "count": 42})
 
-    processed, mcp_response = _process_tool_result(tool_result, {})
+    processed, mcp_response, mcp_data = _process_tool_result(tool_result, {})
 
     assert processed == json.dumps({"key": "value", "count": 42})
     assert mcp_response is None

@@ -10,6 +10,7 @@ to handle complex, multi-step user requests.
 
 import json
 import logging
+import yaml
 
 from collections.abc import Callable
 from langchain.agents import create_agent
@@ -150,6 +151,58 @@ def _extract_last_message(result: dict) -> str:
     return "No response from agent."
 
 
+def _extract_all_mcp_responses(result: dict) -> list[str]:
+    """Return all ``mcp_response`` values found in the child's ToolMessages."""
+    responses = []
+    for msg in result.get("messages", []):
+        if isinstance(msg, ToolMessage):
+            mcp = getattr(msg, "additional_kwargs", {}).get("mcp_response")
+            if mcp:
+                responses.append(mcp)
+    return responses
+
+
+def _extract_last_mcp_data(result: dict) -> str | None:
+    """Return the last ``mcp_data`` (full MCP server response) from the child's ToolMessages."""
+    for msg in reversed(result.get("messages", [])):
+        if isinstance(msg, ToolMessage):
+            data = getattr(msg, "additional_kwargs", {}).get("mcp_data")
+            if data:
+                return _convert_tool_message_to_context(data)
+    return None
+
+def _convert_tool_message_to_context(content: str) -> str:
+    """
+    Converts a tool message content to formatted context (YAML format).
+    
+    Args:
+        content: The raw tool message content (usually JSON)
+        
+    Returns:
+        Formatted content string with MCP result payloads label
+    """
+    try:
+        
+        parsed = json.loads(content)
+        # Handle both single objects and arrays of objects
+        if isinstance(parsed, list):
+            # Convert array of objects to YAML with document separators
+            yaml_parts = []
+            for item in parsed:
+                yaml_parts.append(yaml.dump(item, default_flow_style=False, sort_keys=False))
+            content = "---\n".join(yaml_parts)
+            logging.debug(f"Converted ToolMessage array content to YAML format ({len(parsed)} items)")
+        elif isinstance(parsed, dict):
+            # Convert single object to YAML
+            content = yaml.dump(parsed, default_flow_style=False, sort_keys=False)
+            logging.debug(f"Converted ToolMessage dict content to YAML format")
+    except (json.JSONDecodeError, TypeError):
+        # If not valid JSON, use original content
+        pass
+    
+    return f"\n[MCP result payloads]: {content}"
+
+
 async def _resume_child_from_interrupt(
     compiled_graph: CompiledStateGraph,
     child_config: dict,
@@ -180,7 +233,8 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
     """
     Wrap a child agent's compiled graph as a LangChain tool.
 
-    The tool accepts a ``query`` string and returns the last AI message content.
+    The tool accepts a ``query`` string and returns the last AI message content
+    along with all MCP responses as an artifact.
 
     Interrupt / resume flow:
     - If the child graph has a pending interrupt (human-in-the-loop), the supervisor
@@ -191,7 +245,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
     agent_name = child_agent.config.name
     compiled_graph = child_agent.agent
 
-    async def _invoke(query: str) -> str:
+    async def _invoke(query: str) -> tuple[str, dict]:
         child_config = _build_child_config(agent_name)
         child_state = await compiled_graph.aget_state(config=child_config)
 
@@ -204,6 +258,9 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
                 config=child_config,
             )
 
+        mcp_responses = _extract_all_mcp_responses(result)
+        mcp_data = _extract_last_mcp_data(result)
+
         # The child is called via ainvoke() (not as a subgraph), so a GraphInterrupt
         # raised inside it is suppressed and ainvoke() returns normally.  Re-trigger any
         # new interrupt at the supervisor level so the client receives the prompt.
@@ -212,12 +269,16 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             logging.debug(f"Child agent '{agent_name}' raised a new interrupt — re-triggering at supervisor level")
             langgraph.types.interrupt(child_state.interrupts[0].value)
 
-        return _extract_last_message(result)
+        return _extract_last_message(result), {
+            "mcp_responses": mcp_responses,
+            "mcp_data": mcp_data,
+        }
 
     return StructuredTool.from_function(
         coroutine=_invoke,
         name=agent_name,
         description=child_agent.config.description or f"Specialized agent '{agent_name}'",
+        response_format="content_and_artifact",
     )
 
 # =============================================================================
@@ -248,6 +309,23 @@ def _create_subagent_event_middleware():
             logging.debug(f"Supervisor is invoking tool '{name}'")
             result = await handler(request)
             _dispatch_subagent_event("processing-subagent-end", name, query)
+
+            # Propagate the child's MCP data onto the supervisor ToolMessage.
+            artifact = getattr(result, 'artifact', None) or {}
+            if artifact and isinstance(result, ToolMessage):
+                extra = {}
+                mcp_responses = artifact.get("mcp_responses", [])
+                if mcp_responses:
+                    extra["mcp_response"] = "\n".join(mcp_responses)
+                mcp_data = artifact.get("mcp_data")
+                if mcp_data:
+                    extra["mcp_data"] = mcp_data
+                if extra:
+                    result.additional_kwargs = {
+                        **result.additional_kwargs,
+                        **extra,
+                    }
+
             return result
         except ChildAgentCancelled:
             _dispatch_subagent_event("processing-subagent-end", name, query)

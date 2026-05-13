@@ -220,14 +220,16 @@ Each tool's description explains its scope. Follow it strictly."""
         else:
             self.system_prompt = default_prompt
             
-    def _build_text_prompt(self, context: str, mcp_response: Optional[str]) -> str:
+    def _build_text_prompt(self, context: str, mcp_response: Optional[str], mcp_data: Optional[str] = None) -> str:
         """Build the text prompt for the LLM based on the agent context and MCP response if available"""
-        return f"""Analyze this CONTEXT + MCP RESPONSE (if available) + the SELECTED AGENT used to perform the task, and select appropriate UI tools to enhance the response.
+        return f"""Analyze this CONTEXT + MCP RESPONSE (if available) + MCP DATA (if available) + the SELECTED AGENT used to perform the task, and select appropriate UI tools to enhance the response.
 
 CONTEXT:
 {context}
 
 {f'MCP RESPONSE:{chr(10)}{mcp_response}' if mcp_response else ''}
+
+{f'MCP DATA:{chr(10)}{mcp_data}' if mcp_data else ''}
 
 If no tools are appropriate, do not invoke any tools."""
 
@@ -235,6 +237,7 @@ If no tools are appropriate, do not invoke any tools."""
         self,
         context: str,  # Current response/context from agent
         mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
+        mcp_data: Optional[str] = None,  # Full MCP server response (last tool call)
         available_tools: Optional[List[UITool]] = None,
     ) -> List[UIToolCall]:
         """
@@ -243,6 +246,7 @@ If no tools are appropriate, do not invoke any tools."""
         Args:
             context: The response/context to enhance with UI tools
             mcp_response: Raw MCP response if available for better tool selection
+            mcp_data: Full data returned by the MCP server from the last tool call
             available_tools: List of available tools (uses all if not specified)
             
         Returns:
@@ -262,7 +266,7 @@ If no tools are appropriate, do not invoke any tools."""
             logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in available_tools]}")
             
             # Build the prompt with the agent, context and MCP response if available            
-            text_prompt = self._build_text_prompt(context, mcp_response)
+            text_prompt = self._build_text_prompt(context, mcp_response, mcp_data)
             
             user_msg = HumanMessage(content=text_prompt)
             system_msg = SystemMessage(content=self.system_prompt)

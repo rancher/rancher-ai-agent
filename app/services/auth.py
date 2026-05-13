@@ -50,7 +50,6 @@ async def get_user_id_from_request(request: Request) -> str:
         netloc = parsed.netloc
         host = f"{scheme}://{netloc}"
     else:
-        rancher_host = request.headers.get("Host", "localhost")
-        host = f"https://{rancher_host}"
+        host = "https://rancher.cattle-system.svc"
 
     return await get_user_id(host, token)

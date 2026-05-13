@@ -66,7 +66,8 @@ NOISY_LOGGERS = [
     "botocore",
     "boto3",
     "asyncio",
-    "mcp.client.streamable_http"
+    "mcp.client.streamable_http",
+    "openai._base_client"
 ]
 
 @asynccontextmanager

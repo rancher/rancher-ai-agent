@@ -306,8 +306,6 @@ async def update_settings(settings: SettingsUpdate, request: Request):
                 content={"detail": f"User does not have permission to update settings in namespace {AGENT_NAMESPACE}"}
             )
 
-        logging.debug(f"User is updating settings: {settings}")
-
         # Validate settings based on ACTIVE_CHATBOT
         updated_fields = settings.model_dump(exclude_none=True)
         active_chatbot = updated_fields.get("ACTIVE_LLM")

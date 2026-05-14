@@ -6,19 +6,96 @@ import json
 import logging
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, NotRequired
 
 from langchain.agents.middleware import AgentState, after_model, before_model, after_agent
+from langchain.agents.middleware.types import AgentMiddleware, OmitFromSchema
 from langchain.messages import AIMessage, ToolMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.config import get_config
+from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
+from typing_extensions import override
 
 from ..ui_tools.loader import load_ui_tools_from_configmap
 from ..ui_tools.selector import create_ui_tools_selector, filter_tool
 from .loader import AgentConfig
+
+
+# ---------------------------------------------------------------------------
+# Messages history middleware
+# ---------------------------------------------------------------------------
+
+
+def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """Return messages worth preserving in the full history.
+
+    Includes:
+    - HumanMessages and AIMessages with content (excluding summarization injections)
+    - ToolMessages with interrupt/confirmation data (human-in-the-loop responses)
+    """
+    result = []
+    for m in messages:
+        # Skip summarization messages
+        if getattr(m, "additional_kwargs", {}).get("lc_source") == "summarization":
+            continue
+        # Keep Human/AI messages with content
+        if isinstance(m, (HumanMessage, AIMessage)) and m.content and m.content != "Previous tool canceled by the user.":
+            result.append(m)
+        # Keep ToolMessages that carry interrupt confirmation info
+        elif isinstance(m, ToolMessage) and "confirmation" in getattr(m, "additional_kwargs", {}):
+            result.append(m)
+    return result
+
+
+def _append_new_to_history(
+    messages: list[AnyMessage],
+    history: list[AnyMessage],
+) -> list[AnyMessage] | None:
+    """Append messages not already present in history (compared by id).
+
+    Returns the updated history list, or None if there is nothing new to add.
+    The middleware state is replaced on every update, so we must carry the full
+    history forward — otherwise old entries would be lost.
+    """
+    existing_ids = {getattr(m, "id", None) for m in history if getattr(m, "id", None)}
+    new = [m for m in messages if getattr(m, "id", None) not in existing_ids]
+    return history + new if new else None
+
+
+class _MessagesHistoryState(AgentState):
+    """Extended state that keeps a full, unsummarized copy of all messages."""
+    messages_history: NotRequired[Annotated[list[AnyMessage], add_messages, OmitFromSchema()]]
+
+
+class MessagesHistoryMiddleware(AgentMiddleware):
+    """Preserves the full message history in a separate state field.
+
+    The SummarizationMiddleware removes old messages from the ``messages`` channel.
+    This middleware copies messages into ``messages_history`` (which is never pruned)
+    so that the complete conversation can be retrieved later.
+    """
+
+    state_schema = _MessagesHistoryState
+
+    @override
+    def after_model(self, state, runtime) -> dict[str, Any] | None:
+        candidates = _select_history_messages(state.get("messages", []))
+        updated = _append_new_to_history(candidates, state.get("messages_history", []))
+        return {"messages_history": updated} if updated is not None else None
+
+    @override
+    def after_agent(self, state, runtime) -> dict[str, Any] | None:
+        """Final pass: capture any interrupt ToolMessages missed by after_model."""
+        candidates = _select_history_messages(state.get("messages", []))
+        updated = _append_new_to_history(candidates, state.get("messages_history", []))
+        return {"messages_history": updated} if updated is not None else None
+
+    @override
+    async def aafter_agent(self, state, runtime) -> dict[str, Any] | None:
+        return self.after_agent(state, runtime)
 
 # ---------------------------------------------------------------------------
 # Shared constants

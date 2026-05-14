@@ -160,7 +160,7 @@ async def _call_agent(
         stream_mode=["updates", "messages", "custom", "events"],
     ):
         if stream["event"] == "on_chat_model_stream":
-            if "no-stream" in stream.get("tags", []):
+            if not _should_stream_text(stream):
                 continue
             if text := _extract_streaming_text(stream):
                 await websocket.send_text(text)
@@ -176,6 +176,28 @@ async def _call_agent(
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
+
+def _should_stream_text(stream: dict) -> bool:
+    """
+    Determines whether a chat model stream event should be forwarded to the WebSocket.
+
+    Returns False when:
+    - The event is tagged ``no-stream``: used by internal LLM calls (e.g. UI-tools
+      selection) that should never surface as visible text to the user.
+    - The event metadata marks it as coming from the summarization middleware
+      (``lc_source == "summarization"``): the SummarizationMiddleware compresses old
+      messages in the background and its LLM output is not part of the conversation.
+    """
+    # Internal calls tagged explicitly as non-streamable
+    if "no-stream" in stream.get("tags", []):
+        return False
+
+    # Background summarization calls from SummarizationMiddleware
+    if stream.get("metadata", {}).get("lc_source") == "summarization":
+        return False
+
+    return True
+
 
 def _extract_streaming_text(stream: dict) -> str | None:
     """

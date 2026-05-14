@@ -11,7 +11,7 @@ import json
 import logging
 from collections.abc import Callable
 from typing import Any
-
+from datetime import datetime
 import langgraph.types
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -43,6 +43,14 @@ from .middleware import (
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
 
+CHILD_TOOL_USE_INSTRUCTIONS = """
+
+## CRITICAL — TOOL EXECUTION BEHAVIOR
+* You MUST call tools immediately to fulfill requests. NEVER respond with only a text message acknowledging or describing what you intend to do.
+* A text-only response (without a tool call) is treated as your FINAL answer. If you respond with "I will proceed to create X" without calling a tool, the task ends incomplete.
+* When asked to create, update, delete, or inspect a resource: call the appropriate tool in your FIRST response. Do NOT announce your intent — just do it.
+"""
+
 
 def create_child_agent(
     llm: BaseChatModel,
@@ -73,7 +81,7 @@ def create_child_agent(
     return create_agent(
         llm,
         tools=execution_tools,
-        system_prompt=system_prompt,
+        system_prompt=system_prompt + CHILD_TOOL_USE_INSTRUCTIONS,
         checkpointer=checkpointer,
         middleware=middleware,
     )
@@ -155,6 +163,7 @@ def _create_tool_execution_middleware(
 
             additional_kwargs["interrupt_message"] = interrupt_message
             additional_kwargs["confirmation"] = True
+            additional_kwargs["created_at"] = datetime.now().isoformat()
             additional_kwargs["ui_tools"] = ui_tools_list
 
             selected_agent = state.get("selected_agent", {})

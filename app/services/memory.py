@@ -113,7 +113,7 @@ class MemoryManager:
         name = metadata.get("chat_name", "")
         created_at = None
         
-        messages = channel_values.get("messages", [])
+        messages = channel_values.get("messages_history", [])
         if messages and len(messages) > 0:
             # First message is used for chat metadata
             message = messages[0]
@@ -307,87 +307,50 @@ class MemoryManager:
         config = {"configurable": {"thread_id": chat_id, "user_id": user_id}}
         checkpoint_tuple = await self.checkpointer.aget_tuple(config=config)
 
-        all_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get("messages", []) if checkpoint_tuple else []
+        all_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get("messages_history", [])
 
         # Group messages by request_id
         messages_map = {}
         for message in all_messages:
-            request_id = message.additional_kwargs.get("request_id")
-            if request_id:
-                if request_id not in messages_map:
-                    messages_map[request_id] = []
-                messages_map[request_id].append(message)
+            if message.type == 'human' and message.content != "":
+                request_metadata = message.additional_kwargs.get("request_metadata", {})
+                tags = request_metadata.get("tags", [])
 
-        # Process messages for each request_id
-        for request_id, messages in messages_map.items():
-            logging.debug(f"Processing request_id: {request_id} with {len(messages)} messages")
+                rows.append({
+                    "chatId": chat_id,
+                    "role": "user",
+                    "agent": request_metadata.get("agent", None),
+                    "message": message.content,
+                    "context": request_metadata.get("context", None),
+                    "labels": request_metadata.get("labels", None),
+                    "tags": tags,
+                    "createdAt": message.additional_kwargs.get("created_at"),
+                })
+            elif message.type == 'ai' and message.content != "":
+                request_metadata = message.additional_kwargs.get("request_metadata", {})
+                tags = request_metadata.get("tags", [])
+
+                rows.append({
+                    "chatId": chat_id,
+                    "role": "agent",
+                    "agent": request_metadata.get("agent", None),
+                    "message": message.content,
+                    "context": request_metadata.get("context", None),
+                    "labels": request_metadata.get("labels", None),
+                    "tags": tags,
+                    "createdAt": message.additional_kwargs.get("created_at"),
+                })
+            elif message.type == 'tool' and message.additional_kwargs.get("interrupt_message", "") != "":
+                rows.append({
+                    "chatId": chat_id,
+                    "role": "agent",
+                    "agent": message.additional_kwargs.get("selected_agent", ""),
+                    "message": message.additional_kwargs.get("interrupt_message", ""),
+                    "confirmation": message.additional_kwargs.get("confirmation", None),
+                    "tools": message.additional_kwargs.get("ui_tools", []),
+                    "createdAt": message.additional_kwargs.get("created_at"),
+                })
             
-            # Tags are propagated from user message to agent messages in the same request
-            tags = []
-
-            selected_agent = {
-                "name": DEFAULT_AGENT_NAME,
-                "mode": "auto"
-            }
-            llm_str = ""
-            mcp_str = ""
-
-            for msg in messages:
-                if msg.type == 'human':
-                    request_metadata = msg.additional_kwargs.get("request_metadata", {})
-
-                    tags = request_metadata.get("tags", [])
-                    user_input = request_metadata.get("user_input", "")
-
-                    if user_input:
-                        rows.append({
-                            "chatId": chat_id,
-                            "role": "user",
-                            "agent": request_metadata.get("agent", None),
-                            "message": request_metadata.get("user_input", ""),
-                            "context": request_metadata.get("context", None),
-                            "labels": request_metadata.get("labels", None),
-                            "tags": tags,
-                            "createdAt": msg.additional_kwargs.get("created_at"),
-                        })
-
-                else:
-                    selected_agent = msg.additional_kwargs.get("selected_agent", selected_agent)
-
-                    if msg.type == 'ai':
-                        llm_str = msg.text if msg.text else ""
-
-                    if msg.type == 'tool':
-                        interrupt_str = msg.additional_kwargs.get("interrupt_message", "")
-                        confirmation = msg.additional_kwargs.get("confirmation", None)
-
-                        if confirmation is not None and interrupt_str:
-                            rows.append({
-                                "chatId": chat_id,
-                                "role": "agent",
-                                "agent": selected_agent,
-                                "message": interrupt_str,
-                                "confirmation": confirmation,
-                                "tools": msg.additional_kwargs.get("ui_tools", []),
-                                "createdAt": msg.additional_kwargs.get("created_at"),
-                            })
-                        else:
-                            mcp_response = msg.additional_kwargs.get("mcp_response", "")
-                            if mcp_response:
-                                mcp_str = mcp_response
-                                
-            if mcp_str or llm_str:
-                agent_response = mcp_str + llm_str
-                if agent_response:
-                    rows.append({
-                        "chatId": chat_id,
-                        "role": "agent",
-                        "agent": selected_agent,
-                        "message": agent_response,
-                        "tags": tags,
-                        "tools": msg.additional_kwargs.get("ui_tools", []),
-                        "createdAt": msg.additional_kwargs.get("created_at"),
-                    })
 
             if limit and len(rows) >= limit:
                 return rows[:limit]

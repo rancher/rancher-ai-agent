@@ -12,6 +12,7 @@ import json
 import logging
 import yaml
 
+from datetime import datetime
 from collections.abc import Callable
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -29,6 +30,7 @@ from .loader import AgentConfig
 from .system_prompts import SUPERVISOR_PROMPT
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
+    MessagesHistoryMiddleware,
     create_cancel_check_middleware,
     create_inject_request_id_middleware,
     create_ui_tools_middleware,
@@ -37,7 +39,11 @@ from .middleware import (
 
 class ChildAgentCancelled(Exception):
     """Raised when a child agent's tool execution is cancelled by the user."""
-    pass
+
+    def __init__(self, agent_name: str, interrupt_info: dict | None = None):
+        super().__init__(agent_name)
+        self.agent_name = agent_name
+        self.interrupt_info = interrupt_info
 
 @dataclass
 class ChildAgent:
@@ -113,11 +119,12 @@ def create_supervisor_agent(
         checkpointer=checkpointer,
         name="supervisor",
         middleware=[
+            MessagesHistoryMiddleware(),
             _create_subagent_event_middleware(),
             create_cancel_check_middleware(),
             create_inject_request_id_middleware(),
             create_ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 6000)]),
+            SummarizationMiddleware(model=llm, trigger=[("messages", 4), ("tokens", 6000)], keep=("messages", 4)),
         ],
     )
 
@@ -169,6 +176,20 @@ def _extract_last_mcp_data(result: dict) -> str | None:
             data = getattr(msg, "additional_kwargs", {}).get("mcp_data")
             if data:
                 return _convert_tool_message_to_context(data)
+    return None
+
+
+def _extract_last_interrupt_info(result: dict) -> dict | None:
+    """Return interrupt metadata from the last ToolMessage that has it."""
+    for msg in reversed(result.get("messages", [])):
+        if isinstance(msg, ToolMessage):
+            kwargs = getattr(msg, "additional_kwargs", {})
+            if "interrupt_message" in kwargs:
+                return {
+                    k: kwargs[k]
+                    for k in ("interrupt_message", "confirmation")
+                    if k in kwargs
+                }
     return None
 
 def _convert_tool_message_to_context(content: str) -> str:
@@ -224,7 +245,8 @@ async def _resume_child_from_interrupt(
     for msg in reversed(result.get("messages", [])):
         if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
             logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
-            raise ChildAgentCancelled(agent_name)
+            interrupt_info = _extract_last_interrupt_info(result)
+            raise ChildAgentCancelled(agent_name, interrupt_info=interrupt_info)
 
     return result
 
@@ -260,6 +282,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
 
         mcp_responses = _extract_all_mcp_responses(result)
         mcp_data = _extract_last_mcp_data(result)
+        interrupt_info = _extract_last_interrupt_info(result)
 
         # The child is called via ainvoke() (not as a subgraph), so a GraphInterrupt
         # raised inside it is suppressed and ainvoke() returns normally.  Re-trigger any
@@ -272,6 +295,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
         return _extract_last_message(result), {
             "mcp_responses": mcp_responses,
             "mcp_data": mcp_data,
+            "interrupt_info": interrupt_info,
         }
 
     return StructuredTool.from_function(
@@ -310,7 +334,7 @@ def _create_subagent_event_middleware():
             result = await handler(request)
             _dispatch_subagent_event("processing-subagent-end", name, query)
 
-            # Propagate the child's MCP data onto the supervisor ToolMessage.
+            # Propagate the child's MCP and interrupt data onto the supervisor ToolMessage.
             artifact = getattr(result, 'artifact', None) or {}
             if artifact and isinstance(result, ToolMessage):
                 extra = {}
@@ -320,6 +344,10 @@ def _create_subagent_event_middleware():
                 mcp_data = artifact.get("mcp_data")
                 if mcp_data:
                     extra["mcp_data"] = mcp_data
+                interrupt_info = artifact.get("interrupt_info")
+                if interrupt_info:
+                    extra.update(interrupt_info)
+                    extra["created_at"] = datetime.now().isoformat()
                 if extra:
                     result.additional_kwargs = {
                         **result.additional_kwargs,
@@ -327,14 +355,17 @@ def _create_subagent_event_middleware():
                     }
 
             return result
-        except ChildAgentCancelled:
+        except ChildAgentCancelled as exc:
             _dispatch_subagent_event("processing-subagent-end", name, query)
             # Create a proper ToolMessage so the supervisor's state stays clean,
             # then use Command to route directly to END — skipping the LLM call.
+            additional_kwargs = exc.interrupt_info or {}
+            additional_kwargs["created_at"] = datetime.now().isoformat()
             tool_message = ToolMessage(
                 content=INTERRUPT_CANCEL_MESSAGE,
                 name=name,
                 tool_call_id=request.tool_call["id"],
+                additional_kwargs=additional_kwargs,
             )
             return Command(goto="__end__", update={"messages": [tool_message]})
         except Exception as e:

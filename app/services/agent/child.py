@@ -35,6 +35,7 @@ from .system_prompts import IDENTITY_PREAMBLE
 from .loader import AgentConfig
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
+    MessagesHistoryMiddleware,
     create_ui_tools_middleware,
     _dispatch_ui_tools,
     create_cancel_check_middleware,
@@ -70,6 +71,7 @@ def create_child_agent(
     planning_tools_by_name = {t.name: t for t in planning_tools}
 
     middleware = [
+        MessagesHistoryMiddleware(),
         _create_tool_execution_middleware(planning_tools_by_name, agent_config),
         _create_identity_preamble_middleware(),
         create_cancel_check_middleware(),

@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Optional, List, Any
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.language_models.llms import BaseLanguageModel
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import Tool
 from pydantic import create_model, Field
 
@@ -122,7 +122,7 @@ class UIToolsSelector:
     Added as step in the LangGraph workflow
     """
     
-    def __init__(self, llm: BaseLanguageModel, system_prompt: str, max_tools: int = 5):
+    def __init__(self, llm: BaseChatModel, system_prompt: str, max_tools: int = 5):
         """
         Initialize the UI Tools Selector
         
@@ -219,6 +219,7 @@ Each tool's description explains its scope. Follow it strictly."""
             self.system_prompt = f"{system_prompt}\n\n{default_prompt}"
         else:
             self.system_prompt = default_prompt
+        return self.system_prompt
             
     def _build_text_prompt(self, context: str, mcp_response: Optional[str], mcp_data: Optional[str] = None) -> str:
         """Build the text prompt for the LLM based on the agent context and MCP response if available"""
@@ -239,7 +240,7 @@ If no tools are appropriate, do not invoke any tools."""
         mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
         mcp_data: Optional[str] = None,  # Full MCP server response (last tool call)
         available_tools: Optional[List[UITool]] = None,
-    ) -> List[UIToolCall]:
+    ) -> List[dict]:
         """
         Use any LLM to select appropriate UI tools using bind_tools for structured output.
         
@@ -327,7 +328,7 @@ If no tools are appropriate, do not invoke any tools."""
         
         return ui_tool_calls
 
-    def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall], available_tools: List[UITool]) -> list:
+    def _sanitize_ui_tools(self, ui_tool_calls: List[UIToolCall], available_tools: List[UITool]) -> List[dict]:
         """
         Sanitize UI tool calls by deduplicating and capping to max_tools.
         
@@ -388,6 +389,6 @@ If no tools are appropriate, do not invoke any tools."""
         return deduplicated_tools
 
 
-def create_ui_tools_selector(llm: BaseLanguageModel, system_prompt: str, max_tools: int = 5) -> UIToolsSelector:
+def create_ui_tools_selector(llm: BaseChatModel, system_prompt: str, max_tools: int = 5) -> UIToolsSelector:
     """Factory function to create a UI Tools Selector with any LLM"""
     return UIToolsSelector(llm, system_prompt, max_tools)

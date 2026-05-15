@@ -13,7 +13,7 @@ from app.services.agent.middleware import (
     _collect_context_until_human,
     _extract_tool_text,
     create_cancel_check_middleware,
-    create_inject_request_id_middleware,
+    inject_additional_kwargs_middleware,
     create_ui_tools_middleware,
 )
 
@@ -31,7 +31,7 @@ class TestInjectRequestIdMiddleware:
         """Verify request_id and created_at are injected into the last AIMessage."""
         mock_get_config.return_value = {"configurable": {"request_id": "req-42"}}
 
-        middleware = create_inject_request_id_middleware()
+        middleware = inject_additional_kwargs_middleware()
         ai_msg = AIMessage(content="hello")
         state = {"messages": [ai_msg]}
 
@@ -46,7 +46,7 @@ class TestInjectRequestIdMiddleware:
         """Verify None returned when no request_id in config."""
         mock_get_config.return_value = {"configurable": {}}
 
-        middleware = create_inject_request_id_middleware()
+        middleware = inject_additional_kwargs_middleware()
         state = {"messages": [AIMessage(content="hello")]}
 
         result = middleware.after_model(state, MagicMock())
@@ -58,7 +58,7 @@ class TestInjectRequestIdMiddleware:
         """Verify None returned when messages list is empty."""
         mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
 
-        middleware = create_inject_request_id_middleware()
+        middleware = inject_additional_kwargs_middleware()
         state = {"messages": []}
 
         result = middleware.after_model(state, MagicMock())
@@ -70,7 +70,7 @@ class TestInjectRequestIdMiddleware:
         """Verify None returned when last message is not an AIMessage."""
         mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
 
-        middleware = create_inject_request_id_middleware()
+        middleware = inject_additional_kwargs_middleware()
         state = {"messages": [HumanMessage(content="hi")]}
 
         result = middleware.after_model(state, MagicMock())

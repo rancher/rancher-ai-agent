@@ -4,7 +4,7 @@ This module defines the UIToolCallValidator class,
 which provides methods to validate UI tool calls based on their defined schemas and categories.
 """
 import logging
-from typing import List
+from typing import List, Optional
 
 from .models import UITool, UIToolCall, UIToolSchema, UIToolCategory
 
@@ -14,7 +14,7 @@ class UIToolCallValidator:
     Validator class for UIToolCall objects.
     """
     
-    def validate_tool_calls(self, calls: List[UIToolCall], available_tools: List[UITool]) -> List[UIToolCall]:
+    def validate_tool_calls(self, calls: List[UIToolCall], available_tools: List[UITool]) -> List[dict]:
         """
         Validates a list of tool calls against the available tools and their schemas.
         
@@ -104,7 +104,7 @@ class SchemaValidator:
         
         return True
     
-    def _check_required_fields(self, call: UIToolCall, schema: UIToolSchema = None) -> bool:
+    def _check_required_fields(self, call: UIToolCall, schema: Optional[UIToolSchema] = None) -> bool:
         """
         Check if required fields are present and not empty in the tool call input.
         """
@@ -127,7 +127,7 @@ class SchemaValidator:
                     
         return True
 
-    def _check_enum_fields(self, call: UIToolCall, schema: UIToolSchema = None) -> bool:
+    def _check_enum_fields(self, call: UIToolCall, schema: Optional[UIToolSchema] = None) -> bool:
         """
         Check if enum field values are valid according to metadata definitions.
         """
@@ -205,7 +205,7 @@ class CategoryValidator:
         
         return True
     
-    def _check_duplicate_values(self, call: UIToolCall, schema: UIToolSchema = None) -> bool:
+    def _check_duplicate_values(self, call: UIToolCall, schema: Optional[UIToolSchema] = None) -> bool:
         """
         Check if there are duplicate values in the tool call input after normalizing (removing final digit).
         """

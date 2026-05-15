@@ -2,12 +2,15 @@ import os
 import re
 import logging
 from enum import Enum
+from typing import cast
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.base import CheckpointTuple
+from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple
+from langchain_core.runnables.config import RunnableConfig
 
 from ..services.agent.loader import DEFAULT_AGENT_NAME
+from ..constants import CONTEXT_PARAMETERS_SUFFIX
 
 class StorageType(str, Enum):
     """Enum for different types of memory storage."""
@@ -21,9 +24,9 @@ class MemoryManager:
     def __init__(self):
         self.db_enabled = os.environ.get("DB_ENABLED", "false").lower() == "true"
         self.db_url = os.environ.get("DB_CONNECTION_STRING", "")
-        self.db_pool = None
-        self.checkpointer = None
-        self.storage_type = None
+        self.db_pool: AsyncConnectionPool | None = None
+        self.checkpointer: AsyncPostgresSaver | InMemorySaver | None = None
+        self.storage_type: StorageType | None = None
 
     async def initialize(self):
         if os.environ.get("DB_ENABLED", "false").lower() == "true":
@@ -38,7 +41,7 @@ class MemoryManager:
             
             await self.db_pool.open()
 
-            self.checkpointer = AsyncPostgresSaver(self.db_pool)
+            self.checkpointer = AsyncPostgresSaver(self.db_pool)  # type: ignore[arg-type]
 
             await self.checkpointer.setup()
             self.storage_type = StorageType.POSTGRES
@@ -55,7 +58,7 @@ class MemoryManager:
             await self.db_pool.close()
             logging.info("PostgreSQL pool closed.")
 
-    def get_checkpointer(self):
+    def get_checkpointer(self) -> AsyncPostgresSaver | InMemorySaver:
         if not self.checkpointer:
             raise RuntimeError("MemoryManager not initialized. Call initialize() first.")
         return self.checkpointer
@@ -155,9 +158,9 @@ class MemoryManager:
         rows = []
 
         chat_ids = set()
-        async for checkpoint_tuple in self.checkpointer.alist(config=None, filter={"user_id": user_id}):
-            chat_id = checkpoint_tuple.config["configurable"]["thread_id"]
-            user_id = checkpoint_tuple.metadata["user_id"]
+        async for checkpoint_tuple in self.get_checkpointer().alist(config=None, filter={"user_id": user_id}):
+            chat_id = checkpoint_tuple.config.get("configurable", {}).get("thread_id", "")
+            user_id = checkpoint_tuple.metadata.get("user_id", "")
             
             if not chat_id or not user_id:
                 continue
@@ -192,14 +195,14 @@ class MemoryManager:
             user_id: The ID of the user.
         """
         thread_ids = []
-        async for checkpoint_tuple in self.checkpointer.alist(config=None, filter={"user_id": user_id}):
-            thread_id = checkpoint_tuple.config['configurable']['thread_id']
+        async for checkpoint_tuple in self.get_checkpointer().alist(config=None, filter={"user_id": user_id}):
+            thread_id = checkpoint_tuple.config.get('configurable', {}).get('thread_id', '')
             if thread_id not in thread_ids:
                 thread_ids.append(thread_id)
         
         # Then delete them after iteration is complete
         for thread_id in thread_ids:
-            await self.checkpointer.adelete_thread(thread_id)
+            await self.get_checkpointer().adelete_thread(thread_id)
             logging.debug(f"Deleted thread: {thread_id}, user_id: {user_id}")
 
     async def fetch_chat(self, chat_id: str, user_id: str) -> dict | None:
@@ -212,8 +215,8 @@ class MemoryManager:
         Returns:
             A chat thread record or None if not found.
         """
-        config = {"configurable": {"thread_id": chat_id, "user_id": user_id}}
-        checkpoint_tuple = await self.checkpointer.aget_tuple(config=config)
+        config = RunnableConfig(configurable={"thread_id": chat_id, "user_id": user_id})
+        checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
         if checkpoint_tuple:
             logging.debug(f"Found checkpoint_tuple for chat_id: {chat_id}, user_id: {user_id}")
@@ -233,7 +236,7 @@ class MemoryManager:
 
         return None
 
-    async def update_chat(self, chat_id: str, user_id: str, chat_data: dict) -> dict:
+    async def update_chat(self, chat_id: str, user_id: str, chat_data: dict) -> dict | None:
         """
         Update a specific chat thread for a specific user.
 
@@ -247,19 +250,19 @@ class MemoryManager:
         name = chat_data.get("name")
         
         if name and isinstance(name, str) and len(name) > 0:
-            config = { "configurable": { "thread_id": chat_id, "user_id": user_id, "checkpoint_ns": "" }}
+            config = RunnableConfig(configurable={ "thread_id": chat_id, "user_id": user_id, "checkpoint_ns": ""})
             
-            checkpoint_tuple = await self.checkpointer.aget_tuple(config)
+            checkpoint_tuple = await self.get_checkpointer().aget_tuple(config)
             
             if checkpoint_tuple:
                 current_metadata = dict(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else {}
 
                 new_metadata = {**current_metadata, "chat_name": name}
 
-                await self.checkpointer.aput(
+                await self.get_checkpointer().aput(
                     config=config,
                     checkpoint=checkpoint_tuple.checkpoint,
-                    metadata=new_metadata,
+                    metadata=cast(CheckpointMetadata, new_metadata),
                     new_versions={}
                 )
 
@@ -275,11 +278,11 @@ class MemoryManager:
             chat_id: The ID of the chat thread.
             user_id: The ID of the user.
         """
-        config = {"configurable": {"thread_id": chat_id}}
-        checkpoint_tuple = await self.checkpointer.aget_tuple(config=config)
+        config = RunnableConfig(configurable={"thread_id": chat_id})
+        checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
         if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
-            await self.checkpointer.adelete_thread(chat_id)
+            await self.get_checkpointer().adelete_thread(chat_id)
             logging.debug(f"Deleted thread: {chat_id}, user_id: {user_id}")
 
     async def fetch_messages(self, chat_id: str, user_id: str, filters: dict = {}) -> list:
@@ -304,13 +307,14 @@ class MemoryManager:
 
         rows = []
         
-        config = {"configurable": {"thread_id": chat_id, "user_id": user_id}}
-        checkpoint_tuple = await self.checkpointer.aget_tuple(config=config)
+        config = RunnableConfig(configurable={"thread_id": chat_id, "user_id": user_id})
+        checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
+
+        if not checkpoint_tuple:
+            return rows
 
         all_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get("messages_history", [])
 
-        # Group messages by request_id
-        messages_map = {}
         for message in all_messages:
             if message.type == 'human' and message.content != "":
                 request_metadata = message.additional_kwargs.get("request_metadata", {})
@@ -320,7 +324,7 @@ class MemoryManager:
                     "chatId": chat_id,
                     "role": "user",
                     "agent": request_metadata.get("agent", None),
-                    "message": message.content,
+                    "message": message.content.split(CONTEXT_PARAMETERS_SUFFIX)[0],
                     "context": request_metadata.get("context", None),
                     "labels": request_metadata.get("labels", None),
                     "tags": tags,
@@ -334,9 +338,10 @@ class MemoryManager:
                     "chatId": chat_id,
                     "role": "agent",
                     "agent": request_metadata.get("agent", None),
-                    "message": message.content,
+                    "message": message.additional_kwargs.get("mcp_response", "") + message.text,
                     "context": request_metadata.get("context", None),
                     "labels": request_metadata.get("labels", None),
+                    "tools": message.additional_kwargs.get("ui_tools", []),
                     "tags": tags,
                     "createdAt": message.additional_kwargs.get("created_at"),
                 })

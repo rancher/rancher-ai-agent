@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id
-from ..dependencies import get_llm
+from ..constants import CONTEXT_PARAMETERS_SUFFIX
 
 router = APIRouter()
 
@@ -303,8 +303,8 @@ def _parse_websocket_request(request: str) -> WebSocketRequest:
         if context:
             context_parts = [f"{key}:{value}" for key, value in context.items()]
             context_suffix = (
-                ". Use the following parameters to populate tool calls when appropriate. \n"
-                "Only include parameters relevant to the user's request "
+                CONTEXT_PARAMETERS_SUFFIX
+                + "Only include parameters relevant to the user's request "
                 "(e.g., omit namespace for cluster-wide operations). \n"
                 f"Parameters (separated by ;): \n {';'.join(context_parts)};"
             )
@@ -403,7 +403,6 @@ def _resolve_target_agent(
         logging.debug(f"Requested agent '{requested_agent}' not found in child_agents, falling back to supervisor")
         return agent, config
 
-    logging.info(f"Routing directly to child agent '{requested_agent}' (bypassing supervisor)")
     child_graph = agent.child_agents[requested_agent]
 
     return child_graph, config

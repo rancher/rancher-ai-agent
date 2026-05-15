@@ -39,7 +39,7 @@ from .middleware import (
     create_ui_tools_middleware,
     _dispatch_ui_tools,
     create_cancel_check_middleware,
-    create_inject_request_id_middleware,
+    inject_additional_kwargs_middleware,
 )
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -75,7 +75,7 @@ def create_child_agent(
         _create_tool_execution_middleware(planning_tools_by_name, agent_config),
         _create_identity_preamble_middleware(),
         create_cancel_check_middleware(),
-        create_inject_request_id_middleware(),
+        inject_additional_kwargs_middleware(),
         create_ui_tools_middleware(llm, only_when_direct=True),
         SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 6000)]),
     ]
@@ -152,10 +152,11 @@ def _create_tool_execution_middleware(
                 )
 
             response = langgraph.types.interrupt(interrupt_message)
+            additional_kwargs["interrupt_message"] = interrupt_message
+            additional_kwargs["ui_tools"] = ui_tools_list
+
             if response != "yes":
-                additional_kwargs["interrupt_message"] = interrupt_message
                 additional_kwargs["confirmation"] = False
-                additional_kwargs["ui_tools"] = ui_tools_list
                 return ToolMessage(
                     content=INTERRUPT_CANCEL_MESSAGE,
                     name=tool_call["name"],
@@ -163,10 +164,8 @@ def _create_tool_execution_middleware(
                     additional_kwargs=additional_kwargs,
                 )
 
-            additional_kwargs["interrupt_message"] = interrupt_message
             additional_kwargs["confirmation"] = True
             additional_kwargs["created_at"] = datetime.now().isoformat()
-            additional_kwargs["ui_tools"] = ui_tools_list
 
             selected_agent = state.get("selected_agent", {})
             if selected_agent:

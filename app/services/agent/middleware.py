@@ -24,6 +24,7 @@ from ..ui_tools.loader import load_ui_tools_from_configmap
 from ..ui_tools.models import UIToolCall
 from ..ui_tools.selector import create_ui_tools_selector, filter_tool
 from .loader import AgentConfig
+from ...constants import INTERRUPT_CANCEL_REPLY
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
         if getattr(m, "additional_kwargs", {}).get("lc_source") == "summarization":
             continue
         # Keep Human/AI messages with content
-        if isinstance(m, (HumanMessage, AIMessage)) and m.content and m.content != "Previous tool canceled by the user.":
+        if isinstance(m, (HumanMessage, AIMessage)) and m.content and m.content != INTERRUPT_CANCEL_REPLY:
             result.append(m)
         # Keep ToolMessages that carry interrupt confirmation info
         elif isinstance(m, ToolMessage) and "confirmation" in getattr(m, "additional_kwargs", {}):
@@ -55,16 +56,31 @@ def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
 def _append_new_to_history(
     messages: list[AnyMessage],
     history: list[AnyMessage],
+    update_existing: bool = False,
 ) -> list[AnyMessage] | None:
-    """Append messages not already present in history (compared by id).
+    """Append or update messages in history (compared by id).
 
-    Returns the updated history list, or None if there is nothing new to add.
+    When update_existing is False (default), only new messages are appended.
+    When update_existing is True, existing messages are replaced with the
+    incoming version (capturing any mutations like ui_tools added after initial capture).
+
+    Returns the updated history list, or None if there is nothing to change.
     The middleware state is replaced on every update, so we must carry the full
     history forward — otherwise old entries would be lost.
     """
-    existing_ids = {getattr(m, "id", None) for m in history if getattr(m, "id", None)}
-    new = [m for m in messages if getattr(m, "id", None) not in existing_ids]
-    return history + new if new else None
+    existing_ids = {getattr(m, "id", None): i for i, m in enumerate(history) if getattr(m, "id", None)}
+    updated = list(history)
+    changed = False
+    for m in messages:
+        msg_id = getattr(m, "id", None)
+        if msg_id in existing_ids:
+            if update_existing:
+                updated[existing_ids[msg_id]] = m
+                changed = True
+        else:
+            updated.append(m)
+            changed = True
+    return updated if changed else None
 
 
 class _MessagesHistoryState(AgentState):
@@ -90,9 +106,10 @@ class MessagesHistoryMiddleware(AgentMiddleware):
 
     @override
     def after_agent(self, state, runtime) -> dict[str, Any] | None:
-        """Final pass: capture any interrupt ToolMessages missed by after_model."""
+        """Final pass: capture any new ToolMessages and update existing messages
+        with mutations (e.g. ui_tools) added by later after_agent hooks."""
         candidates = _select_history_messages(state.get("messages", []))
-        updated = _append_new_to_history(candidates, state.get("messages_history", []))
+        updated = _append_new_to_history(candidates, state.get("messages_history", []), update_existing=True)
         return {"messages_history": updated} if updated is not None else None
 
     @override
@@ -111,11 +128,11 @@ INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 # ---------------------------------------------------------------------------
 
 
-def create_inject_request_id_middleware():
-    """After-model middleware: inject request_id and created_at into the last AIMessage."""
+def inject_additional_kwargs_middleware():
+    """After-model middleware: inject request_id, created_at, and tool metadata into the last AIMessage."""
 
     @after_model
-    def inject_request_id(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    def inject_additional_kwargs(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         config = get_config()
         request_id = config.get("configurable", {}).get("request_id")
         if not request_id or not state["messages"]:
@@ -128,9 +145,29 @@ def create_inject_request_id_middleware():
         last_message.additional_kwargs["request_id"] = request_id
         last_message.additional_kwargs["created_at"] = datetime.now().isoformat()
 
+        # Collect mcp_response and ui_tools from preceding ToolMessages
+        mcp_responses = []
+        ui_tools = []
+        for msg in reversed(state["messages"][:-1]):
+            if isinstance(msg, HumanMessage):
+                break
+            if isinstance(msg, ToolMessage):
+                mcp_resp = getattr(msg, "additional_kwargs", {}).get("mcp_response", "")
+                if mcp_resp:
+                    mcp_responses.append(mcp_resp)
+                tool_ui_tools = getattr(msg, "additional_kwargs", {}).get("ui_tools", [])
+                if tool_ui_tools:
+                    ui_tools.extend(tool_ui_tools)
+        if mcp_responses:
+            mcp_responses.reverse()
+            last_message.additional_kwargs["mcp_response"] = "\n".join(mcp_responses)
+        if ui_tools:
+            ui_tools.reverse()
+            last_message.additional_kwargs["ui_tools"] = ui_tools
+
         return {"messages": [last_message]}
 
-    return inject_request_id
+    return inject_additional_kwargs
 
 
 def create_cancel_check_middleware():
@@ -143,7 +180,7 @@ def create_cancel_check_middleware():
         last = state["messages"][-1]
         if isinstance(last, ToolMessage) and last.content == INTERRUPT_CANCEL_MESSAGE:
             return {
-                "messages": [AIMessage("Previous tool canceled by the user.")],
+                "messages": [AIMessage(INTERRUPT_CANCEL_REPLY)],
                 "jump_to": "end",
             }
         return None
@@ -186,20 +223,30 @@ def create_ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = Fals
             request_id = config.get("configurable", {}).get("request_id")
             if request_id:
                 last_message.additional_kwargs["ui_tools"] = ui_tools_list
-                return {"messages": [last_message]}
+                result: dict[str, Any] = {"messages": [last_message]}
+                # Update messages_history so ui_tools are persisted.
+                history = state.get("messages_history", [])
+                if history:
+                    msg_id = getattr(last_message, "id", None)
+                    updated_history = [
+                        last_message if getattr(m, "id", None) == msg_id else m
+                        for m in history
+                    ]
+                    result["messages_history"] = updated_history
+                return result
 
         return None
 
     return ui_tools_dispatch
 
 
-def _dispatch_ui_tools(tools: list[UIToolCall]) -> None:
+def _dispatch_ui_tools(tools: list[dict]) -> None:
     """Dispatch a ``ui_tools`` custom event with the given tools list."""
     try:
-        ui_tools_json = json.dumps([t.to_dict() for t in tools])
+        ui_tools_json = json.dumps(tools)
         ui_tools_event = f"<ui-tools>{ui_tools_json}</ui-tools>"
         dispatch_custom_event("ui_tools", ui_tools_event)
-        logging.debug(f"Dispatched {len(tools)} UI tool(s): {[t.tool_name for t in tools]}")
+        logging.debug(f"Dispatched {len(tools)} UI tool(s): {[t.get('toolName') for t in tools]}")
     except Exception as e:
         logging.error(f"Error dispatching UI tools: {e}", exc_info=True)
 
@@ -208,7 +255,7 @@ def _dispatch_ui_tools_event(
     llm: BaseChatModel,
     state: AgentState[Any],
     config: RunnableConfig,
-) -> list[UIToolCall]:
+) -> list[dict]:
     """Select and dispatch UI tools based on the current conversation state.
 
     Returns:

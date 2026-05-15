@@ -129,9 +129,9 @@ def test_build_child_config_namespaces_thread_id():
             }
         }
         config = _build_child_config("rancher")
-        assert config["configurable"]["thread_id"] == "parent-thread-1::child::rancher"
-        assert config["configurable"]["request_id"] == "req-123"
-        assert config["callbacks"] == []
+        assert config.get("configurable", {}).get("thread_id") == "parent-thread-1::child::rancher"
+        assert config.get("configurable", {}).get("request_id") == "req-123"
+        assert config.get("callbacks") == []
 
 
 def test_extract_last_message_returns_content():
@@ -585,6 +585,7 @@ class TestCreateSubagentEventMiddleware:
         assert "processing-subagent-end" in dispatch_tags
         assert isinstance(result, Command)
         assert result.goto == "__end__"
+        assert result.update is not None
         messages = result.update["messages"]
         assert len(messages) == 1
         assert messages[0].content == INTERRUPT_CANCEL_MESSAGE

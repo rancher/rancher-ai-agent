@@ -13,13 +13,15 @@ import logging
 import yaml
 
 from datetime import datetime
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import cast
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.runnables.config import ensure_config
+from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
 from langchain.agents.middleware import wrap_tool_call, SummarizationMiddleware
+from langchain.agents.middleware.types import AgentMiddleware
 from langchain.messages import AIMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 import langgraph.types
@@ -128,7 +130,7 @@ def create_supervisor_agent(
         ],
     )
 
-def _build_child_config(agent_name: str) -> dict:
+def _build_child_config(agent_name: str) -> RunnableConfig:
     """
     Build a LangGraph run-config for a child agent derived from the current supervisor config.
 
@@ -147,7 +149,7 @@ def _build_child_config(agent_name: str) -> dict:
         "thread_id": f"{parent_thread_id}::child::{agent_name}",
         **{k: parent_configurable[k] for k in _FORWARDED_CONFIG_KEYS if k in parent_configurable},
     }
-    return {"configurable": child_configurable, "callbacks": []}
+    return RunnableConfig(configurable=child_configurable, callbacks=[])
 
 
 def _extract_last_message(result: dict) -> str:
@@ -226,7 +228,7 @@ def _convert_tool_message_to_context(content: str) -> str:
 
 async def _resume_child_from_interrupt(
     compiled_graph: CompiledStateGraph,
-    child_config: dict,
+    child_config: RunnableConfig,
     child_state: Any,
     agent_name: str,
 ) -> dict:
@@ -320,7 +322,7 @@ def _dispatch_subagent_event(tag: str, name: str, query: str | None = None) -> N
         dispatch_custom_event("subagent_call", f"<{tag}>{json.dumps(payload)}</{tag}>")
 
 
-def _create_child_agent_middleware():
+def _create_child_agent_middleware() -> AgentMiddleware:
     """
     Build the wrap-tool-call middleware that intercepts every child-agent tool call
     made by the supervisor.  It has two responsibilities:
@@ -338,10 +340,10 @@ def _create_child_agent_middleware():
        without invoking the LLM node again.
     """
 
-    @wrap_tool_call
+    @wrap_tool_call  # type: ignore[misc]
     async def handle_child_agent_tool_call(
         request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command],
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
     ) -> ToolMessage | Command:
         """Intercept a single child-agent tool call: propagate artifacts and handle cancellation."""
         name = request.tool_call["name"]
@@ -388,4 +390,4 @@ def _create_child_agent_middleware():
         except Exception as e:
             raise
 
-    return handle_child_agent_tool_call
+    return cast(AgentMiddleware, handle_child_agent_tool_call)

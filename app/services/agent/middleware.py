@@ -14,12 +14,14 @@ from langchain.messages import AIMessage, ToolMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.runnables.config import RunnableConfig
 from langgraph.config import get_config
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from typing_extensions import override
 
 from ..ui_tools.loader import load_ui_tools_from_configmap
+from ..ui_tools.models import UIToolCall
 from ..ui_tools.selector import create_ui_tools_selector, filter_tool
 from .loader import AgentConfig
 
@@ -191,22 +193,22 @@ def create_ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = Fals
     return ui_tools_dispatch
 
 
-def _dispatch_ui_tools(tools: list[dict]) -> None:
+def _dispatch_ui_tools(tools: list[UIToolCall]) -> None:
     """Dispatch a ``ui_tools`` custom event with the given tools list."""
     try:
-        ui_tools_json = json.dumps(tools)
+        ui_tools_json = json.dumps([t.to_dict() for t in tools])
         ui_tools_event = f"<ui-tools>{ui_tools_json}</ui-tools>"
         dispatch_custom_event("ui_tools", ui_tools_event)
-        logging.debug(f"Dispatched {len(tools)} UI tool(s): {[t['toolName'] for t in tools]}")
+        logging.debug(f"Dispatched {len(tools)} UI tool(s): {[t.tool_name for t in tools]}")
     except Exception as e:
         logging.error(f"Error dispatching UI tools: {e}", exc_info=True)
 
 
 def _dispatch_ui_tools_event(
     llm: BaseChatModel,
-    state: dict,
-    config: dict,
-) -> list[dict]:
+    state: AgentState[Any],
+    config: RunnableConfig,
+) -> list[UIToolCall]:
     """Select and dispatch UI tools based on the current conversation state.
 
     Returns:
@@ -252,7 +254,7 @@ def _dispatch_ui_tools_event(
         system_prompt = ui_tools_config_data.config.system_prompt
         max_tools = ui_tools_config_data.config.max_tools
 
-        selector = create_ui_tools_selector(llm, system_prompt=system_prompt, max_tools=max_tools)
+        selector = create_ui_tools_selector(llm, system_prompt=system_prompt or "", max_tools=max_tools)
 
         dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
@@ -275,7 +277,7 @@ def _dispatch_ui_tools_event(
         return []
 
 
-def _collect_all_mcp_responses(state: dict) -> str | None:
+def _collect_all_mcp_responses(state: AgentState[Any]) -> str | None:
     """Collect all ``mcp_response`` values from ToolMessages since the last HumanMessage."""
     responses = []
     for msg in reversed(state.get("messages", [])):
@@ -289,7 +291,7 @@ def _collect_all_mcp_responses(state: dict) -> str | None:
     return "\n".join(responses) if responses else None
 
 
-def _find_last_mcp_data(state: dict) -> str | None:
+def _find_last_mcp_data(state: AgentState[Any]) -> str | None:
     """Return the last ``mcp_data`` (full MCP server response) from ToolMessages since the last HumanMessage."""
     for msg in reversed(state.get("messages", [])):
         if isinstance(msg, HumanMessage):
@@ -301,7 +303,7 @@ def _find_last_mcp_data(state: dict) -> str | None:
     return None
 
 
-def _collect_context_until_human(state: dict) -> str:
+def _collect_context_until_human(state: AgentState[Any]) -> str:
     """Collect all messages from the end of the conversation back to (and including) the last HumanMessage."""
     parts = []
     for msg in reversed(state.get("messages", [])):
@@ -325,8 +327,15 @@ def _collect_context_until_human(state: dict) -> str:
     return "\n".join(parts)
 
 
-def _extract_tool_text(content: str) -> str:
+def _extract_tool_text(content: str | list[str | dict[str, Any]]) -> str:
     """Extract only text content from tool results, stripping reasoning and metadata."""
+    if not isinstance(content, str):
+        # content is a list; extract text items
+        texts = [
+            item["text"] if isinstance(item, dict) and item.get("type") == "text" and item.get("text") else str(item)
+            for item in content
+        ]
+        return "\n".join(texts)
     try:
         parsed = json.loads(content)
         if isinstance(parsed, list):

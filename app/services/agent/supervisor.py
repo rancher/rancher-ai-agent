@@ -120,7 +120,7 @@ def create_supervisor_agent(
         name="supervisor",
         middleware=[
             MessagesHistoryMiddleware(),
-            _create_subagent_event_middleware(),
+            _create_child_agent_middleware(),
             create_cancel_check_middleware(),
             create_inject_request_id_middleware(),
             create_ui_tools_middleware(llm),
@@ -275,10 +275,12 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             result = await _resume_child_from_interrupt(compiled_graph, child_config, child_state, agent_name)
         else:
             child_config["tags"] = ["no-stream"]
+            _dispatch_subagent_event("processing-subagent-start", agent_name, query)
             result = await compiled_graph.ainvoke(
                 {"messages": [{"role": "user", "content": query}]},
                 config=child_config,
             )
+            _dispatch_subagent_event("processing-subagent-end", agent_name, query)
 
         mcp_responses = _extract_all_mcp_responses(result)
         mcp_data = _extract_last_mcp_data(result)
@@ -318,23 +320,39 @@ def _dispatch_subagent_event(tag: str, name: str, query: str | None = None) -> N
         dispatch_custom_event("subagent_call", f"<{tag}>{json.dumps(payload)}</{tag}>")
 
 
-def _create_subagent_event_middleware():
-    """Wrap-tool-call middleware: log and dispatch events for supervisor tool calls."""
+def _create_child_agent_middleware():
+    """
+    Build the wrap-tool-call middleware that intercepts every child-agent tool call
+    made by the supervisor.  It has two responsibilities:
+
+    1. **Artifact propagation** — child agents return ``(str, dict)`` with a rich
+       artifact (mcp_responses, mcp_data, interrupt_info).  LangGraph's ToolNode
+       stores the artifact on the ToolMessage but does *not* copy it into
+       ``additional_kwargs``, so downstream code that reads ``additional_kwargs``
+       would miss it.  This middleware does that copy after each successful call.
+
+    2. **Cancellation short-circuit** — if the user rejected a human-in-the-loop
+       prompt inside a child agent, ``_invoke`` raises ``ChildAgentCancelled``.
+       The middleware catches it, constructs a well-formed ToolMessage, and returns
+       ``Command(goto="__end__")`` to terminate the supervisor graph immediately
+       without invoking the LLM node again.
+    """
 
     @wrap_tool_call
-    async def monitor_tool(
+    async def handle_child_agent_tool_call(
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
+        """Intercept a single child-agent tool call: propagate artifacts and handle cancellation."""
         name = request.tool_call["name"]
         query = request.tool_call["args"].get("query")
-        _dispatch_subagent_event("processing-subagent-start", name, query)
         try:
             logging.debug(f"Supervisor is invoking tool '{name}'")
             result = await handler(request)
-            _dispatch_subagent_event("processing-subagent-end", name, query)
 
-            # Propagate the child's MCP and interrupt data onto the supervisor ToolMessage.
+            # Copy artifact fields (mcp_response, mcp_data, interrupt_info) into
+            # additional_kwargs so that consumers reading the ToolMessage directly
+            # (e.g. streaming handlers, memory middleware) can access them.
             artifact = getattr(result, 'artifact', None) or {}
             if artifact and isinstance(result, ToolMessage):
                 extra = {}
@@ -356,7 +374,6 @@ def _create_subagent_event_middleware():
 
             return result
         except ChildAgentCancelled as exc:
-            _dispatch_subagent_event("processing-subagent-end", name, query)
             # Create a proper ToolMessage so the supervisor's state stays clean,
             # then use Command to route directly to END — skipping the LLM call.
             additional_kwargs = exc.interrupt_info or {}
@@ -371,4 +388,4 @@ def _create_subagent_event_middleware():
         except Exception as e:
             raise
 
-    return monitor_tool
+    return handle_child_agent_tool_call

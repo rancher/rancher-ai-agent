@@ -109,7 +109,7 @@ async def test_fetch_messages_payload():
     # Create mock messages
     human_msg = MagicMock(spec=HumanMessage)
     human_msg.type = "human"
-    human_msg.text = ""
+    human_msg.content = "Show me the dashboard"
     human_msg.additional_kwargs = {
         "request_id": "req1",
         "request_metadata": {
@@ -124,6 +124,7 @@ async def test_fetch_messages_payload():
     
     ai_msg = MagicMock(spec=AIMessage)
     ai_msg.type = "ai"
+    ai_msg.content = "Here is the dashboard"
     ai_msg.text = "Here is the dashboard"
     ai_msg.additional_kwargs = {
         "request_id": "req1",
@@ -146,7 +147,7 @@ async def test_fetch_messages_payload():
     # Setup checkpoint tuple
     checkpoint_tuple.checkpoint = {
         "channel_values": {
-            "messages": [human_msg, ai_msg],
+            "messages_history": [human_msg, ai_msg],
         }
     }
     mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)

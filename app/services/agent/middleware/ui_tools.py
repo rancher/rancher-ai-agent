@@ -1,196 +1,18 @@
-"""
-Shared middleware factories and constants used by both supervisor and child agents.
-"""
-
 import json
 import logging
+from typing import Any
 
-from datetime import datetime
-from typing import Annotated, Any, NotRequired
-
-from langchain.agents.middleware import AgentState, after_model, before_model, after_agent
-from langchain.agents.middleware.types import AgentMiddleware, OmitFromSchema
+from langchain.agents.middleware import AgentState, after_agent
 from langchain.messages import AIMessage, ToolMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AnyMessage, HumanMessage
 from langchain_core.runnables.config import RunnableConfig
 from langgraph.config import get_config
-from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
-from typing_extensions import override
 
-from ..ui_tools.loader import load_ui_tools_from_configmap
-from ..ui_tools.models import UIToolCall
-from ..ui_tools.selector import create_ui_tools_selector, filter_tool
-from .loader import AgentConfig
-from ...constants import INTERRUPT_CANCEL_REPLY
-
-
-# ---------------------------------------------------------------------------
-# Messages history middleware
-# ---------------------------------------------------------------------------
-
-
-def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
-    """Return messages worth preserving in the full history.
-
-    Includes:
-    - HumanMessages and AIMessages with content (excluding summarization injections)
-    - ToolMessages with interrupt/confirmation data (human-in-the-loop responses)
-    """
-    result = []
-    for m in messages:
-        # Skip summarization messages
-        if getattr(m, "additional_kwargs", {}).get("lc_source") == "summarization":
-            continue
-        # Keep Human/AI messages with content
-        if isinstance(m, (HumanMessage, AIMessage)) and m.content and m.content != INTERRUPT_CANCEL_REPLY:
-            result.append(m)
-        # Keep ToolMessages that carry interrupt confirmation info
-        elif isinstance(m, ToolMessage) and "confirmation" in getattr(m, "additional_kwargs", {}):
-            result.append(m)
-    return result
-
-
-def _append_new_to_history(
-    messages: list[AnyMessage],
-    history: list[AnyMessage],
-    update_existing: bool = False,
-) -> list[AnyMessage] | None:
-    """Append or update messages in history (compared by id).
-
-    When update_existing is False (default), only new messages are appended.
-    When update_existing is True, existing messages are replaced with the
-    incoming version (capturing any mutations like ui_tools added after initial capture).
-
-    Returns the updated history list, or None if there is nothing to change.
-    The middleware state is replaced on every update, so we must carry the full
-    history forward — otherwise old entries would be lost.
-    """
-    existing_ids = {getattr(m, "id", None): i for i, m in enumerate(history) if getattr(m, "id", None)}
-    updated = list(history)
-    changed = False
-    for m in messages:
-        msg_id = getattr(m, "id", None)
-        if msg_id in existing_ids:
-            if update_existing:
-                updated[existing_ids[msg_id]] = m
-                changed = True
-        else:
-            updated.append(m)
-            changed = True
-    return updated if changed else None
-
-
-class _MessagesHistoryState(AgentState):
-    """Extended state that keeps a full, unsummarized copy of all messages."""
-    messages_history: NotRequired[Annotated[list[AnyMessage], add_messages, OmitFromSchema()]]
-
-
-class MessagesHistoryMiddleware(AgentMiddleware):
-    """Preserves the full message history in a separate state field.
-
-    The SummarizationMiddleware removes old messages from the ``messages`` channel.
-    This middleware copies messages into ``messages_history`` (which is never pruned)
-    so that the complete conversation can be retrieved later.
-    """
-
-    state_schema = _MessagesHistoryState
-
-    @override
-    def after_model(self, state, runtime) -> dict[str, Any] | None:
-        candidates = _select_history_messages(state.get("messages", []))
-        updated = _append_new_to_history(candidates, state.get("messages_history", []))
-        return {"messages_history": updated} if updated is not None else None
-
-    @override
-    def after_agent(self, state, runtime) -> dict[str, Any] | None:
-        """Final pass: capture any new ToolMessages and update existing messages
-        with mutations (e.g. ui_tools) added by later after_agent hooks."""
-        candidates = _select_history_messages(state.get("messages", []))
-        updated = _append_new_to_history(candidates, state.get("messages_history", []), update_existing=True)
-        return {"messages_history": updated} if updated is not None else None
-
-    @override
-    async def aafter_agent(self, state, runtime) -> dict[str, Any] | None:
-        return self.after_agent(state, runtime)
-
-# ---------------------------------------------------------------------------
-# Shared constants
-# ---------------------------------------------------------------------------
-
-INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
-
-
-# ---------------------------------------------------------------------------
-# Shared middleware factories
-# ---------------------------------------------------------------------------
-
-
-def inject_additional_kwargs_middleware():
-    """After-model middleware: inject request_id, created_at, and tool metadata into the last AIMessage."""
-
-    @after_model
-    def inject_additional_kwargs(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-        config = get_config()
-        request_id = config.get("configurable", {}).get("request_id")
-        if not request_id or not state["messages"]:
-            return None
-
-        last_message = state["messages"][-1]
-        if not isinstance(last_message, AIMessage):
-            return None
-
-        last_message.additional_kwargs["request_id"] = request_id
-        last_message.additional_kwargs["created_at"] = datetime.now().isoformat()
-
-        # Collect mcp_response and ui_tools from preceding ToolMessages
-        mcp_responses = []
-        ui_tools = []
-        for msg in reversed(state["messages"][:-1]):
-            if isinstance(msg, HumanMessage):
-                break
-            if isinstance(msg, ToolMessage):
-                mcp_resp = getattr(msg, "additional_kwargs", {}).get("mcp_response", "")
-                if mcp_resp:
-                    mcp_responses.append(mcp_resp)
-                tool_ui_tools = getattr(msg, "additional_kwargs", {}).get("ui_tools", [])
-                if tool_ui_tools:
-                    ui_tools.extend(tool_ui_tools)
-        if mcp_responses:
-            mcp_responses.reverse()
-            last_message.additional_kwargs["mcp_response"] = "\n".join(mcp_responses)
-        if ui_tools:
-            ui_tools.reverse()
-            last_message.additional_kwargs["ui_tools"] = ui_tools
-
-        return {"messages": [last_message]}
-
-    return inject_additional_kwargs
-
-
-def create_cancel_check_middleware():
-    """Before-model middleware: skip LLM call if the last tool was cancelled."""
-
-    @before_model(can_jump_to=["end"])
-    def cancel_check(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
-        if not state["messages"]:
-            return None
-        last = state["messages"][-1]
-        if isinstance(last, ToolMessage) and last.content == INTERRUPT_CANCEL_MESSAGE:
-            return {
-                "messages": [AIMessage(INTERRUPT_CANCEL_REPLY)],
-                "jump_to": "end",
-            }
-        return None
-
-    return cancel_check
-
-
-# ---------------------------------------------------------------------------
-# UI tools middleware
-# ---------------------------------------------------------------------------
+from ...ui_tools.loader import load_ui_tools_from_configmap
+from ...ui_tools.selector import create_ui_tools_selector, filter_tool
 
 
 def create_ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
@@ -213,7 +35,6 @@ def create_ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = Fals
 
         config = get_config()
 
-        # When only_when_direct is set, skip if the child is called via supervisor
         if only_when_direct and not config.get("configurable", {}).get("agent"):
             return None
 
@@ -224,7 +45,6 @@ def create_ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = Fals
             if request_id:
                 last_message.additional_kwargs["ui_tools"] = ui_tools_list
                 result: dict[str, Any] = {"messages": [last_message]}
-                # Update messages_history so ui_tools are persisted.
                 history = state.get("messages_history", [])
                 if history:
                     msg_id = getattr(last_message, "id", None)
@@ -377,7 +197,6 @@ def _collect_context_until_human(state: AgentState[Any]) -> str:
 def _extract_tool_text(content: str | list[str | dict[str, Any]]) -> str:
     """Extract only text content from tool results, stripping reasoning and metadata."""
     if not isinstance(content, str):
-        # content is a list; extract text items
         texts = [
             item["text"] if isinstance(item, dict) and item.get("type") == "text" and item.get("text") else str(item)
             for item in content

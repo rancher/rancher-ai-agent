@@ -10,15 +10,13 @@ import pytest
 import json
 
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.agent.child import (
+from app.services.agent.child import create_child_agent
+from app.services.agent.middleware import (
     _process_tool_result,
     convert_to_string_if_needed,
-    create_child_agent,
     _should_interrupt,
     _build_interrupt_ui_tools,
     _build_agent_metadata,
-)
-from app.services.agent.middleware import (
     _dispatch_ui_tools,
     _dispatch_ui_tools_event,
 )
@@ -146,7 +144,7 @@ async def test_should_interrupt_raises_if_plan_tool_missing():
 # _build_interrupt_ui_tools Tests
 # ============================================================================
 
-@patch('app.services.agent.middleware.dispatch_custom_event')
+@patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
 def test_build_interrupt_ui_tools_patch_operation(mock_dispatch):
     """Verify show-yaml-diff tools are built for patch operations."""
     interrupt_message = '<confirmation-response>{"type": "patch", "resource": {"kind": "Pod", "name": "test", "namespace": "ns"}, "payload": {"original": "a", "patched": "b"}}</confirmation-response>'
@@ -167,7 +165,7 @@ def test_build_interrupt_ui_tools_patch_operation(mock_dispatch):
     assert result[0]["input"]["patched"] == "b"
 
 
-@patch('app.services.agent.middleware.dispatch_custom_event')
+@patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
 def test_build_interrupt_ui_tools_create_operation(mock_dispatch):
     """Verify show-yaml tools are built for create operations."""
     interrupt_message = '<confirmation-response>{"type": "create", "resource": {"kind": "Pod", "name": "test", "namespace": "ns"}, "payload": {"yaml": "apiVersion: v1"}}</confirmation-response>'
@@ -202,7 +200,7 @@ def test_build_interrupt_ui_tools_missing_name_returns_empty():
 # _dispatch_ui_tools Tests
 # ============================================================================
 
-@patch('app.services.agent.middleware.dispatch_custom_event')
+@patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
 def test_dispatch_ui_tools_single_tool(mock_dispatch):
     """Test dispatching a single UI tool."""
     tools = [{"toolName": "selector", "input": {"resource": "pod"}}]
@@ -215,7 +213,7 @@ def test_dispatch_ui_tools_single_tool(mock_dispatch):
     assert "selector" in call_args[0][1]
 
 
-@patch('app.services.agent.middleware.dispatch_custom_event')
+@patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
 def test_dispatch_ui_tools_multiple_tools(mock_dispatch):
     """Test dispatching multiple UI tools."""
     tools = [
@@ -231,7 +229,7 @@ def test_dispatch_ui_tools_multiple_tools(mock_dispatch):
     assert "viewer" in call_args[0][1]
 
 
-@patch('app.services.agent.middleware.dispatch_custom_event', side_effect=Exception("dispatch error"))
+@patch('app.services.agent.middleware.ui_tools.dispatch_custom_event', side_effect=Exception("dispatch error"))
 def test_dispatch_ui_tools_handles_exception(mock_dispatch):
     """Test that exceptions in dispatch are handled gracefully."""
     tools = [{"toolName": "selector", "input": {}}]
@@ -247,9 +245,9 @@ def test_dispatch_ui_tools_handles_exception(mock_dispatch):
 class TestDispatchUIToolsEvent:
     """Test _dispatch_ui_tools_event function."""
 
-    @patch('app.services.agent.middleware.load_ui_tools_from_configmap')
-    @patch('app.services.agent.middleware.create_ui_tools_selector')
-    @patch('app.services.agent.middleware.dispatch_custom_event')
+    @patch('app.services.agent.middleware.ui_tools.load_ui_tools_from_configmap')
+    @patch('app.services.agent.middleware.ui_tools.create_ui_tools_selector')
+    @patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
     def test_dispatch_ui_tools_event_success(
         self, mock_dispatch, mock_create_selector, mock_load_configmap, mock_llm
     ):
@@ -328,8 +326,8 @@ class TestDispatchUIToolsEvent:
 
         assert result == []
 
-    @patch('app.services.agent.middleware.load_ui_tools_from_configmap')
-    @patch('app.services.agent.middleware.dispatch_custom_event')
+    @patch('app.services.agent.middleware.ui_tools.load_ui_tools_from_configmap')
+    @patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
     def test_dispatch_ui_tools_event_disabled_config(
         self, mock_dispatch, mock_load_configmap, mock_llm
     ):
@@ -354,9 +352,9 @@ class TestDispatchUIToolsEvent:
 
         assert result == []
 
-    @patch('app.services.agent.middleware.load_ui_tools_from_configmap')
-    @patch('app.services.agent.middleware.create_ui_tools_selector')
-    @patch('app.services.agent.middleware.dispatch_custom_event')
+    @patch('app.services.agent.middleware.ui_tools.load_ui_tools_from_configmap')
+    @patch('app.services.agent.middleware.ui_tools.create_ui_tools_selector')
+    @patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
     def test_dispatch_ui_tools_event_with_filtered_tools(
         self, mock_dispatch, mock_create_selector, mock_ui_tools_config, mock_llm
     ):
@@ -416,9 +414,9 @@ class TestDispatchUIToolsEvent:
         assert "test-viewer" in tool_names
         assert "test-other" not in tool_names
 
-    @patch('app.services.agent.middleware.load_ui_tools_from_configmap')
-    @patch('app.services.agent.middleware.create_ui_tools_selector')
-    @patch('app.services.agent.middleware.dispatch_custom_event')
+    @patch('app.services.agent.middleware.ui_tools.load_ui_tools_from_configmap')
+    @patch('app.services.agent.middleware.ui_tools.create_ui_tools_selector')
+    @patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
     def test_dispatch_ui_tools_event_with_mcp_context(
         self, mock_dispatch, mock_create_selector, mock_ui_tools_config, mock_llm
     ):
@@ -486,7 +484,7 @@ class TestPreprocessedUIToolsWithConfirmation:
     """Test preprocessed UI tools (show-yaml, show-yaml-diff) with confirmation workflow."""
 
     @pytest.mark.asyncio
-    @patch('app.services.agent.middleware.dispatch_custom_event')
+    @patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
     @patch('langgraph.types.interrupt')
     async def test_preprocessed_tools_dispatch_for_patch(self, mock_interrupt, mock_dispatch):
         """Test _should_interrupt + _build_interrupt_ui_tools for patch operation."""
@@ -533,7 +531,7 @@ class TestPreprocessedUIToolsWithConfirmation:
         assert "patched" in ui_tools[0]["input"]
 
     @pytest.mark.asyncio
-    @patch('app.services.agent.middleware.dispatch_custom_event')
+    @patch('app.services.agent.middleware.ui_tools.dispatch_custom_event')
     async def test_preprocessed_tools_dispatch_for_create(self, mock_dispatch):
         """Test _should_interrupt + _build_interrupt_ui_tools for create operation."""
         validation_tools = ["createKubernetesResource"]
@@ -584,7 +582,7 @@ def test_process_tool_result_handles_mcp_response_with_ui_context():
         "uiContext": {"display": "data"}
     })
 
-    with patch("app.services.agent.child.dispatch_custom_event"):
+    with patch("app.services.agent.middleware.tool_execution.dispatch_custom_event"):
         processed, mcp_response, mcp_data = _process_tool_result(tool_result, {})
 
     assert processed == "LLM response"

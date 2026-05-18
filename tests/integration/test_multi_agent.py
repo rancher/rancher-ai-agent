@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
+from app.services.agent.child import CHILD_TOOL_USE_INSTRUCTIONS
 from app.services.agent.supervisor import SUPERVISOR_PROMPT
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
@@ -297,7 +298,7 @@ def test_single_prompt():
         
         # Second call: child agent with its own system prompt + query from tool
         second_call = fake_llm.all_calls[1]
-        assert second_call[0] == SystemMessage(content=MATH_AGENT_PROMPT), \
+        assert second_call[0] == SystemMessage(content=MATH_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS), \
             "Second call (child) should have MATH_AGENT_PROMPT"
         assert second_call[1] == HumanMessage(content=fake_prompt), \
             "Second call should have the query as user message"
@@ -446,12 +447,12 @@ def test_delegate_to_child_agent_with_tool():
         assert fake_llm.all_calls[0][0] == SystemMessage(content=SUPERVISOR_PROMPT)
         
         # Second call: child agent (first invocation, decides to call add tool)
-        assert fake_llm.all_calls[1][0] == SystemMessage(content=MATH_AGENT_PROMPT)
+        assert fake_llm.all_calls[1][0] == SystemMessage(content=MATH_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS)
         assert fake_llm.all_calls[1][1] == HumanMessage(content=fake_prompt)
         
         # Third call: child agent (after tool result, includes tool message)
         third_call = fake_llm.all_calls[2]
-        assert third_call[0] == SystemMessage(content=MATH_AGENT_PROMPT)
+        assert third_call[0] == SystemMessage(content=MATH_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS)
         assert third_call[1] == HumanMessage(content=fake_prompt)
         # Should include tool call message and tool result
         assert isinstance(third_call[2], AIMessage) and third_call[2].tool_calls[0]["name"] == "add"
@@ -531,7 +532,7 @@ def test_delegate_to_child_agent_with_ui_tools():
             mock_load.return_value = [math_config, calc_config]
             
             # Patch load_ui_tools_from_configmap to return our UI tools config
-            with patch('app.services.agent.middleware.load_ui_tools_from_configmap') as mock_load_configmap:
+            with patch('app.services.agent.middleware.ui_tools.load_ui_tools_from_configmap') as mock_load_configmap:
                 ui_tools_config = UIToolsConfigData(
                     tools=[ui_tool],
                     config=UIToolsConfig(enabled=True, max_tools=5, system_prompt="Select relevant UI tools")
@@ -539,7 +540,7 @@ def test_delegate_to_child_agent_with_ui_tools():
                 mock_load_configmap.return_value = ui_tools_config
                 
                 # Mock the UI tools selector
-                with patch('app.services.agent.middleware.create_ui_tools_selector') as mock_selector_factory:
+                with patch('app.services.agent.middleware.ui_tools.create_ui_tools_selector') as mock_selector_factory:
                     mock_selector = MagicMock()
                     mock_selector_factory.return_value = mock_selector
                     mock_selector.select_tools.return_value = [

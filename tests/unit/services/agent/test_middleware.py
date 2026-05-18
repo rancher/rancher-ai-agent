@@ -26,7 +26,7 @@ from app.services.agent.middleware import (
 class TestInjectRequestIdMiddleware:
     """Test inject_request_id after-model middleware."""
 
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.inject_kwargs.get_config")
     def test_injects_request_id_into_ai_message(self, mock_get_config):
         """Verify request_id and created_at are injected into the last AIMessage."""
         mock_get_config.return_value = {"configurable": {"request_id": "req-42"}}
@@ -41,7 +41,7 @@ class TestInjectRequestIdMiddleware:
         assert result["messages"][0].additional_kwargs["request_id"] == "req-42"
         assert "created_at" in result["messages"][0].additional_kwargs
 
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.inject_kwargs.get_config")
     def test_returns_none_when_no_request_id(self, mock_get_config):
         """Verify None returned when no request_id in config."""
         mock_get_config.return_value = {"configurable": {}}
@@ -53,7 +53,7 @@ class TestInjectRequestIdMiddleware:
 
         assert result is None
 
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.inject_kwargs.get_config")
     def test_returns_none_when_empty_messages(self, mock_get_config):
         """Verify None returned when messages list is empty."""
         mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
@@ -65,7 +65,7 @@ class TestInjectRequestIdMiddleware:
 
         assert result is None
 
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.inject_kwargs.get_config")
     def test_returns_none_when_last_message_is_not_ai(self, mock_get_config):
         """Verify None returned when last message is not an AIMessage."""
         mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
@@ -131,8 +131,8 @@ class TestCancelCheckMiddleware:
 class TestUIToolsMiddleware:
     """Test ui_tools_dispatch after-agent middleware."""
 
-    @patch("app.services.agent.middleware._dispatch_ui_tools_event")
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
+    @patch("app.services.agent.middleware.ui_tools.get_config")
     def test_skips_when_last_message_not_ai(self, mock_get_config, mock_dispatch_event):
         """Verify None returned when last message is not AIMessage."""
         mock_llm = MagicMock()
@@ -144,8 +144,8 @@ class TestUIToolsMiddleware:
         assert result is None
         mock_dispatch_event.assert_not_called()
 
-    @patch("app.services.agent.middleware._dispatch_ui_tools_event")
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
+    @patch("app.services.agent.middleware.ui_tools.get_config")
     def test_skips_when_only_when_direct_and_no_agent_in_config(
         self, mock_get_config, mock_dispatch_event
     ):
@@ -160,8 +160,8 @@ class TestUIToolsMiddleware:
         assert result is None
         mock_dispatch_event.assert_not_called()
 
-    @patch("app.services.agent.middleware._dispatch_ui_tools_event")
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
+    @patch("app.services.agent.middleware.ui_tools.get_config")
     def test_executes_when_only_when_direct_and_agent_set(
         self, mock_get_config, mock_dispatch_event
     ):
@@ -182,8 +182,8 @@ class TestUIToolsMiddleware:
             {"toolName": "show-yaml", "input": {}}
         ]
 
-    @patch("app.services.agent.middleware._dispatch_ui_tools_event")
-    @patch("app.services.agent.middleware.get_config")
+    @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
+    @patch("app.services.agent.middleware.ui_tools.get_config")
     def test_returns_none_when_no_ui_tools_selected(
         self, mock_get_config, mock_dispatch_event
     ):

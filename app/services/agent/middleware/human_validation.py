@@ -2,7 +2,6 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
 
 import langgraph.types
 from langchain.agents.middleware import wrap_tool_call
@@ -18,14 +17,14 @@ from ..loader import AgentConfig
 from .ui_tools import _dispatch_ui_tools
 
 
-def _create_tool_execution_middleware(
+def child_human_validation_middleware(
     planning_tools_by_name: dict[str, BaseTool],
     agent_config: AgentConfig,
 ):
     """Wrap-tool-call middleware: human validation, MCP response processing, error handling."""
 
     @wrap_tool_call
-    async def tool_execution(
+    async def human_validation(
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
@@ -43,20 +42,10 @@ def _create_tool_execution_middleware(
         interrupt_message = await _should_interrupt(human_validation_tools, tool_call, planning_tools_by_name)
 
         if interrupt_message:
-            logging.info(f"Confirmation interrupt triggered for tool '{tool_call['name']}'")
-
-            ui_tools_list: list[dict] = []
-            try:
-                ui_tools_list = _build_interrupt_ui_tools(interrupt_message, state, config)
-            except Exception as e:
-                logging.debug(
-                    f"Could not extract precomputed fields from interrupt message "
-                    f"and dispatch UI tools: {e}"
-                )
-
+            logging.debug(f"Confirmation interrupt triggered for tool '{tool_call['name']}'")
             response = langgraph.types.interrupt(interrupt_message)
             additional_kwargs["interrupt_message"] = interrupt_message
-            additional_kwargs["ui_tools"] = ui_tools_list
+            additional_kwargs["created_at"] = datetime.now().isoformat()
 
             if response != "yes":
                 additional_kwargs["confirmation"] = False
@@ -68,14 +57,17 @@ def _create_tool_execution_middleware(
                 )
 
             additional_kwargs["confirmation"] = True
-            additional_kwargs["created_at"] = datetime.now().isoformat()
 
-            selected_agent = state.get("selected_agent", {})
-            if selected_agent:
-                dispatch_custom_event(
-                    "subagent_choice_event",
-                    _build_agent_metadata(selected_agent.get("name"), selected_agent.get("mode")),
+            ui_tools_list: list[dict] = []
+            try:
+                ui_tools_list = _build_interrupt_ui_tools(interrupt_message, state, config)
+            except Exception as e:
+                logging.debug(
+                    f"Could not extract precomputed fields from interrupt message "
+                    f"and dispatch UI tools: {e}"
                 )
+
+            additional_kwargs["ui_tools"] = ui_tools_list
 
         try:
             logging.debug("calling tool")
@@ -101,7 +93,7 @@ def _create_tool_execution_middleware(
                 additional_kwargs=additional_kwargs,
             )
 
-    return tool_execution
+    return human_validation
 
 
 async def _should_interrupt(

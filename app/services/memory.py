@@ -338,7 +338,7 @@ class MemoryManager:
                     "chatId": chat_id,
                     "role": "agent",
                     "agent": request_metadata.get("agent", None),
-                    "message": message.additional_kwargs.get("mcp_response", "") + message.text,
+                    "message": (message.additional_kwargs.get("mcp_response") or "") + str(message.text),
                     "context": request_metadata.get("context", None),
                     "labels": request_metadata.get("labels", None),
                     "tools": message.additional_kwargs.get("ui_tools", []),

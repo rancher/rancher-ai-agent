@@ -8,7 +8,7 @@ from ._constants import INTERRUPT_CANCEL_MESSAGE
 from ....constants import INTERRUPT_CANCEL_REPLY
 
 
-def create_cancel_check_middleware():
+def cancel_check_middleware():
     """Before-model middleware: skip LLM call if the last tool was cancelled."""
 
     @before_model(can_jump_to=["end"])

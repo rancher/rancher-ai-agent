@@ -18,11 +18,11 @@ from langgraph.graph.state import Checkpointer, CompiledStateGraph
 from .loader import AgentConfig
 from .middleware import (
     MessagesHistoryMiddleware,
-    create_ui_tools_middleware,
-    create_cancel_check_middleware,
+    ui_tools_middleware,
     inject_additional_kwargs_middleware,
-    _create_identity_preamble_middleware,
-    _create_tool_execution_middleware,
+    identity_preamble_middleware,
+    child_human_validation_middleware,
+    cancel_check_middleware,
 )
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -55,11 +55,11 @@ def create_child_agent(
 
     middleware = [
         MessagesHistoryMiddleware(),
-        _create_tool_execution_middleware(planning_tools_by_name, agent_config),
-        _create_identity_preamble_middleware(),
-        create_cancel_check_middleware(),
+        child_human_validation_middleware(planning_tools_by_name, agent_config),
+        identity_preamble_middleware(),
+        cancel_check_middleware(),
         inject_additional_kwargs_middleware(),
-        create_ui_tools_middleware(llm, only_when_direct=True),
+        ui_tools_middleware(llm, only_when_direct=True),
         SummarizationMiddleware(model=llm, trigger=[("messages", 20), ("tokens", 20000)]),
     ]
 

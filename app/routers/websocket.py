@@ -351,6 +351,7 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
     config = {
         **base_config,
         "configurable": {**base_config["configurable"]},
+        "recursion_limit": 25,
     }
 
     config["configurable"]["request_id"] = request_id

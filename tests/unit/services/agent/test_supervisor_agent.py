@@ -20,7 +20,7 @@ from app.services.agent.supervisor import (
     _extract_last_message,
     _create_agent_tool,
 )
-from app.services.agent.middleware import _create_child_agent_middleware
+from app.services.agent.middleware import supervisor_human_middleware
 from app.services.agent.loader import AgentConfig, AuthenticationType
 
 
@@ -544,7 +544,7 @@ class TestCreateSubagentEventMiddleware:
     def middleware_fn(self):
         """Inner monitor_tool with wrap_tool_call bypassed (identity decorator)."""
         with patch("app.services.agent.middleware.child_agent_tool.wrap_tool_call", lambda f: f):
-            fn = _create_child_agent_middleware()
+            fn = supervisor_human_middleware()
         return fn
 
     @pytest.mark.asyncio

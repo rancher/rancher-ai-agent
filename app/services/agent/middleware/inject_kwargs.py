@@ -25,24 +25,24 @@ def inject_additional_kwargs_middleware():
         last_message.additional_kwargs["request_id"] = request_id
         last_message.additional_kwargs["created_at"] = datetime.now().isoformat()
 
-        mcp_responses = []
-        ui_tools = []
         for msg in reversed(state["messages"][:-1]):
             if isinstance(msg, HumanMessage):
                 break
             if isinstance(msg, ToolMessage):
-                mcp_resp = getattr(msg, "additional_kwargs", {}).get("mcp_response", "")
+                kwargs = getattr(msg, "additional_kwargs", {})
+                # artifact is the second element of a (content, artifact) tuple returned by
+                # tools with response_format="content_and_artifact". LangGraph stores it on
+                # the ToolMessage but does NOT copy it into additional_kwargs, so supervisor
+                # child-agent tools (which return rich metadata like mcp_responses and
+                # ui_tools in the artifact dict) need to be read from here directly.
+                artifact = getattr(msg, "artifact", None) or {}
+
+                mcp_resp = kwargs.get("mcp_response", "")
+                if not mcp_resp and artifact:
+                    last_message.additional_kwargs["mcp_response"] = artifact.get("mcp_response", "")
                 if mcp_resp:
-                    mcp_responses.append(mcp_resp)
-                tool_ui_tools = getattr(msg, "additional_kwargs", {}).get("ui_tools", [])
-                if tool_ui_tools:
-                    ui_tools.extend(tool_ui_tools)
-        if mcp_responses:
-            mcp_responses.reverse()
-            last_message.additional_kwargs["mcp_response"] = "\n".join(mcp_responses)
-        if ui_tools:
-            ui_tools.reverse()
-            last_message.additional_kwargs["ui_tools"] = ui_tools
+                    last_message.additional_kwargs["mcp_response"] = mcp_resp
+                break
 
         return {"messages": [last_message]}
 

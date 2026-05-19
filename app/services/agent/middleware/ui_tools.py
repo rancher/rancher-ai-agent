@@ -6,7 +6,7 @@ from langchain.agents.middleware import AgentState, after_agent
 from langchain.messages import AIMessage, ToolMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables.config import RunnableConfig
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
@@ -15,7 +15,7 @@ from ...ui_tools.loader import load_ui_tools_from_configmap
 from ...ui_tools.selector import create_ui_tools_selector, filter_tool
 
 
-def create_ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
+def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
     """After-agent middleware: dispatch UI tools when agent produces a final answer (no tool calls).
 
     Args:

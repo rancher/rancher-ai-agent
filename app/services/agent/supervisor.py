@@ -18,7 +18,7 @@ from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
 from langchain.agents.middleware import SummarizationMiddleware
-from langchain.messages import AIMessage, ToolMessage
+from langchain.messages import  HumanMessage, ToolMessage
 import langgraph.types
 from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
@@ -27,12 +27,10 @@ from .loader import AgentConfig
 from .system_prompts import SUPERVISOR_PROMPT
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
-    ChildAgentCancelled,
     MessagesHistoryMiddleware,
-    create_cancel_check_middleware,
+    cancel_check_middleware,
     inject_additional_kwargs_middleware,
-    create_ui_tools_middleware,
-    _create_child_agent_middleware,
+    ui_tools_middleware
 )
 
 
@@ -111,10 +109,10 @@ def create_supervisor_agent(
         name="supervisor",
         middleware=[
             MessagesHistoryMiddleware(),
-            _create_child_agent_middleware(),
-            create_cancel_check_middleware(),
+            cancel_check_middleware(),
             inject_additional_kwargs_middleware(),
-            create_ui_tools_middleware(llm),
+            ui_tools_middleware(llm),
+            #supervisor_human_middleware(),
             SummarizationMiddleware(model=llm, trigger=[("messages", 20), ("tokens", 20000)], keep=("messages", 4)),
         ],
     )
@@ -149,15 +147,16 @@ def _extract_last_message(result: dict) -> str:
     return "No response from agent."
 
 
-def _extract_all_mcp_responses(result: dict) -> list[str]:
-    """Return all ``mcp_response`` values found in the child's ToolMessages."""
-    responses = []
-    for msg in result.get("messages", []):
+def _extract_last_mcp_response(result: dict) -> str | None:
+    """Return the last ``mcp_response`` value found before a HumanMessage in the child's messages."""
+    for msg in reversed(result.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            break
         if isinstance(msg, ToolMessage):
             mcp = getattr(msg, "additional_kwargs", {}).get("mcp_response")
             if mcp:
-                responses.append(mcp)
-    return responses
+                return mcp
+    return None
 
 
 def _extract_last_mcp_data(result: dict) -> str | None:
@@ -226,19 +225,11 @@ async def _resume_child_from_interrupt(
 
     Calls ``langgraph.types.interrupt()`` at the supervisor level so the runtime
     delivers the user's ``Command(resume=…)`` value here, then forwards it to the
-    child graph.  Raises ``ChildAgentCancelled`` if the user rejected the action.
+    child graph.
     """
     logging.debug(f"Child agent '{agent_name}' has a pending interrupt — forwarding resume value from supervisor")
     resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
     result = await compiled_graph.ainvoke(Command(resume=resume_value), config=child_config)
-
-    # If the user declined, the child ends with a INTERRUPT_CANCEL_MESSAGE ToolMessage.
-    for msg in reversed(result.get("messages", [])):
-        if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
-            logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
-            interrupt_info = _extract_last_interrupt_info(result)
-            raise ChildAgentCancelled(agent_name, interrupt_info=interrupt_info)
-
     return result
 
 
@@ -263,7 +254,14 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
         child_state = await compiled_graph.aget_state(config=child_config)
 
         if child_state and child_state.interrupts:
-            result = await _resume_child_from_interrupt(compiled_graph, child_config, child_state, agent_name)
+            resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
+            result = await compiled_graph.ainvoke(Command(resume=resume_value), config=child_config)
+            # If the user declined, return the cancel message so the supervisor's
+            # cancel_check_middleware ends the graph.
+            for msg in reversed(result.get("messages", [])):
+                if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
+                    logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
+                    return INTERRUPT_CANCEL_MESSAGE, {"mcp_response": None, "mcp_data": None, "interrupt_info": _extract_last_interrupt_info(result)}
         else:
             child_config["tags"] = ["no-stream"]
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
@@ -273,7 +271,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             )
             _dispatch_subagent_event("processing-subagent-end", agent_name, query)
 
-        mcp_responses = _extract_all_mcp_responses(result)
+        mcp_response = _extract_last_mcp_response(result)
         mcp_data = _extract_last_mcp_data(result)
         interrupt_info = _extract_last_interrupt_info(result)
 
@@ -286,7 +284,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             langgraph.types.interrupt(child_state.interrupts[0].value)
 
         return _extract_last_message(result), {
-            "mcp_responses": mcp_responses,
+            "mcp_response": mcp_response,
             "mcp_data": mcp_data,
             "interrupt_info": interrupt_info,
         }

@@ -8,7 +8,7 @@ from langgraph.runtime import Runtime
 from ..system_prompts import IDENTITY_PREAMBLE
 
 
-def _create_identity_preamble_middleware():
+def identity_preamble_middleware():
     """Before-model middleware: inject IDENTITY_PREAMBLE only when child is called directly."""
 
     @before_model

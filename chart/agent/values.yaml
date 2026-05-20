@@ -5,13 +5,13 @@ global:
 aiAgent:
   image:
     repository: rancher/rancher-ai-agent
-    tag: v1.0.2-rc.3
+    tag: v1.0.2
     pullPolicy: IfNotPresent
 mcp:
   readOnly: false
   image:
     repository: rancher/rancher-ai-mcp
-    tag: v1.0.2-rc.1
+    tag: v1.0.2
     pullPolicy: IfNotPresent
 
 ollamaLlmModel: ""

@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rancher-mcp-server
+  namespace: cattle-ai-agent-system
+  labels:
+    app: rancher-mcp-server
+spec:
+  podSelector:
+    matchLabels:
+      app: rancher-mcp-server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: rancher-ai-agent
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rancher-ai-agent

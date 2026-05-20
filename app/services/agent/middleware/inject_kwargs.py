@@ -30,13 +30,14 @@ def inject_additional_kwargs_middleware():
                 break
             if isinstance(msg, ToolMessage):
                 kwargs = getattr(msg, "additional_kwargs", {})
+                last_message.additional_kwargs["interrupt_message"] = kwargs.get("interrupt_message", "") or msg.name
+                
                 # artifact is the second element of a (content, artifact) tuple returned by
                 # tools with response_format="content_and_artifact". LangGraph stores it on
                 # the ToolMessage but does NOT copy it into additional_kwargs, so supervisor
                 # child-agent tools (which return rich metadata like mcp_responses and
                 # ui_tools in the artifact dict) need to be read from here directly.
                 artifact = getattr(msg, "artifact", None) or {}
-
                 mcp_resp = kwargs.get("mcp_response", "")
                 if not mcp_resp and artifact:
                     last_message.additional_kwargs["mcp_response"] = artifact.get("mcp_response", "")

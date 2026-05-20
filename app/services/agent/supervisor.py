@@ -112,7 +112,6 @@ def create_supervisor_agent(
             cancel_check_middleware(),
             inject_additional_kwargs_middleware(),
             ui_tools_middleware(llm),
-            #supervisor_human_middleware(),
             SummarizationMiddleware(model=llm, trigger=[("messages", 20), ("tokens", 20000)], keep=("messages", 4)),
         ],
     )

@@ -12,7 +12,7 @@ from app.services.agent.middleware import (
     INTERRUPT_CANCEL_MESSAGE,
     _collect_context_until_human,
     _extract_tool_text,
-    cancel_check_middleware,
+    cancel_human_validation_middleware,
     inject_additional_kwargs_middleware,
     create_ui_tools_middleware,
 )
@@ -88,7 +88,7 @@ class TestCancelCheckMiddleware:
 
     def test_jumps_to_end_on_cancel_message(self):
         """Verify jump_to end when last tool message is a cancellation."""
-        middleware = cancel_check_middleware()
+        middleware = cancel_human_validation_middleware()
         cancel_msg = ToolMessage(
             content=INTERRUPT_CANCEL_MESSAGE,
             tool_call_id="tc-1",
@@ -105,7 +105,7 @@ class TestCancelCheckMiddleware:
 
     def test_returns_none_when_no_cancel(self):
         """Verify None returned when last message is not a cancellation."""
-        middleware = cancel_check_middleware()
+        middleware = cancel_human_validation_middleware()
         tool_msg = ToolMessage(content="success", tool_call_id="tc-1", name="tool")
         state = {"messages": [tool_msg]}
 
@@ -115,7 +115,7 @@ class TestCancelCheckMiddleware:
 
     def test_returns_none_on_empty_messages(self):
         """Verify None returned for empty messages."""
-        middleware = cancel_check_middleware()
+        middleware = cancel_human_validation_middleware()
         state = {"messages": []}
 
         result = middleware.before_model(state, MagicMock())

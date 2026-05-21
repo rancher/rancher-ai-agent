@@ -22,7 +22,7 @@ from .middleware import (
     inject_additional_kwargs_middleware,
     identity_preamble_middleware,
     child_human_validation_middleware,
-    cancel_check_middleware,
+    cancel_human_validation_middleware,
 )
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -57,7 +57,7 @@ def create_child_agent(
         MessagesHistoryMiddleware(),
         child_human_validation_middleware(planning_tools_by_name, agent_config),
         identity_preamble_middleware(),
-        cancel_check_middleware(),
+        cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm, only_when_direct=True),
         SummarizationMiddleware(model=llm, trigger=[("messages", 20), ("tokens", 20000)]),

@@ -7,7 +7,7 @@ See README.md for an overview of the middleware system and how to add new middle
 from ._constants import INTERRUPT_CANCEL_MESSAGE, ChildAgentCancelled
 from .messages_history import MessagesHistoryMiddleware
 from .inject_kwargs import inject_additional_kwargs_middleware
-from .cancel_check import cancel_check_middleware
+from .cancel_check import cancel_human_validation_middleware
 from .ui_tools import (
     ui_tools_middleware,
     _dispatch_ui_tools,

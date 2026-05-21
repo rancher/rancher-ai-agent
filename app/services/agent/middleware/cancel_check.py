@@ -8,11 +8,11 @@ from ._constants import INTERRUPT_CANCEL_MESSAGE
 from ....constants import INTERRUPT_CANCEL_REPLY
 
 
-def cancel_check_middleware():
+def cancel_human_validation_middleware():
     """Before-model middleware: skip LLM call if the last tool was cancelled."""
 
     @before_model(can_jump_to=["end"])
-    def cancel_check(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    def cancel_human_validation(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         if not state["messages"]:
             return None
         last = state["messages"][-1]
@@ -23,4 +23,4 @@ def cancel_check_middleware():
             }
         return None
 
-    return cancel_check
+    return cancel_human_validation

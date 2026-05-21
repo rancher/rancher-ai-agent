@@ -28,7 +28,7 @@ from .system_prompts import SUPERVISOR_PROMPT
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
     MessagesHistoryMiddleware,
-    cancel_check_middleware,
+    cancel_human_validation_middleware,
     inject_additional_kwargs_middleware,
     ui_tools_middleware
 )
@@ -109,7 +109,7 @@ def create_supervisor_agent(
         name="supervisor",
         middleware=[
             MessagesHistoryMiddleware(),
-            cancel_check_middleware(),
+            cancel_human_validation_middleware(),
             inject_additional_kwargs_middleware(),
             ui_tools_middleware(llm),
             SummarizationMiddleware(model=llm, trigger=[("messages", 20), ("tokens", 20000)], keep=("messages", 4)),

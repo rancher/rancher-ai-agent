@@ -45,6 +45,10 @@ For comprehensive documentation on defining, configuring, and using UI tools, se
 - Tool validation and schema properties
 - Prompt keywords and best practices
 
+## Architecture Documentation
+
+For detailed documentation on the supervisor/child-agents architecture, middleware system, and human validation flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## How It Works (Flow)
 
 1. **User Request → Agent → LLM**  

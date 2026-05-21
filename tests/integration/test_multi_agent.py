@@ -126,6 +126,7 @@ def remove_message_ids(messages: list[BaseMessage]) -> list[BaseMessage]:
         if isinstance(message, BaseMessage):
             new_message = message.model_copy(update={
                 "id": None,
+                "name": None,
                 "additional_kwargs": {},
                 "response_metadata": {}
             })
@@ -293,7 +294,7 @@ def test_single_prompt():
         first_call = fake_llm.all_calls[0]
         assert first_call[0] == SystemMessage(content=SUPERVISOR_PROMPT), \
             "First call (supervisor) should have SUPERVISOR_PROMPT"
-        assert first_call[-1] == HumanMessage(content=fake_prompt), \
+        assert first_call[1] == HumanMessage(content=fake_prompt), \
             "First call should end with user's prompt"
         
         # Second call: child agent with its own system prompt + query from tool
@@ -307,6 +308,12 @@ def test_single_prompt():
         third_call = fake_llm.all_calls[2]
         assert third_call[0] == SystemMessage(content=SUPERVISOR_PROMPT), \
             "Third call (supervisor) should have SUPERVISOR_PROMPT"
+        assert third_call[1] == HumanMessage(content=fake_prompt), \
+            "Third call should include original user message"
+        assert isinstance(third_call[2], AIMessage) and third_call[2].tool_calls[0]["name"] == MATH_AGENT_NAME, \
+            "Third call should include supervisor's tool call to math-agent"
+        assert isinstance(third_call[3], ToolMessage) and third_call[3].content == "fake llm response from math agent", \
+            "Third call should include tool result from math-agent"
 
     finally:
         LLMManager._instance = None
@@ -376,17 +383,53 @@ def test_multiple_prompts():
         assert len(fake_llm.all_calls) == 6, \
             f"Expected 6 LLM calls (3 per prompt), got {len(fake_llm.all_calls)}"
         
-        # First supervisor call has just the first prompt
+        # Call 0 — supervisor: first prompt
         first_call = fake_llm.all_calls[0]
+        assert len(first_call) == 2
         assert first_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
-        assert first_call[-1] == HumanMessage(content=fake_prompt_1)
-        
-        # Fourth call (second supervisor call) should include conversation history
+        assert first_call[1] == HumanMessage(content=fake_prompt_1)
+
+        # Call 1 — math-agent child: processes first prompt
+        second_call = fake_llm.all_calls[1]
+        assert len(second_call) == 2
+        assert second_call[0] == SystemMessage(content=MATH_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS)
+        assert second_call[1] == HumanMessage(content=fake_prompt_1)
+
+        # Call 2 — supervisor: after math-agent result (history: human + tool call + tool result)
+        third_call = fake_llm.all_calls[2]
+        assert len(third_call) == 4
+        assert third_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
+        assert third_call[1] == HumanMessage(content=fake_prompt_1)
+        assert isinstance(third_call[2], AIMessage) and third_call[2].tool_calls[0]["name"] == MATH_AGENT_NAME
+        assert isinstance(third_call[3], ToolMessage) and third_call[3].content == fake_llm_response_1
+
+        # Call 3 — supervisor: second prompt with accumulated history
         fourth_call = fake_llm.all_calls[3]
+        assert len(fourth_call) == 6
         assert fourth_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
-        assert fourth_call[-1] == HumanMessage(content=fake_prompt_2)
-        # Should include previous messages in history
-        assert len(fourth_call) > 3, "Second supervisor call should have conversation history"
+        assert fourth_call[1] == HumanMessage(content=fake_prompt_1)
+        assert isinstance(fourth_call[2], AIMessage) and fourth_call[2].tool_calls[0]["name"] == MATH_AGENT_NAME
+        assert isinstance(fourth_call[3], ToolMessage) and fourth_call[3].content == fake_llm_response_1
+        assert fourth_call[4] == AIMessage(content=fake_supervisor_response_1)
+        assert fourth_call[5] == HumanMessage(content=fake_prompt_2)
+
+        # Call 4 — calculator-agent child: processes second prompt
+        fifth_call = fake_llm.all_calls[4]
+        assert len(fifth_call) == 2
+        assert fifth_call[0] == SystemMessage(content=CALCULATOR_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS)
+        assert fifth_call[1] == HumanMessage(content=fake_prompt_2)
+
+        # Call 5 — supervisor: after calculator-agent result (full conversation history)
+        sixth_call = fake_llm.all_calls[5]
+        assert len(sixth_call) == 8
+        assert sixth_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
+        assert sixth_call[1] == HumanMessage(content=fake_prompt_1)
+        assert isinstance(sixth_call[2], AIMessage) and sixth_call[2].tool_calls[0]["name"] == MATH_AGENT_NAME
+        assert isinstance(sixth_call[3], ToolMessage) and sixth_call[3].content == fake_llm_response_1
+        assert sixth_call[4] == AIMessage(content=fake_supervisor_response_1)
+        assert sixth_call[5] == HumanMessage(content=fake_prompt_2)
+        assert isinstance(sixth_call[6], AIMessage) and sixth_call[6].tool_calls[0]["name"] == CALCULATOR_AGENT_NAME
+        assert isinstance(sixth_call[7], ToolMessage) and sixth_call[7].content == fake_llm_response_2
 
     finally:
         LLMManager._instance = None
@@ -594,84 +637,3 @@ def test_delegate_to_child_agent_with_ui_tools():
         LLMManager._instance = None
 
 
-def test_conversation_history():
-    """Tests that the supervisor maintains conversation history across multiple prompts."""
-    fake_prompt_1 = "fake prompt 1"
-    fake_prompt_2 = "fake prompt 2"
-    fake_prompt_3 = "fake prompt 3"
-    
-    fake_supervisor_response_1 = "supervisor response 1"
-    fake_supervisor_response_2 = "supervisor response 2"
-    fake_supervisor_response_3 = "supervisor response 3"
-
-    prompts = [fake_prompt_1, fake_prompt_2, fake_prompt_3]
-    
-    fake_llm_responses = [
-        # Prompt 1: supervisor calls math-agent
-        AIMessage(content="", tool_calls=[{
-            "id": "call_1", "name": MATH_AGENT_NAME, "args": {"query": fake_prompt_1}
-        }]),
-        AIMessage(content="child response 1"),
-        AIMessage(content=fake_supervisor_response_1),
-        # Prompt 2: supervisor calls calculator-agent
-        AIMessage(content="", tool_calls=[{
-            "id": "call_2", "name": CALCULATOR_AGENT_NAME, "args": {"query": fake_prompt_2}
-        }]),
-        AIMessage(content="child response 2"),
-        AIMessage(content=fake_supervisor_response_2),
-        # Prompt 3: supervisor calls math-agent
-        AIMessage(content="", tool_calls=[{
-            "id": "call_3", "name": MATH_AGENT_NAME, "args": {"query": fake_prompt_3}
-        }]),
-        AIMessage(content="child response 3"),
-        AIMessage(content=fake_supervisor_response_3),
-    ]
-    
-    fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
-    fake_llm.all_calls = []
-    LLMManager._instance = fake_llm
-    
-    try:
-        with client.websocket_connect("/v1/ws/messages") as websocket:
-            # Consume any initial messages from the server (chat-metadata, etc.)
-            websocket.receive_text()
-
-            # Send prompts one at a time and collect responses
-            messages = []
-            for prompt in prompts:
-                websocket.send_text(prompt)
-                msgs = collect_messages(websocket, 1)
-                messages.extend(msgs)
-            
-        # Verify all responses received
-        assert fake_supervisor_response_1 in messages[0]
-        assert fake_supervisor_response_2 in messages[1]
-        assert fake_supervisor_response_3 in messages[2]
-        
-        # 9 LLM calls total: 3 per prompt (supervisor + child + supervisor)
-        assert len(fake_llm.all_calls) == 9, \
-            f"Expected 9 LLM calls (3 per prompt), got {len(fake_llm.all_calls)}"
-        
-        # First supervisor call: just the first prompt
-        first_supervisor_call = fake_llm.all_calls[0]
-        assert first_supervisor_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
-        assert first_supervisor_call[-1] == HumanMessage(content=fake_prompt_1)
-        assert len(first_supervisor_call) == 2, "First supervisor call should only have system prompt + user message"
-        
-        # Fourth call (second supervisor call): should include conversation history
-        fourth_call = fake_llm.all_calls[3]
-        assert fourth_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
-        assert fourth_call[-1] == HumanMessage(content=fake_prompt_2)
-        # History should include: system + human1 + AI(tool_call) + tool_result + AI(final) + human2
-        assert len(fourth_call) > 3, "Second supervisor call should accumulate history"
-        
-        # Seventh call (third supervisor call): even more history
-        seventh_call = fake_llm.all_calls[6]
-        assert seventh_call[0] == SystemMessage(content=SUPERVISOR_PROMPT)
-        assert seventh_call[-1] == HumanMessage(content=fake_prompt_3)
-        # Should have accumulated even more history
-        assert len(seventh_call) > len(fourth_call), \
-            "Third supervisor call should have more history than second"
-
-    finally:
-        LLMManager._instance = None

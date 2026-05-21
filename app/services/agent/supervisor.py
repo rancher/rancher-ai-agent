@@ -213,25 +213,6 @@ def _convert_tool_message_to_context(content: str) -> str:
     return f"\n[MCP result payloads]: {content}"
 
 
-async def _resume_child_from_interrupt(
-    compiled_graph: CompiledStateGraph,
-    child_config: RunnableConfig,
-    child_state: Any,
-    agent_name: str,
-) -> dict:
-    """
-    Resume a child graph that has a pending human-in-the-loop interrupt.
-
-    Calls ``langgraph.types.interrupt()`` at the supervisor level so the runtime
-    delivers the user's ``Command(resume=…)`` value here, then forwards it to the
-    child graph.
-    """
-    logging.debug(f"Child agent '{agent_name}' has a pending interrupt — forwarding resume value from supervisor")
-    resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
-    result = await compiled_graph.ainvoke(Command(resume=resume_value), config=child_config)
-    return result
-
-
 def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
     """
     Wrap a child agent's compiled graph as a LangChain tool.

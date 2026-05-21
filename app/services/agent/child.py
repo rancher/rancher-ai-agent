@@ -7,8 +7,6 @@ Each agent has an LLM-driven reasoning loop with tool execution, human validatio
 and automatic retry on malformed tool calls.
 """
 
-import logging
-
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel

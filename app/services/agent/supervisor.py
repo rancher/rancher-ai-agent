@@ -146,40 +146,40 @@ def _extract_last_message(result: dict) -> str:
     return "No response from agent."
 
 
-def _extract_last_mcp_response(result: dict) -> str | None:
-    """Return the last ``mcp_response`` value found before a HumanMessage in the child's messages."""
+def _extract_tool_metadata(result: dict) -> dict:
+    """Extract mcp_response, mcp_data, interrupt_info, and created_at from result messages.
+
+    All fields are extracted only from messages appearing after the last HumanMessage.
+    """
+    mcp_response = None
+    mcp_data = None
+    interrupt_info = None
+    created_at = None
+
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, HumanMessage):
             break
+        kwargs = getattr(msg, "additional_kwargs", {})
+        if created_at is None:
+            created_at = kwargs.get("created_at") or created_at
         if isinstance(msg, ToolMessage):
-            mcp = getattr(msg, "additional_kwargs", {}).get("mcp_response")
-            if mcp:
-                return mcp
-    return None
+            if mcp_response is None:
+                candidate = kwargs.get("mcp_response")
+                if candidate:
+                    mcp_response = candidate
+            if mcp_data is None:
+                data = kwargs.get("mcp_data")
+                if data:
+                    mcp_data = _convert_tool_message_to_context(data)
+            if interrupt_info is None and "interrupt_message" in kwargs:
+                interrupt_info = {k: kwargs[k] for k in ("interrupt_message", "confirmation") if k in kwargs}
 
-
-def _extract_last_mcp_data(result: dict) -> str | None:
-    """Return the last ``mcp_data`` (full MCP server response) from the child's ToolMessages."""
-    for msg in reversed(result.get("messages", [])):
-        if isinstance(msg, ToolMessage):
-            data = getattr(msg, "additional_kwargs", {}).get("mcp_data")
-            if data:
-                return _convert_tool_message_to_context(data)
-    return None
-
-
-def _extract_last_interrupt_info(result: dict) -> dict | None:
-    """Return interrupt metadata from the last ToolMessage that has it."""
-    for msg in reversed(result.get("messages", [])):
-        if isinstance(msg, ToolMessage):
-            kwargs = getattr(msg, "additional_kwargs", {})
-            if "interrupt_message" in kwargs:
-                return {
-                    k: kwargs[k]
-                    for k in ("interrupt_message", "confirmation")
-                    if k in kwargs
-                }
-    return None
+    return {
+        "mcp_response": mcp_response,
+        "mcp_data": mcp_data,
+        "interrupt_info": interrupt_info,
+        "created_at": created_at,
+    }
 
 def _convert_tool_message_to_context(content: str) -> str:
     """
@@ -260,7 +260,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             for msg in reversed(result.get("messages", [])):
                 if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
                     logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
-                    return INTERRUPT_CANCEL_MESSAGE, {"mcp_response": None, "mcp_data": None, "interrupt_info": _extract_last_interrupt_info(result)}
+                    return INTERRUPT_CANCEL_MESSAGE, {**_extract_tool_metadata(result), "mcp_response": None, "mcp_data": None}
         else:
             child_config["tags"] = ["no-stream"]
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
@@ -270,9 +270,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             )
             _dispatch_subagent_event("processing-subagent-end", agent_name, query)
 
-        mcp_response = _extract_last_mcp_response(result)
-        mcp_data = _extract_last_mcp_data(result)
-        interrupt_info = _extract_last_interrupt_info(result)
+        metadata = _extract_tool_metadata(result)
 
         # The child is called via ainvoke() (not as a subgraph), so a GraphInterrupt
         # raised inside it is suppressed and ainvoke() returns normally.  Re-trigger any
@@ -282,11 +280,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             logging.debug(f"Child agent '{agent_name}' raised a new interrupt — re-triggering at supervisor level")
             langgraph.types.interrupt(child_state.interrupts[0].value)
 
-        return _extract_last_message(result), {
-            "mcp_response": mcp_response,
-            "mcp_data": mcp_data,
-            "interrupt_info": interrupt_info,
-        }
+        return _extract_last_message(result), metadata
 
     return StructuredTool.from_function(
         coroutine=_invoke,

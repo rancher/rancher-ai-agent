@@ -25,13 +25,16 @@ def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
             result.append(m)
         elif isinstance(m, ToolMessage) and "confirmation" in getattr(m, "additional_kwargs", {}):
             result.append(m)
-        elif isinstance(m, ToolMessage) and "confirmation" in (getattr(m, "artifact", None) or {}).get("interrupt_info", {}):
+        elif isinstance(m, ToolMessage) and "confirmation" in ((getattr(m, "artifact", None) or {}).get("interrupt_info") or {}):
             artifact = getattr(m, "artifact", None) or {}
+            if artifact.get("created_at"):
+                m.additional_kwargs["created_at"] = artifact["created_at"]
             interrupt_info = artifact["interrupt_info"]
             m.additional_kwargs["confirmation"] = interrupt_info["confirmation"]
             if "interrupt_message" in interrupt_info:
                 m.additional_kwargs["interrupt_message"] = interrupt_info["interrupt_message"]
-            result.append(m)
+                result.append(m)
+ 
     return result
 
 

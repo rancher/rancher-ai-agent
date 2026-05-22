@@ -19,7 +19,7 @@ from .middleware import (
     ui_tools_middleware,
     inject_additional_kwargs_middleware,
     identity_preamble_middleware,
-    child_human_validation_middleware,
+    human_validation_middleware,
     cancel_human_validation_middleware,
 )
 
@@ -53,7 +53,7 @@ def create_child_agent(
 
     middleware = [
         MessagesHistoryMiddleware(),
-        child_human_validation_middleware(planning_tools_by_name, agent_config),
+        human_validation_middleware(planning_tools_by_name, agent_config),
         identity_preamble_middleware(),
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),

@@ -17,11 +17,25 @@ from ..loader import AgentConfig
 from .ui_tools import _dispatch_ui_tools
 
 
-def child_human_validation_middleware(
+def human_validation_middleware(
     planning_tools_by_name: dict[str, BaseTool],
     agent_config: AgentConfig,
 ):
-    """Wrap-tool-call middleware: human validation, MCP response processing, error handling."""
+    """``@wrap_tool_call`` middleware that gates tool execution behind human confirmation.
+
+    For each tool call the middleware:
+
+    1. Checks whether the tool is listed in ``agent_config.human_validation_tools``.
+    2. If so, invokes the corresponding planning tool (``<tool_name>Plan``) to produce
+       a preview of the intended change (diff / manifest), then calls
+       ``langgraph.types.interrupt()`` to pause the graph and surface the prompt to
+       the client.
+    3. On resume, if the user answered anything other than ``"yes"`` the tool call is
+       skipped and a ``ToolMessage`` with ``INTERRUPT_CANCEL_MESSAGE`` is returned so
+       that ``cancel_human_validation_middleware`` can end the graph gracefully.
+    4. On confirmation the real tool is executed and any associated UI tools (e.g.
+       YAML diff viewers) are dispatched via ``_dispatch_ui_tools``.
+    """
 
     @wrap_tool_call
     async def human_validation(

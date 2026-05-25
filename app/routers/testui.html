@@ -34,10 +34,6 @@
             window.addEventListener('message', function(event) {
                 if (event.data.type === 'oauth_success' && event.data.access_token) {
                     const messages = document.getElementById('messages');
-
-                    // Send the access token via websocket
-                    ws.send('{"access_token": "' + event.data.access_token + '", "refresh_token": "' + event.data.refresh_token + '"}');
-
                     // Update UI to show authentication completed
                     const successLi = document.createElement('li');
                     successLi.textContent = 'Authentication successful! Token received.';

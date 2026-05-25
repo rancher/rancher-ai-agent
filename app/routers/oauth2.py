@@ -8,6 +8,10 @@ router = APIRouter()
 # In production, use Redis or a proper session store
 oauth_state_store = {}
 
+# Store for OAuth tokens keyed by cookie name, used to inject tokens into
+# the WebSocket cookies dict (which is frozen at connection time).
+oauth_token_store: dict[str, str] = {}
+
 @router.get("/oauth/callback")
 async def get(request: Request):
     """OAuth callback that returns HTML to communicate token back to parent window and stores tokens as httponly cookies."""
@@ -90,6 +94,11 @@ async def get(request: Request):
                     cookie_names["refresh_token"], refresh_token,
                     httponly=True, secure=is_secure, samesite="lax", path="/",
                 )
+
+            # Store the access token so the WebSocket handler can inject it
+            # into the connection's cookies (WebSocket cookies are frozen at
+            # handshake time and won't reflect new HTTP cookies).
+            oauth_token_store[cookie_names["access_token"]] = access_token
 
         return response
 

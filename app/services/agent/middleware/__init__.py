@@ -4,7 +4,7 @@ Middleware package for agent middleware factories and classes.
 See README.md for an overview of the middleware system and how to add new middleware.
 """
 
-from ._constants import INTERRUPT_CANCEL_MESSAGE
+from .._constants import INTERRUPT_CANCEL_MESSAGE
 from .messages_history import MessagesHistoryMiddleware
 from .inject_kwargs import inject_additional_kwargs_middleware
 from .cancel_human_validation import cancel_human_validation_middleware

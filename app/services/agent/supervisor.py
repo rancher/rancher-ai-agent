@@ -32,7 +32,7 @@ from .middleware import (
     inject_additional_kwargs_middleware,
     ui_tools_middleware
 )
-
+from ._constants import NeedsOauth2
 
 @dataclass
 class ChildAgent:
@@ -45,6 +45,7 @@ class ChildAgent:
     """
     config: AgentConfig
     agent: CompiledStateGraph
+    needs_oauth2: bool = False
 
 
 class SupervisorGraph:
@@ -56,13 +57,13 @@ class SupervisorGraph:
     methods to the underlying graph.
 
     Attributes:
-        child_agents: Mapping of agent names to their compiled graphs for direct routing.
+        child_agents: Mapping of agent names to their ChildAgent objects for direct routing.
     """
 
     def __init__(
         self,
         graph: CompiledStateGraph,
-        child_agents: dict[str, CompiledStateGraph],
+        child_agents: dict[str, "ChildAgent"],
     ):
         self._graph = graph
         self.child_agents = child_agents
@@ -227,15 +228,19 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
       the supervisor level so the client receives the confirmation prompt.
     """
     agent_name = child_agent.config.name
-    compiled_graph = child_agent.agent
 
     async def _invoke(query: str) -> tuple[str, dict]:
+        # If this agent needs OAuth2 authentication, raise an error so the
+        # websocket handler can initiate the OAuth flow and reload the agent.
+        if child_agent.needs_oauth2:
+            raise NeedsOauth2(child_agent.config)
+
         child_config = _build_child_config(agent_name)
-        child_state = await compiled_graph.aget_state(config=child_config)
+        child_state = await child_agent.agent.aget_state(config=child_config)
 
         if child_state and child_state.interrupts:
             resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
-            result = await compiled_graph.ainvoke(Command(resume=resume_value), config=child_config)
+            result = await child_agent.agent.ainvoke(Command(resume=resume_value), config=child_config)
             # If the user declined, return the cancel message so the supervisor's
             # cancel_check_middleware ends the graph.
             for msg in reversed(result.get("messages", [])):
@@ -244,8 +249,9 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
                     return INTERRUPT_CANCEL_MESSAGE, {**_extract_tool_metadata(result), "mcp_response": None, "mcp_data": None}
         else:
             child_config["tags"] = ["no-stream"]
+            
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
-            result = await compiled_graph.ainvoke(
+            result = await child_agent.agent.ainvoke(
                 {"messages": [{"role": "user", "content": query}]},
                 config=child_config,
             )
@@ -256,7 +262,7 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
         # The child is called via ainvoke() (not as a subgraph), so a GraphInterrupt
         # raised inside it is suppressed and ainvoke() returns normally.  Re-trigger any
         # new interrupt at the supervisor level so the client receives the prompt.
-        child_state = await compiled_graph.aget_state(config=child_config)
+        child_state = await child_agent.agent.aget_state(config=child_config)
         if child_state and child_state.interrupts:
             logging.debug(f"Child agent '{agent_name}' raised a new interrupt — re-triggering at supervisor level")
             langgraph.types.interrupt(child_state.interrupts[0].value)

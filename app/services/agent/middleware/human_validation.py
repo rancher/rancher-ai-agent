@@ -12,7 +12,7 @@ from langchain_core.tools import BaseTool
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from ._constants import INTERRUPT_CANCEL_MESSAGE
+from .._constants import INTERRUPT_CANCEL_MESSAGE
 from ..loader import AgentConfig
 from .ui_tools import _dispatch_ui_tools
 

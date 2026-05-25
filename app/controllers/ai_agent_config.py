@@ -149,7 +149,7 @@ async def _validate(agent_config: AgentConfig) -> None:
     Raises:
         Exception: If the MCP server connection fails or tools cannot be retrieved
     """
-    client = create_mcp_client(agent_config)
+    client = await create_mcp_client(agent_config)
 
     # Test the connection by fetching available tools
     await client.get_tools()

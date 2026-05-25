@@ -482,9 +482,11 @@ class TestResolveTargetAgent:
 
     def test_supervisor_routes_to_known_child(self):
         child_graph = MagicMock()
+        child_agent = MagicMock()
+        child_agent.agent = child_graph
         supervisor = SupervisorGraph(
             graph=MagicMock(),
-            child_agents={"fleet": child_graph},
+            child_agents={"fleet": child_agent},
         )
         config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
         ws_request = WebSocketRequest(

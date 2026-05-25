@@ -5,8 +5,12 @@ import json
 from datetime import datetime
 
 from ..dependencies import get_llm
-from ..services.agent.factory import NoAgentAvailableError, build_agent
+from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
+from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.supervisor import SupervisorGraph
+from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
+from ..services.oauth2 import OAuthClient, discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri
+from .oauth2 import oauth_state_store, oauth_token_store
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -92,6 +96,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
     await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
 
+
     base_config = {
         "configurable": {
             "thread_id": thread_id,
@@ -104,6 +109,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         base_config["callbacks"] = [langfuse_handler]
 
     while True:
+        ws_request = None
         try:
             request = await websocket.receive_text()
             request_id = str(uuid.uuid4())
@@ -115,17 +121,51 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             target_agent, target_config = _resolve_target_agent(agent, config, ws_request)
             input_data = await _build_input_data(target_agent, target_config, ws_request)
 
-            await _call_agent(
-                agent=target_agent,
-                input_data=input_data,
-                config=target_config,
-                websocket=websocket)
+            try:
+                await _call_agent(
+                    agent=target_agent,
+                    input_data=input_data,
+                    config=target_config,
+                    websocket=websocket)
+            except NeedsOauth2 as e:
+                await _initiate_oauth_flow(e.agent_cfg, websocket)
+                # Wait for the user to complete OAuth (client sends a message after callback)
+                await websocket.receive_text()
+                # Inject the OAuth token into websocket.cookies since the
+                # WebSocket cookie dict is frozen at connection time and won't
+                # reflect cookies set during the HTTP OAuth callback.
+                await _inject_oauth_cookie(e.agent_cfg, websocket)
+                # Reload the agent's MCP tools and rebuild the child agent
+                child_graph = await reload_agent_tools(llm, e.agent_cfg, websocket)
+                if isinstance(agent, SupervisorGraph):
+                    child_agent_obj = agent.child_agents.get(e.agent_cfg.name)
+                    if child_agent_obj:
+                        child_agent_obj.needs_oauth2 = False
+                        child_agent_obj.agent = child_graph
+                else:
+                    agent = child_graph
+                logging.debug(f"Successfully authenticated and reloaded agent '{e.agent_cfg.name}'")
+
+                # Resume the agent from its last checkpoint (the tool call that
+                # triggered OAuth). Passing None lets LangGraph retry from the
+                # saved state rather than starting a new turn.
+                await _call_agent(
+                    agent=target_agent,
+                    input_data=None,
+                    config=target_config,
+                    websocket=websocket)
+
             
         except WebSocketDisconnect:
-            logging.info(f"Client {websocket.client.host} disconnected.")
+            logging.debug(f"Client {websocket.client.host} disconnected.")
 
             break
-        except Exception as e:
+
+        except Exception as oauth_err:
+            logging.error(f"OAuth flow failed for agent '{e.agent_cfg.name}': {oauth_err}")
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_text(f'<error>oauth2 error</error>')
+
             logging.error(f"An error occurred: {e}", exc_info=True)
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_text(f'<error>{json.dumps({"message": str(e)})}</error>')
@@ -176,6 +216,115 @@ async def _call_agent(
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
+
+
+async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
+    """
+    Initiate the OAuth2 authentication flow for an agent that requires it.
+
+    Performs OAuth discovery on the agent's MCP URL, generates the authorization URL,
+    stores the state for the callback, and sends the auth URL to the client.
+
+    Args:
+        agent_cfg: The agent configuration requiring OAuth2 authentication.
+        websocket: The WebSocket connection to send the auth URL to.
+    """
+    metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
+
+    # Get client credentials from the agent's authentication secret
+    if agent_cfg.authentication_secret:
+        credentials = get_oauth_client_credentials(agent_cfg.authentication_secret)
+        oauth_client = OAuthClient(
+            client_id=credentials.client_id,
+            client_secret=credentials.client_secret,
+            scope=credentials.scopes or None,
+        )
+    elif metadata.registration_endpoint:
+        # Dynamic client registration
+        redirect_uri = get_redirect_uri(websocket)
+        oauth_client = await OAuthClient.from_dynamic_registration(
+            registration_endpoint=metadata.registration_endpoint,
+            redirect_uri=redirect_uri,
+            scope=" ".join(metadata.required_scopes) if metadata.required_scopes else None,
+        )
+    else:
+        raise NoAgentAvailableError(
+            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret "
+            f"and the server does not support dynamic client registration."
+        )
+
+    auth_endpoint = metadata.authorization_endpoint
+    redirect_uri = get_redirect_uri(websocket)
+
+    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
+
+    cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
+    oauth_state_store[state] = {
+        "verifier": verifier,
+        "oauth_client": oauth_client,
+        "token_endpoint": metadata.token_endpoint,
+        "cookie_key": cookie_key,
+    }
+
+    await websocket.send_text(
+        f'<authentication>{{"type": "oauth2", "url": "{str(url)}", "agent": "{agent_cfg.name}"}}</authentication>'
+    )
+
+
+async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
+    """
+    Inject the OAuth access token into the WebSocket's cookies dict.
+
+    WebSocket cookies are frozen at handshake time so they never reflect cookies
+    set later by the HTTP OAuth callback. This reads the token from the shared
+    oauth_token_store (populated by the callback) and injects it so that
+    create_mcp_client can find it via websocket.cookies.get(...).
+    """
+    metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
+    cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
+    cookie_name = get_oauth_cookie_names(cookie_key)["access_token"]
+
+    token = oauth_token_store.pop(cookie_name, None)
+    if token:
+        websocket.cookies[cookie_name] = token
+        logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")
+    else:
+        logging.warning(f"No OAuth token found in store for agent '{agent_cfg.name}'")
+
+
+def _is_oauth_unauthorized_error(error: Exception) -> bool:
+    """
+    Check if an exception represents a 401 Unauthorized error from an MCP server.
+
+    Inspects the exception and its chain for HTTP 401 status codes or
+    'Unauthorized' indicators.
+    """
+    error_str = str(error)
+    if "401" in error_str or "Unauthorized" in error_str:
+        return True
+
+    # Check chained exceptions
+    cause = error.__cause__ or error.__context__
+    while cause:
+        cause_str = str(cause)
+        if "401" in cause_str or "Unauthorized" in cause_str:
+            return True
+        cause = cause.__cause__ or cause.__context__
+
+    return False
+
+
+def _find_oauth_agent_config(agent_name: str) -> AgentConfig | None:
+    """
+    Find the AgentConfig for a given agent name, but only if it uses OAuth2 authentication.
+
+    Returns None if the agent is not found or doesn't use OAuth2.
+    """
+    for cfg in load_agent_configs():
+        if cfg.name == agent_name and cfg.authentication == AuthenticationType.OAUTH2:
+            return cfg
+    return None
+
 
 def _should_stream_text(stream: dict) -> bool:
     """
@@ -404,9 +553,9 @@ def _resolve_target_agent(
         logging.debug(f"Requested agent '{requested_agent}' not found in child_agents, falling back to supervisor")
         return agent, config
 
-    child_graph = agent.child_agents[requested_agent]
+    child_agent = agent.child_agents[requested_agent]
 
-    return child_graph, config
+    return child_agent.agent, config
 
 
 async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:

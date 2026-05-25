@@ -24,6 +24,7 @@ class AuthenticationType(str, Enum):
     RANCHER = "RANCHER"
     BASIC = "BASIC"
     HEADER = "HEADER"
+    OAUTH2 = "OAUTH2"
 
 
 class ToolActionType(str, Enum):

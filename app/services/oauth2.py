@@ -489,8 +489,11 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
             f"OAuth secret '{secret_name}' in namespace '{AGENT_NAMESPACE}' is empty."
         )
 
-    if "clientId" in secret.data:
-        client_id = base64.b64decode(secret.data["clientId"]).decode('utf-8')
+    client_id = ""
+    client_secret = ""
+    scopes = ""
+    if "clientID" in secret.data:
+        client_id = base64.b64decode(secret.data["clientID"]).decode('utf-8')
     if "clientSecret" in secret.data:
         client_secret = base64.b64decode(secret.data["clientSecret"]).decode('utf-8')
     if 'scopes' in secret.data:

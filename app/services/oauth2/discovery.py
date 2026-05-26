@@ -1,98 +1,27 @@
 """
-MCP OAuth 2.0 Discovery and Client implementation.
+MCP OAuth 2.0 Discovery implementation.
 Implements the MCP specification for OAuth discovery:
 - Resource metadata discovery via WWW-Authenticate headers (RFC 9728 Section 5.1)
 - Resource metadata discovery via well-known URIs (RFC 9728)
 - Authorization server metadata discovery (RFC 8414)
-- Dynamic client registration (RFC 7591)
-- OAuth 2.0 Authorization Code flow with PKCE
 """
 
-import hashlib
-import base64
-import os
-import secrets
-import logging
 import re
+import logging
+
 import httpx
 
 from urllib.parse import urlparse
-from dataclasses import dataclass, field
-from authlib.integrations.httpx_client import AsyncOAuth2Client
-from kubernetes import client, config
 
-AGENT_NAMESPACE = "cattle-ai-agent-system"
+from .models import (
+    AuthorizationServerMetadata,
+    OAuthDiscoveryError,
+    OAuthDiscoveryResult,
+    ResourceMetadata,
+)
+from .utils import _get_tls_verify
 
 logger = logging.getLogger(__name__)
-
-class OAuthDiscoveryError(Exception):
-    """Raised when OAuth discovery fails."""
-    pass
-
-
-@dataclass
-class ResourceMetadata:
-    """OAuth Protected Resource Metadata."""
-    resource: str = ""
-    authorization_servers: list[str] = field(default_factory=list)
-    scopes_supported: list[str] = field(default_factory=list)
-    bearer_methods_supported: list[str] = field(default_factory=list)
-
-
-@dataclass
-class AuthorizationServerMetadata:
-    """OAuth Authorization Server Metadata."""
-    issuer: str = ""
-    authorization_endpoint: str = ""
-    token_endpoint: str = ""
-    registration_endpoint: str | None = None
-    scopes_supported: list[str] = field(default_factory=list)
-    response_types_supported: list[str] = field(default_factory=list)
-    code_challenge_methods_supported: list[str] = field(default_factory=list)
-
-
-@dataclass
-class OAuthDiscoveryResult:
-    """Complete result of the MCP OAuth discovery process."""
-    authorization_endpoint: str
-    token_endpoint: str
-    registration_endpoint: str | None = None
-    scopes_supported: list[str] = field(default_factory=list)
-    required_scopes: list[str] = field(default_factory=list)
-    resource_metadata: ResourceMetadata | None = None
-    auth_server_metadata: AuthorizationServerMetadata | None = None
-
-
-@dataclass
-class OAuthClientCredentials:
-    """OAuth2 client credentials retrieved from a Kubernetes secret."""
-    client_id: str
-    client_secret: str = ""
-    scopes: str = ""
-
-
-OAUTH_COOKIE_PREFIX = "mcp_oauth"
-
-
-def generate_oauth_cookie_key(authorization_endpoint: str) -> str:
-    """Generate a short key for OAuth cookie names based on the authorization endpoint."""
-    return hashlib.sha256(authorization_endpoint.encode()).hexdigest()[:8]
-
-
-def get_oauth_cookie_names(cookie_key: str) -> dict[str, str]:
-    """
-    Get the cookie names for a given OAuth cookie key.
-    Returns a dict with keys: access_token, refresh_token.
-    """
-    return {
-        "access_token": f"{OAUTH_COOKIE_PREFIX}_at_{cookie_key}",
-        "refresh_token": f"{OAUTH_COOKIE_PREFIX}_rt_{cookie_key}",
-    }
-
-
-def _get_tls_verify() -> bool:
-    """Get TLS verification setting from environment."""
-    return os.environ.get('INSECURE_SKIP_TLS', 'false').lower() != 'true'
 
 
 def _parse_www_authenticate(header: str) -> tuple[str | None, list[str] | None]:
@@ -330,173 +259,3 @@ async def discover_oauth_metadata(mcp_url: str) -> OAuthDiscoveryResult:
             resource_metadata=None,
             auth_server_metadata=auth_server_metadata,
         )
-
-
-class OAuthClient:
-    """OAuth2 client with PKCE support for MCP server authentication."""
-
-    def __init__(self, client_id: str, client_secret: str = "", scope: str | None = None):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.scope = scope
-        self.client = AsyncOAuth2Client(
-            client_id=client_id,
-            client_secret=client_secret,
-            scope=scope,
-        )
-
-    @classmethod
-    async def from_dynamic_registration(
-        cls,
-        registration_endpoint: str,
-        redirect_uri: str,
-        client_name: str = "Rancher AI Agent",
-        scope: str | None = None,
-    ) -> "OAuthClient":
-        """
-        Create an OAuthClient via Dynamic Client Registration (RFC 7591).
-        Args:
-            registration_endpoint: The authorization server's registration endpoint.
-            redirect_uri: The redirect URI for the client.
-            client_name: Human-readable name for the client.
-            scope: Space-separated scopes to request.
-        Returns:
-            A configured OAuthClient with registered credentials.
-        Raises:
-            OAuthDiscoveryError: If registration fails.
-        """
-        async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:
-            registration_data = {
-                "client_name": client_name,
-                "redirect_uris": [redirect_uri],
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "token_endpoint_auth_method": "client_secret_basic",
-            }
-            if scope:
-                registration_data["scope"] = scope
-
-            try:
-                response = await http_client.post(registration_endpoint, json=registration_data)
-                response.raise_for_status()
-                data = response.json()
-
-                logger.info(f"Successfully registered OAuth client '{client_name}' at {registration_endpoint}")
-                return cls(
-                    client_id=data["client_id"],
-                    client_secret=data.get("client_secret", ""),
-                    scope=scope,
-                )
-            except (httpx.RequestError, httpx.HTTPStatusError, KeyError) as e:
-                raise OAuthDiscoveryError(
-                    f"Dynamic client registration failed at {registration_endpoint}: {e}"
-                )
-
-    def generate_pkce_pair(self) -> tuple[str, str]:
-        """Generate PKCE code_verifier and code_challenge pair."""
-        verifier = secrets.token_urlsafe(64)
-        sha256_hash = hashlib.sha256(verifier.encode('utf-8')).digest()
-        challenge = base64.urlsafe_b64encode(sha256_hash).decode('utf-8').replace('=', '')
-        return verifier, challenge
-
-    async def get_auth_url(self, auth_endpoint: str, redirect_uri: str) -> tuple[str, str, str]:
-        """
-        Create the authorization URL with PKCE.
-        Args:
-            auth_endpoint: The authorization endpoint URL.
-            redirect_uri: The redirect URI for the callback.
-        Returns:
-            Tuple of (authorization_url, code_verifier, state).
-        """
-        verifier, challenge = self.generate_pkce_pair()
-        state = secrets.token_urlsafe(16)
-
-        url, _ = self.client.create_authorization_url(
-            auth_endpoint,
-            redirect_uri=redirect_uri,
-            code_challenge=challenge,
-            code_challenge_method='S256',
-            state=state,
-        )
-        return url, verifier, state
-
-    async def fetch_token(self, token_endpoint: str, authorization_response: str, redirect_uri: str, verifier: str) -> dict:
-        """Exchange the authorization code for an access token using PKCE."""
-        token = await self.client.fetch_token(
-            token_endpoint,
-            authorization_response=authorization_response,
-            redirect_uri=redirect_uri,
-            code_verifier=verifier,
-        )
-        return token
-
-    async def refresh_token(self, token_endpoint: str, refresh_token: str) -> dict:
-        """Refresh the access token using a refresh token."""
-        token = await self.client.refresh_token(
-            token_endpoint,
-            refresh_token=refresh_token,
-        )
-        return token
-
-
-def get_redirect_uri(websocket=None) -> str:
-    """
-    Determine the OAuth redirect URI.
-    Priority:
-    1. OAUTH_REDIRECT_URI environment variable
-    2. Derived from WebSocket connection URL
-    3. Default localhost fallback
-    """
-    configured = os.environ.get("OAUTH_REDIRECT_URI")
-    if configured:
-        return configured
-
-    if websocket:
-        scheme = "https" if websocket.url.scheme == "wss" else "http"
-        host = websocket.url.hostname
-        port = websocket.url.port
-        port_str = f":{port}" if port and port not in (80, 443) else ""
-        return f"{scheme}://{host}{port_str}/oauth/callback"
-
-    # TODO figure out redirect, return error here!
-    return "http://localhost:8000/oauth/callback"
-
-
-def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
-    """
-    Retrieve OAuth2 client credentials from a Kubernetes secret.
-    The secret must contain a 'clientId' key (or legacy 'client_id') and
-    optionally a 'clientSecret' key (or legacy 'client_secret') and
-    a 'scopes' key containing a space-separated string of OAuth scopes.
-    Key names follow the AIAgentConfig CRD oauthSecret convention:
-        clientId, clientSecret, scopes
-    Args:
-        secret_name: Name of the secret in the agent namespace.
-    Returns:
-        OAuthClientCredentials with client_id, client_secret, and scopes.
-    """
-
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
-
-    v1 = client.CoreV1Api()
-    secret = v1.read_namespaced_secret(secret_name, AGENT_NAMESPACE)
-
-    if not secret.data:
-        raise RuntimeError(
-            f"OAuth secret '{secret_name}' in namespace '{AGENT_NAMESPACE}' is empty."
-        )
-
-    client_id = ""
-    client_secret = ""
-    scopes = ""
-    if "clientID" in secret.data:
-        client_id = base64.b64decode(secret.data["clientID"]).decode('utf-8')
-    if "clientSecret" in secret.data:
-        client_secret = base64.b64decode(secret.data["clientSecret"]).decode('utf-8')
-    if 'scopes' in secret.data:
-        scopes = base64.b64decode(secret.data['scopes']).decode('utf-8').strip()
-
-    return OAuthClientCredentials(client_id=client_id, client_secret=client_secret, scopes=scopes)

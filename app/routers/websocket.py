@@ -9,8 +9,7 @@ from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.supervisor import SupervisorGraph
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
-from ..services.oauth2 import OAuthClient, discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri
-from .oauth2 import oauth_state_store, oauth_token_store
+from ..services.oauth2 import OAuthClient, discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -128,13 +127,14 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                     config=target_config,
                     websocket=websocket)
             except NeedsOauth2 as e:
-                await _initiate_oauth_flow(e.agent_cfg, websocket)
-                # Wait for the user to complete OAuth (client sends a message after callback)
-                await websocket.receive_text()
-                # Inject the OAuth token into websocket.cookies since the
-                # WebSocket cookie dict is frozen at connection time and won't
-                # reflect cookies set during the HTTP OAuth callback.
-                await _inject_oauth_cookie(e.agent_cfg, websocket)
+                token_refreshed = await _initiate_oauth_flow(e.agent_cfg, websocket)
+                if not token_refreshed:
+                    # Wait for the user to complete OAuth (client sends a message after callback)
+                    await websocket.receive_text()
+                    # Inject the OAuth token into websocket.cookies since the
+                    # WebSocket cookie dict is frozen at connection time and won't
+                    # reflect cookies set during the HTTP OAuth callback.
+                    await _inject_oauth_cookie(e.agent_cfg, websocket)
                 # Reload the agent's MCP tools and rebuild the child agent
                 child_graph = await reload_agent_tools(llm, e.agent_cfg, websocket)
                 if isinstance(agent, SupervisorGraph):
@@ -218,17 +218,71 @@ async def _call_agent(
                 await websocket.send_text(interrupt_value)
 
 
-async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
+async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket) -> bool:
+    """
+    Attempt to refresh the OAuth2 access token using a stored refresh token.
+
+    Checks websocket cookies for an existing refresh token and, if found,
+    uses it to obtain a new access token without requiring user interaction.
+
+    Args:
+        agent_cfg: The agent configuration requiring OAuth2 authentication.
+        websocket: The WebSocket connection whose cookies may contain a refresh token.
+
+    Returns:
+        True if the token was successfully refreshed and injected, False otherwise.
+    """
+    try:
+        metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
+        cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
+        cookie_names = get_oauth_cookie_names(cookie_key)
+
+        refresh_token = websocket.cookies.get(cookie_names["refresh_token"])
+        if not refresh_token:
+            return False
+
+        # Send a custom message to the client so it can call the HTTP refresh
+        # endpoint to persist the new tokens as browser cookies.
+        refresh_data = json.dumps({"agent": agent_cfg.name})
+        await websocket.send_text(f'<token-refreshed>{refresh_data}</token-refreshed>')
+        # Wait for the refresh token response
+        #TODO check response!
+        response = await websocket.receive_text()
+
+        if response == "ok":
+            # The client has refreshed the token and set it as a cookie, so we can now inject it into the WebSocket's cookie dict for the agent to use.
+            await _inject_oauth_cookie(agent_cfg, websocket)
+
+
+        logging.debug(f"Successfully refreshed OAuth token for agent '{agent_cfg.name}'")
+        return True
+
+    except Exception as e:
+        logging.debug(f"Token refresh failed for agent '{agent_cfg.name}': {e}")
+        return False
+
+
+async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> bool:
     """
     Initiate the OAuth2 authentication flow for an agent that requires it.
 
-    Performs OAuth discovery on the agent's MCP URL, generates the authorization URL,
+    First attempts to refresh the access token using a stored refresh token.
+    If no refresh token is available or the refresh fails, performs the full
+    OAuth discovery on the agent's MCP URL, generates the authorization URL,
     stores the state for the callback, and sends the auth URL to the client.
 
     Args:
         agent_cfg: The agent configuration requiring OAuth2 authentication.
         websocket: The WebSocket connection to send the auth URL to.
+
+    Returns:
+        True if the token was silently refreshed (no user interaction needed),
+        False if the full OAuth flow was initiated and user action is required.
     """
+    # Try to refresh the token before initiating the full OAuth flow
+    if await _try_refresh_oauth_token(agent_cfg, websocket):
+        return True
+
     metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
 
     # Get client credentials from the agent's authentication secret
@@ -259,16 +313,17 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
 
     cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
-    oauth_state_store[state] = {
+    oauth_store.set_state(state, {
         "verifier": verifier,
         "oauth_client": oauth_client,
         "token_endpoint": metadata.token_endpoint,
         "cookie_key": cookie_key,
-    }
+    })
 
     await websocket.send_text(
         f'<authentication>{{"type": "oauth2", "url": "{str(url)}", "agent": "{agent_cfg.name}"}}</authentication>'
     )
+    return False
 
 
 async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
@@ -277,14 +332,14 @@ async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> 
 
     WebSocket cookies are frozen at handshake time so they never reflect cookies
     set later by the HTTP OAuth callback. This reads the token from the shared
-    oauth_token_store (populated by the callback) and injects it so that
+    oauth_store (populated by the callback) and injects it so that
     create_mcp_client can find it via websocket.cookies.get(...).
     """
     metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
     cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
     cookie_name = get_oauth_cookie_names(cookie_key)["access_token"]
 
-    token = oauth_token_store.pop(cookie_name, None)
+    token = oauth_store.pop_token(cookie_name)
     if token:
         websocket.cookies[cookie_name] = token
         logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")

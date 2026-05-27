@@ -1,8 +1,8 @@
 import json
 import logging
+import traceback
 from collections.abc import Callable
 from datetime import datetime
-
 import langgraph.types
 from langchain.agents.middleware import wrap_tool_call
 from langchain.messages import ToolMessage
@@ -98,6 +98,16 @@ def human_validation_middleware(
                 result.additional_kwargs = {**result.additional_kwargs, **additional_kwargs}
 
             return result
+        except ExceptionGroup as eg:
+            err  = f"Unexpected error during tool call errors: {[str(err) for err in eg.exceptions]}"
+            logging.error(f"Unexpected error during tool call: {err}")
+            
+            return ToolMessage(
+                content=err,
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+                additional_kwargs=additional_kwargs,
+            )
         except Exception as e:
             logging.error(f"unexpected error during tool call: {e}")
             return ToolMessage(

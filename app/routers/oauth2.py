@@ -1,16 +1,13 @@
+import logging
+
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
-from ..services.oauth2 import  get_redirect_uri, get_oauth_cookie_names
+from fastapi.responses import HTMLResponse, JSONResponse
+from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
+from ..services.oauth2 import OAuthClient, discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Temporary store for OAuth state and verifiers
-# In production, use Redis or a proper session store
-oauth_state_store = {}
-
-# Store for OAuth tokens keyed by cookie name, used to inject tokens into
-# the WebSocket cookies dict (which is frozen at connection time).
-oauth_token_store: dict[str, str] = {}
 
 @router.get("/oauth/callback")
 async def get(request: Request):
@@ -20,7 +17,7 @@ async def get(request: Request):
     state = request.query_params.get("state")
 
     # 2. Verify state to prevent CSRF attacks and retrieve stored data
-    oauth_data = oauth_state_store.pop(state, None)
+    oauth_data = oauth_store.pop_state(state)
     if not oauth_data:
         return HTMLResponse(content="""
             <!DOCTYPE html>
@@ -61,18 +58,11 @@ async def get(request: Request):
             <h2>Authentication Successful!</h2>
             <p>Closing window...</p>
             <script>
-                // Send the access token to the parent window
-                if (window.opener) {{
-                    window.opener.postMessage({{
-                        type: 'oauth_success',
-                        access_token: '{access_token}',
-                        refresh_token: '{refresh_token}',
-                    }}, '*');
-                    // Close the popup after a short delay
-                    window.close()
-                }} else {{
-                    document.body.innerHTML = '<h2>Authentication Successful!</h2><p>You can close this window now.</p>';
-                }}
+                // Send success signal to the parent window via BroadcastChannel
+                const channel = new BroadcastChannel('oauth_channel');
+                channel.postMessage({{ type: 'oauth_success' }});
+                channel.close();
+                window.close();
             </script>
         </body>
         </html>
@@ -89,16 +79,18 @@ async def get(request: Request):
                 cookie_names["access_token"], access_token,
                 httponly=True, secure=is_secure, samesite="lax", path="/",
             )
+            # Store the access token so the WebSocket handler can inject it
+            # into the connection's cookies (WebSocket cookies are frozen at
+            # handshake time and won't reflect new HTTP cookies).
+            oauth_store.set_token(cookie_names["access_token"], access_token)
+
             if refresh_token:
                 response.set_cookie(
                     cookie_names["refresh_token"], refresh_token,
                     httponly=True, secure=is_secure, samesite="lax", path="/",
                 )
+                oauth_store.set_token(cookie_names["refresh_token"], refresh_token)
 
-            # Store the access token so the WebSocket handler can inject it
-            # into the connection's cookies (WebSocket cookies are frozen at
-            # handshake time and won't reflect new HTTP cookies).
-            oauth_token_store[cookie_names["access_token"]] = access_token
 
         return response
 
@@ -114,3 +106,91 @@ async def get(request: Request):
             </body>
             </html>
         """, status_code=500)
+
+
+@router.post("/oauth/refresh")
+async def refresh_token_endpoint(request: Request):
+    """
+    Refresh the OAuth2 access token using the refresh token stored in cookies.
+
+    Expects a JSON body with 'agent' (the agent config name). The endpoint
+    resolves credentials from the agent's Kubernetes secret and performs
+    OAuth discovery to obtain the token endpoint.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    agent_name = body.get("agent", "")
+    if not agent_name:
+        return JSONResponse({"error": "Missing agent name"}, status_code=400)
+
+    # Find the agent config
+    agent_cfg = _find_oauth_agent_config(agent_name)
+    if not agent_cfg:
+        return JSONResponse({"error": f"Agent '{agent_name}' not found or not OAuth2"}, status_code=404)
+
+    if not agent_cfg.authentication_secret:
+        return JSONResponse({"error": f"Agent '{agent_name}' has no authentication secret"}, status_code=400)
+
+    # Discover OAuth metadata and resolve the cookie key
+    try:
+        metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
+    except Exception as e:
+        return JSONResponse({"error": f"OAuth discovery failed: {e}"}, status_code=502)
+
+    cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
+    cookie_names = get_oauth_cookie_names(cookie_key)
+
+    refresh_token_value = request.cookies.get(cookie_names["refresh_token"])
+    if not refresh_token_value:
+        return JSONResponse({"error": "No refresh token available"}, status_code=401)
+
+    # Build the OAuth client from the agent's credentials
+    credentials = get_oauth_client_credentials(agent_cfg.authentication_secret)
+    oauth_client = OAuthClient(
+        client_id=credentials.client_id,
+        client_secret=credentials.client_secret,
+        scope=credentials.scopes or None,
+    )
+
+    try:
+        token = await oauth_client.refresh_token(metadata.token_endpoint, refresh_token_value)
+    except Exception as e:
+        logger.debug(f"Token refresh failed for agent '{agent_name}': {e}")
+        return JSONResponse({"error": f"Token refresh failed: {e}"}, status_code=401)
+
+    access_token = token.get("access_token", "")
+    new_refresh_token = token.get("refresh_token", "")
+
+    if not access_token:
+        return JSONResponse({"error": "No access token in response"}, status_code=502)
+
+    response = JSONResponse({"status": "ok"})
+    is_secure = request.url.scheme == "https"
+
+    response.set_cookie(
+        cookie_names["access_token"], access_token,
+        httponly=True, secure=is_secure, samesite="lax", path="/",
+    )
+    # Also store in the token store so the WebSocket can pick it up
+    oauth_store.set_token(cookie_names["access_token"], access_token)
+
+    if new_refresh_token:
+        response.set_cookie(
+            cookie_names["refresh_token"], new_refresh_token,
+            httponly=True, secure=is_secure, samesite="lax", path="/",
+        )
+        oauth_store.set_token(cookie_names["refresh_token"], new_refresh_token)
+
+
+    return response
+
+
+def _find_oauth_agent_config(agent_name: str) -> AgentConfig | None:
+    """Find the AgentConfig for a given agent name if it uses OAuth2."""
+    for cfg in load_agent_configs():
+        if cfg.name == agent_name and cfg.authentication == AuthenticationType.OAUTH2:
+            return cfg
+    return None

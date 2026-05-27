@@ -165,6 +165,9 @@ def _find_last_mcp_data(state: AgentState[Any]) -> str | None:
             break
         if isinstance(msg, ToolMessage):
             data = getattr(msg, "additional_kwargs", {}).get("mcp_data")
+            if not data:
+                artifact = getattr(msg, "artifact", None) or {}
+                data = artifact.get("mcp_data")
             if data:
                 return data
     return None

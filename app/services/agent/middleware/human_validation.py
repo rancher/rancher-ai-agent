@@ -57,6 +57,16 @@ def human_validation_middleware(
 
         if interrupt_message:
             logging.debug(f"Confirmation interrupt triggered for tool '{tool_call['name']}'")
+            ui_tools_list: list[dict] = []
+            try:
+                ui_tools_list = _build_interrupt_ui_tools(interrupt_message, state, config)
+            except Exception as e:
+                logging.debug(
+                    f"Could not extract precomputed fields from interrupt message "
+                    f"and dispatch UI tools: {e}"
+                )
+            additional_kwargs["ui_tools"] = ui_tools_list
+            
             response = langgraph.types.interrupt(interrupt_message)
             additional_kwargs["interrupt_message"] = interrupt_message
             additional_kwargs["created_at"] = datetime.now().isoformat()
@@ -71,17 +81,6 @@ def human_validation_middleware(
                 )
 
             additional_kwargs["confirmation"] = True
-
-            ui_tools_list: list[dict] = []
-            try:
-                ui_tools_list = _build_interrupt_ui_tools(interrupt_message, state, config)
-            except Exception as e:
-                logging.debug(
-                    f"Could not extract precomputed fields from interrupt message "
-                    f"and dispatch UI tools: {e}"
-                )
-
-            additional_kwargs["ui_tools"] = ui_tools_list
 
         try:
             logging.debug("calling tool")

@@ -9,7 +9,7 @@ from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.supervisor import SupervisorGraph
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
-from ..services.oauth2 import OAuthClient, discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
+from ..services.oauth2 import OAuthClient, discover_oauth_metadata, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -233,9 +233,7 @@ async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket)
         True if the token was successfully refreshed and injected, False otherwise.
     """
     try:
-        metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
-        cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
-        cookie_names = get_oauth_cookie_names(cookie_key)
+        cookie_names = get_oauth_cookie_names(agent_cfg.name)
 
         refresh_token = websocket.cookies.get(cookie_names["refresh_token"])
         if not refresh_token:
@@ -312,7 +310,7 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
 
     url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
 
-    cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
+    cookie_key = agent_cfg.name
     oauth_store.set_state(state, {
         "verifier": verifier,
         "oauth_client": oauth_client,
@@ -335,9 +333,7 @@ async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     oauth_store (populated by the callback) and injects it so that
     create_mcp_client can find it via websocket.cookies.get(...).
     """
-    metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
-    cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
-    cookie_name = get_oauth_cookie_names(cookie_key)["access_token"]
+    cookie_name = get_oauth_cookie_names(agent_cfg.name)["access_token"]
 
     token = oauth_store.pop_token(cookie_name)
     if token:

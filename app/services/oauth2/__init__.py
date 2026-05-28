@@ -7,7 +7,6 @@ from .models import (
 )
 from .cookies import (
     OAUTH_COOKIE_PREFIX,
-    generate_oauth_cookie_key,
     get_oauth_cookie_names,
 )
 from .utils import (
@@ -34,7 +33,6 @@ __all__ = [
     "OAuthDiscoveryResult",
     "OAuthClientCredentials",
     "OAUTH_COOKIE_PREFIX",
-    "generate_oauth_cookie_key",
     "get_oauth_cookie_names",
     "AGENT_NAMESPACE",
     "_get_tls_verify",

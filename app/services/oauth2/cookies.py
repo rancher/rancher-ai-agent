@@ -1,14 +1,7 @@
 """OAuth cookie utilities."""
 
-import hashlib
-
 
 OAUTH_COOKIE_PREFIX = "mcp_oauth"
-
-
-def generate_oauth_cookie_key(authorization_endpoint: str) -> str:
-    """Generate a short key for OAuth cookie names based on the authorization endpoint."""
-    return hashlib.sha256(authorization_endpoint.encode()).hexdigest()[:8]
 
 
 def get_oauth_cookie_names(cookie_key: str) -> dict[str, str]:

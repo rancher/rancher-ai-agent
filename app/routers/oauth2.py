@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
-from ..services.oauth2 import OAuthClient, discover_oauth_metadata, generate_oauth_cookie_key, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
+from ..services.oauth2 import OAuthClient, discover_oauth_metadata, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +140,7 @@ async def refresh_token_endpoint(request: Request):
     except Exception as e:
         return JSONResponse({"error": f"OAuth discovery failed: {e}"}, status_code=502)
 
-    cookie_key = generate_oauth_cookie_key(metadata.authorization_endpoint)
-    cookie_names = get_oauth_cookie_names(cookie_key)
+    cookie_names = get_oauth_cookie_names(agent_cfg.name)
 
     refresh_token_value = request.cookies.get(cookie_names["refresh_token"])
     if not refresh_token_value:

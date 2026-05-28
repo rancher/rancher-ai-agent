@@ -8,8 +8,10 @@ from langchain.messages import ToolMessage
 
 from app.services.agent.middleware.ui_tools import (
     ui_tools_middleware,
+    _collect_all_mcp_responses,
     _collect_context_until_human,
     _extract_tool_text,
+    _find_last_mcp_data,
 )
 
 
@@ -199,3 +201,169 @@ def test_extract_tool_text_handles_native_list_input():
     result = _extract_tool_text(content)
 
     assert "native item" in result
+
+
+# ---------------------------------------------------------------------------
+# _collect_all_mcp_responses
+# ---------------------------------------------------------------------------
+
+def _tool_msg(mcp_response=None, artifact_mcp=None, tool_call_id="tc", name="tool"):
+    msg = ToolMessage(content="", tool_call_id=tool_call_id, name=name)
+    if mcp_response is not None:
+        msg.additional_kwargs["mcp_response"] = mcp_response
+    if artifact_mcp is not None:
+        msg.artifact = {"mcp_response": artifact_mcp}
+    return msg
+
+
+def test_collect_all_mcp_responses_returns_none_for_empty_messages():
+    result = _collect_all_mcp_responses({"messages": []})
+    assert result is None
+
+
+def test_collect_all_mcp_responses_returns_none_when_no_mcp():
+    state = {"messages": [HumanMessage(content="hi"), AIMessage(content="hello")]}
+    result = _collect_all_mcp_responses(state)
+    assert result is None
+
+
+def test_collect_all_mcp_responses_reads_from_additional_kwargs():
+    state = {"messages": [_tool_msg(mcp_response="resp-1")]}
+    result = _collect_all_mcp_responses(state)
+    assert result == "resp-1"
+
+
+def test_collect_all_mcp_responses_reads_from_artifact_fallback():
+    state = {"messages": [_tool_msg(artifact_mcp="resp-from-artifact")]}
+    result = _collect_all_mcp_responses(state)
+    assert result == "resp-from-artifact"
+
+
+def test_collect_all_mcp_responses_prefers_additional_kwargs_over_artifact():
+    state = {"messages": [_tool_msg(mcp_response="kwargs-resp", artifact_mcp="artifact-resp")]}
+    result = _collect_all_mcp_responses(state)
+    assert result == "kwargs-resp"
+
+
+def test_collect_all_mcp_responses_collects_multiple_in_order():
+    state = {
+        "messages": [
+            _tool_msg(mcp_response="resp-1", tool_call_id="tc1"),
+            _tool_msg(mcp_response="resp-2", tool_call_id="tc2"),
+            _tool_msg(mcp_response="resp-3", tool_call_id="tc3"),
+        ]
+    }
+    result = _collect_all_mcp_responses(state)
+    assert result == "resp-1\nresp-2\nresp-3"
+
+
+def test_collect_all_mcp_responses_deduplicates():
+    state = {
+        "messages": [
+            _tool_msg(mcp_response="resp-1", tool_call_id="tc1"),
+            _tool_msg(mcp_response="resp-1", tool_call_id="tc2"),
+            _tool_msg(mcp_response="resp-2", tool_call_id="tc3"),
+        ]
+    }
+    result = _collect_all_mcp_responses(state)
+    assert result == "resp-1\nresp-2"
+
+
+def test_collect_all_mcp_responses_limits_to_ten():
+    messages = [_tool_msg(mcp_response=f"resp-{i}", tool_call_id=f"tc{i}") for i in range(15)]
+    state = {"messages": messages}
+    result = _collect_all_mcp_responses(state)
+    # Should contain 10 entries separated by newline
+    assert result is not None
+    assert len(result.split("\n")) == 10
+
+
+def test_collect_all_mcp_responses_crosses_human_message_boundary():
+    """Verify collection does NOT stop at HumanMessage boundaries."""
+    state = {
+        "messages": [
+            _tool_msg(mcp_response="resp-old", tool_call_id="tc1"),
+            HumanMessage(content="question"),
+            _tool_msg(mcp_response="resp-new", tool_call_id="tc2"),
+        ]
+    }
+    result = _collect_all_mcp_responses(state)
+    assert "resp-old" in result
+    assert "resp-new" in result
+
+
+# ---------------------------------------------------------------------------
+# _find_last_mcp_data
+# ---------------------------------------------------------------------------
+
+def _tool_msg_data(mcp_data=None, artifact_data=None, tool_call_id="tc", name="tool"):
+    msg = ToolMessage(content="", tool_call_id=tool_call_id, name=name)
+    if mcp_data is not None:
+        msg.additional_kwargs["mcp_data"] = mcp_data
+    if artifact_data is not None:
+        msg.artifact = {"mcp_data": artifact_data}
+    return msg
+
+
+def test_find_last_mcp_data_returns_none_for_empty_messages():
+    result = _find_last_mcp_data({"messages": []})
+    assert result is None
+
+
+def test_find_last_mcp_data_returns_none_when_no_mcp_data():
+    state = {"messages": [HumanMessage(content="hi"), AIMessage(content="hello")]}
+    result = _find_last_mcp_data(state)
+    assert result is None
+
+
+def test_find_last_mcp_data_reads_from_additional_kwargs():
+    state = {"messages": [_tool_msg_data(mcp_data="data-1")]}
+    result = _find_last_mcp_data(state)
+    assert result == "data-1"
+
+
+def test_find_last_mcp_data_reads_from_artifact_fallback():
+    state = {"messages": [_tool_msg_data(artifact_data="artifact-data")]}
+    result = _find_last_mcp_data(state)
+    assert result == "artifact-data"
+
+
+def test_find_last_mcp_data_prefers_additional_kwargs_over_artifact():
+    state = {"messages": [_tool_msg_data(mcp_data="kwargs-data", artifact_data="artifact-data")]}
+    result = _find_last_mcp_data(state)
+    assert result == "kwargs-data"
+
+
+def test_find_last_mcp_data_returns_most_recent():
+    state = {
+        "messages": [
+            _tool_msg_data(mcp_data="data-old", tool_call_id="tc1"),
+            _tool_msg_data(mcp_data="data-new", tool_call_id="tc2"),
+        ]
+    }
+    result = _find_last_mcp_data(state)
+    assert result == "data-new"
+
+
+def test_find_last_mcp_data_stops_at_human_message():
+    """Verify search stops at the last HumanMessage (does not look further back)."""
+    state = {
+        "messages": [
+            _tool_msg_data(mcp_data="data-before-human", tool_call_id="tc1"),
+            HumanMessage(content="question"),
+            AIMessage(content="no data here"),
+        ]
+    }
+    result = _find_last_mcp_data(state)
+    assert result is None
+
+
+def test_find_last_mcp_data_skips_tool_messages_without_data():
+    state = {
+        "messages": [
+            _tool_msg_data(mcp_data="good-data", tool_call_id="tc1"),
+            _tool_msg_data(tool_call_id="tc2"),  # no data
+        ]
+    }
+    result = _find_last_mcp_data(state)
+    assert result == "good-data"

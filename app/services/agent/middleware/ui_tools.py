@@ -145,14 +145,17 @@ def _dispatch_ui_tools_event(
 
 
 def _collect_all_mcp_responses(state: AgentState[Any]) -> str | None:
-    """Collect all ``mcp_response`` values from ToolMessages since the last HumanMessage."""
-    responses = []
+    """Collect the last 10 unique ``mcp_response`` values from ToolMessages."""
+    responses: list[str] = []
     for msg in reversed(state.get("messages", [])):
-        if isinstance(msg, HumanMessage):
+        if len(responses) >= 10:
             break
         if isinstance(msg, ToolMessage):
             mcp = getattr(msg, "additional_kwargs", {}).get("mcp_response")
-            if mcp:
+            if not mcp:
+                artifact = getattr(msg, "artifact", None) or {}
+                mcp = artifact.get("mcp_response")
+            if mcp and mcp not in responses:
                 responses.append(mcp)
     responses.reverse()
     return "\n".join(responses) if responses else None

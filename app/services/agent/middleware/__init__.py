@@ -20,7 +20,6 @@ from .human_validation import (
     human_validation_middleware,
     _should_interrupt,
     _build_interrupt_ui_tools,
-    _build_agent_metadata,
     _process_tool_result,
     convert_to_string_if_needed,
 )

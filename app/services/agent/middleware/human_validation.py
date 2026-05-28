@@ -178,15 +178,6 @@ def _build_interrupt_ui_tools(
     _dispatch_ui_tools(ui_tools_list)
     return ui_tools_list
 
-
-def _build_agent_metadata(agent_name: str, selection_mode: str, extra_metadata: str = "") -> str:
-    """Build a structured agent metadata string for custom events."""
-    return (
-        f'<agent-metadata>{{"agentName": "{agent_name}", '
-        f'"selectionMode": "{selection_mode}"{extra_metadata}}}</agent-metadata>'
-    )
-
-
 def _process_tool_result(tool_result: str | list, state: dict) -> tuple[str, str | None, str | None]:
     """Process the raw tool result, extracting UI context and doc links if present.
 

@@ -13,6 +13,7 @@ from app.services.agent.supervisor import (
     _build_child_config,
     _extract_last_message,
     _create_agent_tool,
+    _AgentCallCounter,
 )
 from app.services.agent.loader import AgentConfig, AuthenticationType
 
@@ -160,7 +161,7 @@ def test_create_agent_tool_returns_structured_tool():
     config.description = "Rancher agent"
     child = ChildAgent(config=config, agent=MagicMock())
 
-    tool = _create_agent_tool(child)
+    tool = _create_agent_tool(child, _AgentCallCounter())
 
     assert tool.name == "rancher"
     assert "Rancher agent" in tool.description
@@ -180,7 +181,7 @@ async def test_invoke_normal_sends_messages_to_child(child_agent, mock_compiled_
         "messages": [AIMessage(content="Hello from child")]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-123"}
@@ -205,7 +206,7 @@ async def test_invoke_normal_uses_derived_thread_id(child_agent, mock_compiled_g
         "messages": [AIMessage(content="ok")]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "session-abc"}
@@ -234,7 +235,7 @@ async def test_invoke_returns_last_ai_content(child_agent, mock_compiled_graph):
         ]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
@@ -252,7 +253,7 @@ async def test_invoke_returns_fallback_when_no_content(child_agent, mock_compile
     mock_compiled_graph.aget_state.return_value = mock_state
     mock_compiled_graph.ainvoke.return_value = {"messages": []}
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
@@ -284,7 +285,7 @@ async def test_invoke_resume_detects_pending_interrupt(child_agent, mock_compile
         "messages": [AIMessage(content="Resource created successfully")]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-456"}
@@ -320,7 +321,7 @@ async def test_invoke_resume_passes_user_response_to_child(child_agent, mock_com
         "messages": [AIMessage(content="done")]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "t1"}
@@ -352,7 +353,7 @@ async def test_invoke_resume_uses_same_thread_id(child_agent, mock_compiled_grap
         "messages": [AIMessage(content="ok")]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "session-xyz"}
@@ -390,7 +391,7 @@ async def test_invoke_normal_child_interrupts_during_invocation(child_agent, moc
         "messages": [AIMessage(content="partial output")]
     }
 
-    tool = _create_agent_tool(child_agent)
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
 
     with patch("app.services.agent.supervisor.ensure_config", return_value={
         "configurable": {"thread_id": "parent-thread-789"}

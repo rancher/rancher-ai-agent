@@ -47,6 +47,22 @@ class ChildAgent:
     agent: CompiledStateGraph
 
 
+class _AgentCallCounter:
+    """Tracks consecutive calls to the same child agent."""
+
+    def __init__(self):
+        self.last_agent: str | None = None
+        self.count: int = 0
+
+    def record(self, agent_name: str) -> int:
+        if agent_name == self.last_agent:
+            self.count += 1
+        else:
+            self.last_agent = agent_name
+            self.count = 1
+        return self.count
+
+
 class SupervisorGraph:
     """
     Typed wrapper around the compiled supervisor agent graph.
@@ -94,7 +110,8 @@ def create_supervisor_agent(
     Returns:
         A compiled LangGraph StateGraph ready to be invoked.
     """
-    agent_tools = [_create_agent_tool(child) for child in child_agents]
+    call_counter = _AgentCallCounter()
+    agent_tools = [_create_agent_tool(child, call_counter) for child in child_agents]
     logging.info(
         "Supervisor agent created with %d agent tool(s): %s",
         len(agent_tools),
@@ -217,7 +234,7 @@ def _convert_tool_message_to_context(content: str) -> str:
     return f"\n[MCP result payloads]: {content}"
 
 
-def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
+def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter) -> BaseTool:
     """
     Wrap a child agent's compiled graph as a LangChain tool.
 
@@ -265,6 +282,15 @@ def _create_agent_tool(child_agent: ChildAgent) -> BaseTool:
             logging.debug(f"Child agent '{agent_name}' raised a new interrupt — re-triggering at supervisor level")
             langgraph.types.interrupt(child_state.interrupts[0].value)
 
+        # send recommendation event if the same agent is selected 3 times in a row
+        agent_selected_count = call_counter.record(agent_name)
+        if agent_selected_count >= 3:
+            recommended_field = f', "recommended": "{agent_name}"'
+            dispatch_custom_event(
+                "subagent_choice_event",
+                _build_agent_metadata(agent_name, "auto", recommended_field),
+            )
+
         return _extract_last_message(result), metadata
 
     return StructuredTool.from_function(
@@ -280,3 +306,10 @@ def _dispatch_subagent_event(tag: str, name: str, query: str | None = None) -> N
         payload: dict = {"name": name}
         payload["query"] = query
         dispatch_custom_event("subagent_call", f"<{tag}>{json.dumps(payload)}</{tag}>")
+
+def _build_agent_metadata(agent_name: str, selection_mode: str, extra_metadata: str = "") -> str:
+    """Build a structured agent metadata string for custom events."""
+    return (
+        f'<agent-metadata>{{"agentName": "{agent_name}", '
+        f'"selectionMode": "{selection_mode}"{extra_metadata}}}</agent-metadata>'
+    )

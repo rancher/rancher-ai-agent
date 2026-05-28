@@ -290,6 +290,7 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
                 "subagent_choice_event",
                 _build_agent_metadata(agent_name, "auto", recommended_field),
             )
+            call_counter.count = 0
 
         return _extract_last_message(result), metadata
 

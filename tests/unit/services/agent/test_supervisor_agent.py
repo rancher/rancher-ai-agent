@@ -402,3 +402,178 @@ async def test_invoke_normal_child_interrupts_during_invocation(child_agent, moc
     mock_interrupt_fn.assert_called_once_with(
         "<confirmation-response>create resource plan</confirmation-response>"
     )
+
+
+# ============================================================================
+# _AgentCallCounter Tests
+# ============================================================================
+
+def test_agent_call_counter_first_call_returns_one():
+    """First call to any agent returns count of 1."""
+    counter = _AgentCallCounter()
+    assert counter.record("agent-a") == 1
+
+
+def test_agent_call_counter_increments_on_same_agent():
+    """Consecutive calls to the same agent increment the counter."""
+    counter = _AgentCallCounter()
+    counter.record("agent-a")
+    counter.record("agent-a")
+    assert counter.record("agent-a") == 3
+
+
+def test_agent_call_counter_resets_on_different_agent():
+    """Switching to a different agent resets the counter to 1."""
+    counter = _AgentCallCounter()
+    counter.record("agent-a")
+    counter.record("agent-a")
+    assert counter.record("agent-b") == 1
+
+
+def test_agent_call_counter_resets_then_increments():
+    """After a reset, further calls to the new agent increment from 1."""
+    counter = _AgentCallCounter()
+    counter.record("agent-a")
+    counter.record("agent-a")
+    counter.record("agent-b")
+    assert counter.record("agent-b") == 2
+
+
+def test_agent_call_counter_initial_state():
+    """A new counter has no last_agent and count of 0."""
+    counter = _AgentCallCounter()
+    assert counter.last_agent is None
+    assert counter.count == 0
+
+
+# ============================================================================
+# Recommendation event dispatch Tests
+# ============================================================================
+
+def _make_normal_state_and_result(mock_compiled_graph):
+    """Configure mock_compiled_graph for a normal (no-interrupt) invocation."""
+    mock_state = MagicMock()
+    mock_state.interrupts = ()
+    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+
+
+@pytest.mark.asyncio
+async def test_recommendation_event_not_dispatched_on_first_call(child_agent, mock_compiled_graph):
+    """No subagent_choice_event is dispatched on the first call."""
+    _make_normal_state_and_result(mock_compiled_graph)
+    counter = _AgentCallCounter()
+    tool = _create_agent_tool(child_agent, counter)
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.dispatch_custom_event") as mock_dispatch:
+        await tool.ainvoke({"query": "q"})
+
+    event_calls = [c for c in mock_dispatch.call_args_list if c[0][0] == "subagent_choice_event"]
+    assert len(event_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_recommendation_event_not_dispatched_on_second_call(child_agent, mock_compiled_graph):
+    """No subagent_choice_event is dispatched on the second consecutive call."""
+    _make_normal_state_and_result(mock_compiled_graph)
+    counter = _AgentCallCounter()
+    tool = _create_agent_tool(child_agent, counter)
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.dispatch_custom_event") as mock_dispatch:
+        await tool.ainvoke({"query": "q"})
+        mock_compiled_graph.aget_state.return_value = MagicMock(interrupts=())
+        mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+        await tool.ainvoke({"query": "q"})
+
+    event_calls = [c for c in mock_dispatch.call_args_list if c[0][0] == "subagent_choice_event"]
+    assert len(event_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_recommendation_event_dispatched_on_third_call(child_agent, mock_compiled_graph):
+    """subagent_choice_event with recommended field is dispatched on the third consecutive call."""
+    counter = _AgentCallCounter()
+    tool = _create_agent_tool(child_agent, counter)
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.dispatch_custom_event") as mock_dispatch:
+        for _ in range(3):
+            mock_compiled_graph.aget_state.return_value = MagicMock(interrupts=())
+            mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+            await tool.ainvoke({"query": "q"})
+
+    event_calls = [c for c in mock_dispatch.call_args_list if c[0][0] == "subagent_choice_event"]
+    assert len(event_calls) == 1
+    payload = event_calls[0][0][1]
+    assert '"recommended"' in payload
+    assert child_agent.config.name in payload
+
+
+@pytest.mark.asyncio
+async def test_recommendation_event_not_dispatched_on_fourth_call(child_agent, mock_compiled_graph):
+    """After the recommendation is sent the counter resets; the 4th consecutive call does not fire another event."""
+    counter = _AgentCallCounter()
+    tool = _create_agent_tool(child_agent, counter)
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.dispatch_custom_event") as mock_dispatch:
+        for _ in range(4):
+            mock_compiled_graph.aget_state.return_value = MagicMock(interrupts=())
+            mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+            await tool.ainvoke({"query": "q"})
+
+    event_calls = [c for c in mock_dispatch.call_args_list if c[0][0] == "subagent_choice_event"]
+    assert len(event_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recommendation_event_dispatched_again_after_reset(child_agent, mock_compiled_graph):
+    """After the counter resets, three more consecutive calls trigger a second recommendation."""
+    counter = _AgentCallCounter()
+    tool = _create_agent_tool(child_agent, counter)
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.dispatch_custom_event") as mock_dispatch:
+        for _ in range(6):
+            mock_compiled_graph.aget_state.return_value = MagicMock(interrupts=())
+            mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+            await tool.ainvoke({"query": "q"})
+
+    event_calls = [c for c in mock_dispatch.call_args_list if c[0][0] == "subagent_choice_event"]
+    assert len(event_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_recommendation_event_not_dispatched_after_agent_switch(child_agent, mock_compiled_graph):
+    """After switching agents the counter resets; no event for the first two calls of the new agent."""
+    config_b = MagicMock()
+    config_b.name = "other-agent"
+    config_b.description = "Another agent"
+    child_b = ChildAgent(config=config_b, agent=mock_compiled_graph)
+
+    counter = _AgentCallCounter()
+    tool_a = _create_agent_tool(child_agent, counter)
+    tool_b = _create_agent_tool(child_b, counter)
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.dispatch_custom_event") as mock_dispatch:
+        # Call agent-a twice
+        for _ in range(2):
+            mock_compiled_graph.aget_state.return_value = MagicMock(interrupts=())
+            mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+            await tool_a.ainvoke({"query": "q"})
+        # Switch to agent-b — counter resets, no event expected
+        mock_compiled_graph.aget_state.return_value = MagicMock(interrupts=())
+        mock_compiled_graph.ainvoke.return_value = {"messages": [AIMessage(content="ok")]}
+        await tool_b.ainvoke({"query": "q"})
+
+    event_calls = [c for c in mock_dispatch.call_args_list if c[0][0] == "subagent_choice_event"]
+    assert len(event_calls) == 0

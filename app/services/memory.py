@@ -352,7 +352,7 @@ class MemoryManager:
                     "agent": message.additional_kwargs.get("selected_agent", ""),
                     "message": message.additional_kwargs.get("interrupt_message", ""),
                     "confirmation": message.additional_kwargs.get("confirmation", None),
-                    "tools": message.additional_kwargs.get("ui_tools", []),
+                    "tools": message.additional_kwargs.get("ui_tools", []) or (getattr(message, "artifact", None) or {}).get("ui_tools", []),
                     "createdAt": message.additional_kwargs.get("created_at"),
                 })
             

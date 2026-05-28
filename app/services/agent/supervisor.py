@@ -155,6 +155,7 @@ def _extract_tool_metadata(result: dict) -> dict:
     mcp_data = None
     interrupt_info = None
     created_at = None
+    ui_tools = None
 
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, HumanMessage):
@@ -173,12 +174,15 @@ def _extract_tool_metadata(result: dict) -> dict:
                     mcp_data = _convert_tool_message_to_context(data)
             if interrupt_info is None and "interrupt_message" in kwargs:
                 interrupt_info = {k: kwargs[k] for k in ("interrupt_message", "confirmation") if k in kwargs}
+            if ui_tools is None and "ui_tools" in kwargs:
+                ui_tools = kwargs.get("ui_tools")
 
     return {
         "mcp_response": mcp_response,
         "mcp_data": mcp_data,
         "interrupt_info": interrupt_info,
         "created_at": created_at,
+        "ui_tools": ui_tools,
     }
 
 def _convert_tool_message_to_context(content: str) -> str:

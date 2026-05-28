@@ -9,6 +9,10 @@ logger = logging.getLogger(__name__)
 _TTL_SECONDS = 600  # 10 minutes
 
 
+def _make_key(session_token: str, key: str) -> str:
+    return f"{session_token}:{key}"
+
+
 @dataclass
 class _StateEntry:
     """Bundles an OAuth state payload with the monotonic timestamp of its creation.
@@ -90,24 +94,24 @@ class OAuthTokenStore:
             del self._token_store[k]
             logger.debug(f"Evicted expired OAuth token: {k}")
 
-    def set_state(self, state: str, data: dict[str, Any]) -> None:
+    def set_state(self, state: str, data: dict[str, Any], session_token: str) -> None:
         """Store ``data`` under ``state``, overwriting any previous entry."""
         self._ensure_cleanup_running()
-        self._state_store[state] = _StateEntry(data=data)
+        self._state_store[_make_key(session_token, state)] = _StateEntry(data=data)
 
-    def pop_state(self, state: str) -> dict[str, Any] | None:
+    def pop_state(self, state: str, session_token: str) -> dict[str, Any] | None:
         """Remove and return the data for ``state``, or ``None`` if absent."""
-        entry = self._state_store.pop(state, None)
+        entry = self._state_store.pop(_make_key(session_token, state), None)
         return entry.data if entry else None
 
-    def set_token(self, cookie_name: str, token: str) -> None:
+    def set_token(self, cookie_name: str, token: str, session_token: str) -> None:
         """Store ``token`` under ``cookie_name``, overwriting any previous entry."""
         self._ensure_cleanup_running()
-        self._token_store[cookie_name] = _TokenEntry(token=token)
+        self._token_store[_make_key(session_token, cookie_name)] = _TokenEntry(token=token)
 
-    def pop_token(self, cookie_name: str) -> str | None:
+    def pop_token(self, cookie_name: str, session_token: str) -> str | None:
         """Remove and return the token for ``cookie_name``, or ``None`` if absent."""
-        entry = self._token_store.pop(cookie_name, None)
+        entry = self._token_store.pop(_make_key(session_token, cookie_name), None)
         return entry.token if entry else None
 
 

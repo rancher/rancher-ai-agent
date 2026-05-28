@@ -34,6 +34,7 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
     secret = v1.read_namespaced_secret(secret_name, AGENT_NAMESPACE)
 
     if not secret.data:
+        #TODO dont break the whole agent if the secret is misconfigured, just skip oauth and log an error
         raise RuntimeError(
             f"OAuth secret '{secret_name}' in namespace '{AGENT_NAMESPACE}' is empty."
         )

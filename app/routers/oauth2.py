@@ -17,7 +17,8 @@ async def get(request: Request):
     state = request.query_params.get("state")
 
     # 2. Verify state to prevent CSRF attacks and retrieve stored data
-    oauth_data = oauth_store.pop_state(state)
+    session_token = request.cookies.get("R_SESS", "")
+    oauth_data = oauth_store.pop_state(state, session_token)
     if not oauth_data:
         return HTMLResponse(content="""
             <!DOCTYPE html>
@@ -82,14 +83,14 @@ async def get(request: Request):
             # Store the access token so the WebSocket handler can inject it
             # into the connection's cookies (WebSocket cookies are frozen at
             # handshake time and won't reflect new HTTP cookies).
-            oauth_store.set_token(cookie_names["access_token"], access_token)
+            oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
 
             if refresh_token:
                 response.set_cookie(
                     cookie_names["refresh_token"], refresh_token,
                     httponly=True, secure=is_secure, samesite="lax", path="/",
                 )
-                oauth_store.set_token(cookie_names["refresh_token"], refresh_token)
+                oauth_store.set_token(cookie_names["refresh_token"], refresh_token, session_token)
 
 
         return response
@@ -174,14 +175,15 @@ async def refresh_token_endpoint(request: Request):
         httponly=True, secure=is_secure, samesite="lax", path="/",
     )
     # Also store in the token store so the WebSocket can pick it up
-    oauth_store.set_token(cookie_names["access_token"], access_token)
+    session_token = request.cookies.get("R_SESS", "")
+    oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
 
     if new_refresh_token:
         response.set_cookie(
             cookie_names["refresh_token"], new_refresh_token,
             httponly=True, secure=is_secure, samesite="lax", path="/",
         )
-        oauth_store.set_token(cookie_names["refresh_token"], new_refresh_token)
+        oauth_store.set_token(cookie_names["refresh_token"], new_refresh_token, session_token)
 
 
     return response

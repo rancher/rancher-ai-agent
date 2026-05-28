@@ -311,12 +311,13 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
 
     cookie_key = agent_cfg.name
+    session_token = websocket.cookies.get("R_SESS", "")
     oauth_store.set_state(state, {
         "verifier": verifier,
         "oauth_client": oauth_client,
         "token_endpoint": metadata.token_endpoint,
         "cookie_key": cookie_key,
-    })
+    }, session_token)
 
     await websocket.send_text(
         f'<authentication>{{"type": "oauth2", "url": "{str(url)}", "agent": "{agent_cfg.name}"}}</authentication>'
@@ -334,8 +335,8 @@ async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     create_mcp_client can find it via websocket.cookies.get(...).
     """
     cookie_name = get_oauth_cookie_names(agent_cfg.name)["access_token"]
-
-    token = oauth_store.pop_token(cookie_name)
+    session_token = websocket.cookies.get("R_SESS", "")
+    token = oauth_store.pop_token(cookie_name, session_token)
     if token:
         websocket.cookies[cookie_name] = token
         logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")

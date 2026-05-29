@@ -253,16 +253,24 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
     async def _invoke(query: str) -> tuple[str, dict]:
         child_config = _build_child_config(agent_name)
         child_state = await compiled_graph.aget_state(config=child_config)
+        interrupt_ui_tools: list[dict] = []
 
         if child_state and child_state.interrupts:
-            resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
+            interrupt_value = child_state.interrupts[0].value
+            if isinstance(interrupt_value, dict):
+                interrupt_ui_tools = interrupt_value.get("ui_tools", [])
+
+            resume_value = langgraph.types.interrupt(interrupt_value)
             result = await compiled_graph.ainvoke(Command(resume=resume_value), config=child_config)
             # If the user declined, return the cancel message so the supervisor's
             # cancel_check_middleware ends the graph.
             for msg in reversed(result.get("messages", [])):
                 if hasattr(msg, "content") and msg.content == INTERRUPT_CANCEL_MESSAGE:
                     logging.debug(f"Child agent '{agent_name}' was cancelled by the user")
-                    return INTERRUPT_CANCEL_MESSAGE, {**_extract_tool_metadata(result), "mcp_response": None, "mcp_data": None}
+                    metadata = {**_extract_tool_metadata(result), "mcp_response": None, "mcp_data": None}
+                    if not metadata.get("ui_tools") and interrupt_ui_tools:
+                        metadata["ui_tools"] = interrupt_ui_tools
+                    return INTERRUPT_CANCEL_MESSAGE, metadata
         else:
             child_config["tags"] = ["no-stream"]
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
@@ -273,6 +281,8 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
             _dispatch_subagent_event("processing-subagent-end", agent_name, query)
 
         metadata = _extract_tool_metadata(result)
+        if not metadata.get("ui_tools") and interrupt_ui_tools:
+            metadata["ui_tools"] = interrupt_ui_tools
 
         # The child is called via ainvoke() (not as a subgraph), so a GraphInterrupt
         # raised inside it is suppressed and ainvoke() returns normally.  Re-trigger any

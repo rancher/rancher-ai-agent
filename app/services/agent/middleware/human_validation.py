@@ -67,7 +67,10 @@ def human_validation_middleware(
                 )
             additional_kwargs["ui_tools"] = ui_tools_list
             
-            response = langgraph.types.interrupt(interrupt_message)
+            response = langgraph.types.interrupt({
+                "message": interrupt_message,
+                "ui_tools": ui_tools_list,
+            })
             additional_kwargs["interrupt_message"] = interrupt_message
             additional_kwargs["created_at"] = datetime.now().isoformat()
 

@@ -252,6 +252,8 @@ def _extract_interrupt_value(stream: dict) -> str | None:
     value = interrupts[0].value
     if value is None:
         return None
+    if isinstance(value, dict):
+        return value.get("message") or json.dumps(value)
     if isinstance(value, str):
         return value or None
     return json.dumps(value)

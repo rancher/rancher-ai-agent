@@ -339,7 +339,6 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
     Merges base configuration with request-specific settings including:
     - request_id for tracking individual requests
     - agent selection (if specified)
-    - ephemeral flag handling (prevents memory storage)
     - ui_tools configuration (name and list of tools sent from the client)
     
     Args:
@@ -370,11 +369,6 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
         config["configurable"]["agent"] = ws_request.agent
     else:
         config["configurable"]["agent"] = ""
-
-    # Exclude "ephemeral" messages from being stored in memory
-    tags = ws_request.tags or []
-    if "ephemeral" in tags:
-        config["configurable"]["thread_id"] = ""
     
     return config
 

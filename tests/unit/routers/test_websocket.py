@@ -431,15 +431,6 @@ class TestBuildConfig:
         result = _build_config(base_config, "req-2", ws_request)
         assert result["configurable"]["agent"] == "fleet"
 
-    def test_ephemeral_tag_clears_thread_id(self):
-        base_config = {"configurable": {"thread_id": "t1", "user_id": "u1"}}
-        ws_request = WebSocketRequest(
-            prompt="temp", user_input="temp", context={},
-            tags=["ephemeral"], labels={}, agent="", ui_tools={}
-        )
-        result = _build_config(base_config, "req-3", ws_request)
-        assert result["configurable"]["thread_id"] == ""
-
     def test_request_metadata_included(self):
         base_config = {"configurable": {"thread_id": "t1", "user_id": "u1"}}
         ws_request = WebSocketRequest(

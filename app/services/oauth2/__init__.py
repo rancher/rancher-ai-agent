@@ -1,5 +1,6 @@
 from .models import (
     OAuthDiscoveryError,
+    OAuthSecretError,
     ResourceMetadata,
     AuthorizationServerMetadata,
     OAuthDiscoveryResult,
@@ -28,6 +29,7 @@ from .store import oauth_store
 
 __all__ = [
     "OAuthDiscoveryError",
+    "OAuthSecretError",
     "ResourceMetadata",
     "AuthorizationServerMetadata",
     "OAuthDiscoveryResult",

@@ -4,8 +4,9 @@ import base64
 import logging
 
 from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
-from .models import OAuthClientCredentials
+from .models import OAuthClientCredentials, OAuthSecretError
 from .utils import AGENT_NAMESPACE
 
 logger = logging.getLogger(__name__)
@@ -31,13 +32,28 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
         config.load_kube_config()
 
     v1 = client.CoreV1Api()
-    secret = v1.read_namespaced_secret(secret_name, AGENT_NAMESPACE)
+    try:
+        secret = v1.read_namespaced_secret(secret_name, AGENT_NAMESPACE)
+    except ApiException as e:
+        if e.status == 404:
+            raise OAuthSecretError(
+                f"OAuth secret '{secret_name}' not found in namespace '{AGENT_NAMESPACE}'."
+            ) from e
+        raise
 
     if not secret.data:
-        #TODO dont break the whole agent if the secret is misconfigured, just skip oauth and log an error
-        raise RuntimeError(
-            f"OAuth secret '{secret_name}' in namespace '{AGENT_NAMESPACE}' is empty."
-        )
+        raise OAuthSecretError(
+                f"OAuth secret '{secret_name}' does not have data."
+            )
+    if not "clientID" in secret.data:
+        raise OAuthSecretError(
+                f"OAuth secret '{secret_name}' must contain 'clientId'."
+            )
+    if not "clientSecret" in secret.data:
+        raise OAuthSecretError(
+                f"OAuth secret '{secret_name}' must contain 'clientSecret'."
+            )
+
 
     client_id = ""
     client_secret = ""

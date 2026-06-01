@@ -8,6 +8,11 @@ class OAuthDiscoveryError(Exception):
     pass
 
 
+class OAuthSecretError(Exception):
+    """Raised when the OAuth credentials secret does not exist in Kubernetes."""
+    pass
+
+
 @dataclass
 class ResourceMetadata:
     """OAuth Protected Resource Metadata."""

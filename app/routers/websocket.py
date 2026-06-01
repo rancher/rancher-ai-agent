@@ -9,7 +9,7 @@ from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.supervisor import SupervisorGraph
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
-from ..services.oauth2 import OAuthClient, discover_oauth_metadata, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
+from ..services.oauth2 import OAuthClient, OAuthSecretError, discover_oauth_metadata, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -127,7 +127,12 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                     config=target_config,
                     websocket=websocket)
             except NeedsOauth2 as e:
-                token_refreshed = await _initiate_oauth_flow(e.agent_cfg, websocket)
+                try:
+                    token_refreshed = await _initiate_oauth_flow(e.agent_cfg, websocket)
+                except OAuthSecretError as secret_err:
+                    logging.error(f"OAuth secret not found for agent '{e.agent_cfg.name}': {secret_err}")
+                    await websocket.send_text(f'<error>{json.dumps({"message": str(secret_err)})}</error>')
+                    continue
                 if not token_refreshed:
                     # Wait for the user to complete OAuth (client sends a message after callback)
                     await websocket.receive_text()
@@ -157,15 +162,11 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
             
         except WebSocketDisconnect:
-            logging.debug(f"Client {websocket.client.host} disconnected.")
+            logging.debug(f"Client disconnected.")
 
             break
 
-        except Exception as oauth_err:
-            logging.error(f"OAuth flow failed for agent '{e.agent_cfg.name}': {oauth_err}")
-            if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.send_text(f'<error>oauth2 error</error>')
-
+        except Exception as e:
             logging.error(f"An error occurred: {e}", exc_info=True)
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_text(f'<error>{json.dumps({"message": str(e)})}</error>')

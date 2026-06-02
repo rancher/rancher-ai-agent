@@ -12,7 +12,7 @@ import kopf
 
 from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
-from ..services.agent.loader import AgentConfig, CABundleRef
+from ..services.agent.loader import AgentConfig, AuthenticationType, CABundleRef
 from ..services.agent.factory import create_mcp_client
 
 
@@ -201,11 +201,16 @@ async def create_fn(spec, name, namespace, logger, patch, **kwargs):
         for e in eg.exceptions:
             error_message += f"{str(e)} "
         error_msg = f"Failed to load MCP tools: {error_message}"
-        
-        # Update status to reflect the failure
-        _set_status(patch, False, 'ConfigurationFailed', error_msg)
-        logger.warning(error_msg)
 
-        raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}") 
+        if agent_config.authentication == AuthenticationType.OAUTH2 and (
+            "401" in error_message or "Unauthorized" in error_message
+        ):
+            _set_status(patch, True, 'ConfigurationSucceeded', 'Needs OAuth2 authentication')
+        else:
+            # Update status to reflect the failure
+            _set_status(patch, False, 'ConfigurationFailed', error_msg)
+            logger.warning(error_msg)
+
+            raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}") 
         
     

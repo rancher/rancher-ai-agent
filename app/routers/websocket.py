@@ -281,31 +281,43 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     # Try to refresh the token before initiating the full OAuth flow
     if await _try_refresh_oauth_token(agent_cfg, websocket):
         return True
-
+    
     metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
 
-    # Get client credentials from the agent's authentication secret
+    oauth_client = None
+    credentials = None
+
+    # Fetch credentials if a secret exists
     if agent_cfg.authentication_secret:
         credentials = get_oauth_client_credentials(agent_cfg.authentication_secret)
+
+    #  Try static client credentials first
+    if credentials and credentials.client_id and credentials.client_secret:
         oauth_client = OAuthClient(
             client_id=credentials.client_id,
             client_secret=credentials.client_secret,
-            scope=credentials.scopes or None,
-        )
-    elif metadata.registration_endpoint:
-        # Dynamic client registration
-        redirect_uri = get_redirect_uri(websocket)
-        oauth_client = await OAuthClient.from_dynamic_registration(
-            registration_endpoint=metadata.registration_endpoint,
-            redirect_uri=redirect_uri,
-            scope=" ".join(metadata.required_scopes) if metadata.required_scopes else None,
-        )
-    else:
-        raise NoAgentAvailableError(
-            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret "
-            f"and the server does not support dynamic client registration."
+            scope=credentials.scopes,
         )
 
+    # Fallback to dynamic client registration
+    elif metadata.registration_endpoint:
+        kwargs = {
+            "registration_endpoint": metadata.registration_endpoint,
+            "redirect_uri": get_redirect_uri(websocket),
+        }
+        
+        # Only inject scope if credentials were successfully fetched
+        if credentials:
+            kwargs["scope"] = credentials.scopes
+            
+        oauth_client = await OAuthClient.from_dynamic_registration(**kwargs)
+
+    if not oauth_client:
+        raise NoAgentAvailableError(
+            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret "
+            "and the server does not support dynamic client registration."
+        )
+    
     auth_endpoint = metadata.authorization_endpoint
     redirect_uri = get_redirect_uri(websocket)
 
@@ -343,40 +355,6 @@ async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> 
         logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")
     else:
         logging.warning(f"No OAuth token found in store for agent '{agent_cfg.name}'")
-
-
-def _is_oauth_unauthorized_error(error: Exception) -> bool:
-    """
-    Check if an exception represents a 401 Unauthorized error from an MCP server.
-
-    Inspects the exception and its chain for HTTP 401 status codes or
-    'Unauthorized' indicators.
-    """
-    error_str = str(error)
-    if "401" in error_str or "Unauthorized" in error_str:
-        return True
-
-    # Check chained exceptions
-    cause = error.__cause__ or error.__context__
-    while cause:
-        cause_str = str(cause)
-        if "401" in cause_str or "Unauthorized" in cause_str:
-            return True
-        cause = cause.__cause__ or cause.__context__
-
-    return False
-
-
-def _find_oauth_agent_config(agent_name: str) -> AgentConfig | None:
-    """
-    Find the AgentConfig for a given agent name, but only if it uses OAuth2 authentication.
-
-    Returns None if the agent is not found or doesn't use OAuth2.
-    """
-    for cfg in load_agent_configs():
-        if cfg.name == agent_name and cfg.authentication == AuthenticationType.OAUTH2:
-            return cfg
-    return None
 
 
 def _should_stream_text(stream: dict) -> bool:

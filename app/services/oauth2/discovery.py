@@ -227,8 +227,8 @@ async def discover_oauth_metadata(mcp_url: str) -> OAuthDiscoveryResult:
                 authorization_endpoint=auth_server_metadata.authorization_endpoint,
                 token_endpoint=auth_server_metadata.token_endpoint,
                 registration_endpoint=auth_server_metadata.registration_endpoint,
-                scopes_supported=auth_server_metadata.scopes_supported,
-                required_scopes=required_scopes or resource_metadata.scopes_supported,
+                scopes_supported=auth_server_metadata.scopes_supported or resource_metadata.scopes_supported,
+                required_scopes=required_scopes,
                 resource_metadata=resource_metadata,
                 auth_server_metadata=auth_server_metadata,
             )

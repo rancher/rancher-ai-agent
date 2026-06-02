@@ -62,8 +62,18 @@ class TestGetAuthUrl:
         assert "https://auth.example.com/authorize" in url
         assert "client_id=test-id" in url
         assert "code_challenge_method=S256" in url
+        assert "scope=read" in url
         assert isinstance(verifier, str)
         assert isinstance(state, str)
+
+    @pytest.mark.asyncio
+    async def test_auth_url_without_scope(self):
+        client = OAuthClient(client_id="test-id")
+        url, _, _ = await client.get_auth_url(
+            auth_endpoint="https://auth.example.com/authorize",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert "scope=" not in url
 
 
 class TestDynamicRegistration:
@@ -138,3 +148,19 @@ class TestRefreshToken:
             refresh_token="old-rt",
         )
         assert token == expected_token
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_passes_scope(self):
+        client = OAuthClient(client_id="test-id", scope="read write")
+        expected_token = {"access_token": "new-at", "refresh_token": "new-rt"}
+        client.client.refresh_token = AsyncMock(return_value=expected_token)
+
+        await client.refresh_token(
+            token_endpoint="https://auth.example.com/token",
+            refresh_token="old-rt",
+        )
+        client.client.refresh_token.assert_called_once_with(
+            "https://auth.example.com/token",
+            refresh_token="old-rt",
+            scope="read write",
+        )

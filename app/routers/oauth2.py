@@ -152,7 +152,7 @@ async def refresh_token_endpoint(request: Request):
     oauth_client = OAuthClient(
         client_id=credentials.client_id,
         client_secret=credentials.client_secret,
-        scope=credentials.scopes or None,
+        scope=credentials.scopes,
     )
 
     try:

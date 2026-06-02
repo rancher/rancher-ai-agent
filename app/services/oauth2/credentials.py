@@ -45,15 +45,6 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
         raise OAuthSecretError(
                 f"OAuth secret '{secret_name}' does not have data."
             )
-    if not "clientID" in secret.data:
-        raise OAuthSecretError(
-                f"OAuth secret '{secret_name}' must contain 'clientId'."
-            )
-    if not "clientSecret" in secret.data:
-        raise OAuthSecretError(
-                f"OAuth secret '{secret_name}' must contain 'clientSecret'."
-            )
-
 
     client_id = ""
     client_secret = ""

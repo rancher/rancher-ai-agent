@@ -100,6 +100,7 @@ class OAuthClient:
             code_challenge=challenge,
             code_challenge_method='S256',
             state=state,
+            scope=self.scope,
         )
         return url, verifier, state
 
@@ -118,5 +119,6 @@ class OAuthClient:
         token = await self.client.refresh_token(
             token_endpoint,
             refresh_token=refresh_token,
+            scope=self.scope,
         )
         return token

@@ -370,6 +370,11 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
     else:
         config["configurable"]["agent"] = ""
     
+    # TODO remove ephemeral once welcome is in another API
+    tags = ws_request.tags or []
+    if "ephemeral" in tags:
+        config["configurable"]["thread_id"] = ""
+
     return config
 
 def _resolve_target_agent(

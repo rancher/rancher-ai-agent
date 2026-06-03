@@ -24,6 +24,7 @@ def inject_additional_kwargs_middleware():
 
         last_message.additional_kwargs["request_id"] = request_id
         last_message.additional_kwargs["created_at"] = datetime.now().isoformat()
+        last_message.additional_kwargs["request_metadata"] = config.get("configurable", {}).get("request_metadata", {})
 
         for msg in reversed(state["messages"][:-1]):
             if isinstance(msg, HumanMessage):

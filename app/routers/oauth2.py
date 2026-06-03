@@ -9,14 +9,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # one week in seconds
+
 @router.get("/oauth/callback")
 async def get(request: Request):
     """OAuth callback that returns HTML to communicate token back to parent window and stores tokens as httponly cookies."""
-    # 1. Get parameters from the URL
     code = request.query_params.get("code")
     state = request.query_params.get("state")
 
-    # 2. Verify state to prevent CSRF attacks and retrieve stored data
+    # Verify state to prevent CSRF attacks and retrieve stored data
     session_token = request.cookies.get("R_SESS", "")
     oauth_data = oauth_store.pop_state(state, session_token)
     if not oauth_data:
@@ -36,7 +37,7 @@ async def get(request: Request):
     token_endpoint = oauth_data["token_endpoint"]
     cookie_key = oauth_data.get("cookie_key", "")
 
-    # 3. Exchange the code for the actual Access Token
+    # Exchange the code for the actual Access Token
     redirect_uri = get_redirect_uri(request.url.hostname)
 
     try:
@@ -50,7 +51,7 @@ async def get(request: Request):
         access_token = token.get("access_token", "")
         refresh_token = token.get("refresh_token", "")
 
-        # Return HTML that sends token to parent and closes popup
+        # Return HTML that tells UI the token was received and it can close the popup.
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -76,19 +77,24 @@ async def get(request: Request):
             cookie_names = get_oauth_cookie_names(cookie_key)
             is_secure = request.url.scheme == "https"
 
-            response.set_cookie(
-                cookie_names["access_token"], access_token,
-                httponly=True, secure=is_secure, samesite="lax", path="/",
-            )
-            # Store the access token so the WebSocket handler can inject it
-            # into the connection's cookies (WebSocket cookies are frozen at
-            # handshake time and won't reflect new HTTP cookies).
-            oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
+            if access_token:
+                response.set_cookie(
+                    cookie_names["access_token"], access_token,
+                    httponly=True, secure=is_secure, samesite="strict", path="/",
+                    max_age=_COOKIE_MAX_AGE,
+                )
+                # Store the access token so the WebSocket handler can inject it
+                # into the connection's cookies (WebSocket cookies are frozen at
+                # handshake time and won't reflect new HTTP cookies).
+                oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
+            else:
+                logger.warning(f"No access token received")
 
             if refresh_token:
                 response.set_cookie(
                     cookie_names["refresh_token"], refresh_token,
-                    httponly=True, secure=is_secure, samesite="lax", path="/",
+                    httponly=True, secure=is_secure, samesite="strict", path="/",
+                    max_age=_COOKIE_MAX_AGE,
                 )
                 oauth_store.set_token(cookie_names["refresh_token"], refresh_token, session_token)
 
@@ -172,7 +178,8 @@ async def refresh_token_endpoint(request: Request):
 
     response.set_cookie(
         cookie_names["access_token"], access_token,
-        httponly=True, secure=is_secure, samesite="lax", path="/",
+        httponly=True, secure=is_secure, samesite="strict", path="/",
+        max_age=_COOKIE_MAX_AGE,
     )
     # Also store in the token store so the WebSocket can pick it up
     session_token = request.cookies.get("R_SESS", "")
@@ -181,7 +188,8 @@ async def refresh_token_endpoint(request: Request):
     if new_refresh_token:
         response.set_cookie(
             cookie_names["refresh_token"], new_refresh_token,
-            httponly=True, secure=is_secure, samesite="lax", path="/",
+            httponly=True, secure=is_secure, samesite="strict", path="/",
+            max_age=_COOKIE_MAX_AGE,
         )
         oauth_store.set_token(cookie_names["refresh_token"], new_refresh_token, session_token)
 

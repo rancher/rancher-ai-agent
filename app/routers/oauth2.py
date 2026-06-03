@@ -37,7 +37,7 @@ async def get(request: Request):
     cookie_key = oauth_data.get("cookie_key", "")
 
     # 3. Exchange the code for the actual Access Token
-    redirect_uri = get_redirect_uri()
+    redirect_uri = get_redirect_uri(request.url.hostname)
 
     try:
         token = await oauth_client.fetch_token(

@@ -303,7 +303,7 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     elif metadata.registration_endpoint:
         kwargs = {
             "registration_endpoint": metadata.registration_endpoint,
-            "redirect_uri": get_redirect_uri(websocket),
+            "redirect_uri": get_redirect_uri(websocket.url.hostname),
         }
         
         # Only inject scope if credentials were successfully fetched
@@ -319,7 +319,7 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
         )
     
     auth_endpoint = metadata.authorization_endpoint
-    redirect_uri = get_redirect_uri(websocket)
+    redirect_uri = get_redirect_uri(websocket.url.hostname)
 
     url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
 

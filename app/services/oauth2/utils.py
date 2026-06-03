@@ -11,24 +11,12 @@ def _get_tls_verify() -> bool:
     return os.environ.get('INSECURE_SKIP_TLS', 'false').lower() != 'true'
 
 
-def get_redirect_uri(websocket=None) -> str:
+def get_redirect_uri(url: str | None) -> str:
     """
     Determine the OAuth redirect URI.
-    Priority:
-    1. OAUTH_REDIRECT_URI environment variable
-    2. Derived from WebSocket connection URL
-    3. Default localhost fallback
     """
     configured = os.environ.get("OAUTH_REDIRECT_URI")
     if configured:
         return configured
 
-    if websocket:
-        scheme = "https" if websocket.url.scheme == "wss" else "http"
-        host = websocket.url.hostname
-        port = websocket.url.port
-        port_str = f":{port}" if port and port not in (80, 443) else ""
-        return f"{scheme}://{host}{port_str}/oauth/callback"
-
-    # TODO figure out redirect, return error here!
-    return "http://localhost:8000/oauth/callback"
+    return f"https://{url}/api/v1/namespaces/{AGENT_NAMESPACE}/services/http:rancher-ai-agent:80/proxy/oauth/callback"

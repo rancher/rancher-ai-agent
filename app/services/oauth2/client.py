@@ -2,6 +2,7 @@
 
 import hashlib
 import base64
+import os
 import secrets
 import logging
 
@@ -10,7 +11,6 @@ import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from .models import OAuthDiscoveryError
-from .utils import _get_tls_verify
 
 logger = logging.getLogger(__name__)
 
@@ -122,3 +122,8 @@ class OAuthClient:
             scope=self.scope,
         )
         return token
+
+
+def _get_tls_verify() -> bool:
+    """Get TLS verification setting from environment."""
+    return os.environ.get('INSECURE_SKIP_TLS', 'false').lower() != 'true'

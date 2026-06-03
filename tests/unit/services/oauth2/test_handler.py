@@ -1,5 +1,7 @@
 """Tests for app.services.oauth2.handler"""
 
+import os
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,9 +10,36 @@ from app.services.oauth2.handler import (
     _inject_oauth_cookie,
     _initiate_oauth_flow,
     _try_refresh_oauth_token,
+    get_redirect_uri,
     handle_oauth_authentication,
 )
 from app.services.oauth2.models import OAuthClientCredentials, OAuthDiscoveryResult, OAuthSecretError
+
+
+class TestGetRedirectUri:
+    def test_from_env_variable(self):
+        with patch.dict(os.environ, {"OAUTH_REDIRECT_URI": "https://custom.example.com/callback"}, clear=True):
+            assert get_redirect_uri() == "https://custom.example.com/callback"
+
+    def test_env_takes_priority_over_url(self):
+        with patch.dict(os.environ, {"OAUTH_REDIRECT_URI": "https://custom.example.com/callback"}, clear=True):
+            assert get_redirect_uri("mcp.example.com") == "https://custom.example.com/callback"
+
+    def test_from_hostname(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = get_redirect_uri("mcp.example.com")
+            assert result == (
+                "https://mcp.example.com/api/v1/namespaces/cattle-ai-agent-system"
+                "/services/http:rancher-ai-agent:80/proxy/oauth/callback"
+            )
+
+    def test_none_url_without_env(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = get_redirect_uri()
+            assert result == (
+                "https://None/api/v1/namespaces/cattle-ai-agent-system"
+                "/services/http:rancher-ai-agent:80/proxy/oauth/callback"
+            )
 
 
 def _make_agent_cfg(name="test-agent", mcp_url="https://mcp.example.com", authentication_secret=None):

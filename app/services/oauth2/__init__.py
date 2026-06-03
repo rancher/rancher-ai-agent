@@ -10,11 +10,9 @@ from .cookies import (
     OAUTH_COOKIE_PREFIX,
     get_oauth_cookie_names,
 )
-from .utils import (
-    AGENT_NAMESPACE,
-    _get_tls_verify,
-    get_redirect_uri,
-)
+from .credentials import AGENT_NAMESPACE
+from .client import _get_tls_verify
+from .handler import get_redirect_uri
 from .discovery import (
     _parse_www_authenticate,
     _discover_from_www_authenticate,

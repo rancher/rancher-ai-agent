@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 from fastapi import WebSocket
 
@@ -7,11 +8,9 @@ from ..agent._constants import NoAgentAvailableError
 from ..agent.loader import AgentConfig
 from .client import OAuthClient
 from .cookies import get_oauth_cookie_names
-from .credentials import get_oauth_client_credentials
+from .credentials import AGENT_NAMESPACE, get_oauth_client_credentials
 from .discovery import discover_oauth_metadata
 from .store import oauth_store
-from .utils import get_redirect_uri
-
 
 async def handle_oauth_authentication(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
     """
@@ -168,3 +167,12 @@ async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> 
         logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")
     else:
         logging.warning(f"No OAuth token found in store for agent '{agent_cfg.name}'")
+
+
+def get_redirect_uri(url: str | None = None) -> str:
+    """Determine the OAuth redirect URI."""
+    configured = os.environ.get("OAUTH_REDIRECT_URI")
+    if configured:
+        return configured
+
+    return f"https://{url}/api/v1/namespaces/{AGENT_NAMESPACE}/services/http:rancher-ai-agent:80/proxy/oauth/callback"

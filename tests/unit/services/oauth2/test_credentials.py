@@ -5,7 +5,7 @@ import base64
 import pytest
 from unittest.mock import patch, MagicMock
 
-from app.services.oauth2.credentials import get_oauth_client_credentials
+from app.services.oauth2.credentials import AGENT_NAMESPACE, get_oauth_client_credentials
 from app.services.oauth2.models import OAuthClientCredentials
 
 

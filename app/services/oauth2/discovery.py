@@ -19,7 +19,7 @@ from .models import (
     OAuthDiscoveryResult,
     ResourceMetadata,
 )
-from .utils import _get_tls_verify
+from .client import _get_tls_verify
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,8 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
 from .models import OAuthClientCredentials, OAuthSecretError
-from .utils import AGENT_NAMESPACE
+
+AGENT_NAMESPACE = "cattle-ai-agent-system"
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,7 @@ from ..dependencies import get_llm
 from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.supervisor import SupervisorGraph
-from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
-from ..services.oauth2 import OAuthClient, OAuthSecretError, discover_oauth_metadata, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
+from ..services.oauth2 import OAuthSecretError, handle_oauth_authentication
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -128,19 +127,11 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                     websocket=websocket)
             except NeedsOauth2 as e:
                 try:
-                    token_refreshed = await _initiate_oauth_flow(e.agent_cfg, websocket)
+                    await handle_oauth_authentication(e.agent_cfg, websocket)
                 except OAuthSecretError as secret_err:
                     logging.error(f"OAuth secret not found for agent '{e.agent_cfg.name}': {secret_err}")
                     await websocket.send_text(f'<error>{json.dumps({"message": str(secret_err)})}</error>')
                     continue
-                if not token_refreshed:
-                    # Wait for the user to complete OAuth (client sends a message after callback)
-                    await websocket.receive_text()
-                    # Inject the OAuth token into websocket.cookies since the
-                    # WebSocket cookie dict is frozen at connection time and won't
-                    # reflect cookies set during the HTTP OAuth callback.
-                    await _inject_oauth_cookie(e.agent_cfg, websocket)
-                # Reload the agent's MCP tools and rebuild the child agent
                 child_graph = await reload_agent_tools(llm, e.agent_cfg, websocket)
                 if isinstance(agent, SupervisorGraph):
                     child_agent_obj = agent.child_agents.get(e.agent_cfg.name)
@@ -217,144 +208,6 @@ async def _call_agent(
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
-
-
-async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket) -> bool:
-    """
-    Attempt to refresh the OAuth2 access token using a stored refresh token.
-
-    Checks websocket cookies for an existing refresh token and, if found,
-    uses it to obtain a new access token without requiring user interaction.
-
-    Args:
-        agent_cfg: The agent configuration requiring OAuth2 authentication.
-        websocket: The WebSocket connection whose cookies may contain a refresh token.
-
-    Returns:
-        True if the token was successfully refreshed and injected, False otherwise.
-    """
-    try:
-        cookie_names = get_oauth_cookie_names(agent_cfg.name)
-
-        refresh_token = websocket.cookies.get(cookie_names["refresh_token"])
-        if not refresh_token:
-            return False
-
-        # Send a custom message to the client so it can call the HTTP refresh
-        # endpoint to persist the new tokens as browser cookies.
-        refresh_data = json.dumps({"agent": agent_cfg.name})
-        await websocket.send_text(f'<token-refreshed>{refresh_data}</token-refreshed>')
-        # Wait for the refresh token response
-        #TODO check response!
-        response = await websocket.receive_text()
-
-        if response == "ok":
-            # The client has refreshed the token and set it as a cookie, so we can now inject it into the WebSocket's cookie dict for the agent to use.
-            await _inject_oauth_cookie(agent_cfg, websocket)
-
-
-        logging.debug(f"Successfully refreshed OAuth token for agent '{agent_cfg.name}'")
-        return True
-
-    except Exception as e:
-        logging.debug(f"Token refresh failed for agent '{agent_cfg.name}': {e}")
-        return False
-
-
-async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> bool:
-    """
-    Initiate the OAuth2 authentication flow for an agent that requires it.
-
-    First attempts to refresh the access token using a stored refresh token.
-    If no refresh token is available or the refresh fails, performs the full
-    OAuth discovery on the agent's MCP URL, generates the authorization URL,
-    stores the state for the callback, and sends the auth URL to the client.
-
-    Args:
-        agent_cfg: The agent configuration requiring OAuth2 authentication.
-        websocket: The WebSocket connection to send the auth URL to.
-
-    Returns:
-        True if the token was silently refreshed (no user interaction needed),
-        False if the full OAuth flow was initiated and user action is required.
-    """
-    # Try to refresh the token before initiating the full OAuth flow
-    if await _try_refresh_oauth_token(agent_cfg, websocket):
-        return True
-    
-    metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
-
-    oauth_client = None
-    credentials = None
-
-    # Fetch credentials if a secret exists
-    if agent_cfg.authentication_secret:
-        credentials = get_oauth_client_credentials(agent_cfg.authentication_secret)
-
-    #  Try static client credentials first
-    if credentials and credentials.client_id and credentials.client_secret:
-        oauth_client = OAuthClient(
-            client_id=credentials.client_id,
-            client_secret=credentials.client_secret,
-            scope=credentials.scopes,
-        )
-
-    # Fallback to dynamic client registration
-    elif metadata.registration_endpoint:
-        kwargs = {
-            "registration_endpoint": metadata.registration_endpoint,
-            "redirect_uri": get_redirect_uri(websocket.url.hostname),
-        }
-        
-        # Only inject scope if credentials were successfully fetched
-        if credentials:
-            kwargs["scope"] = credentials.scopes
-            
-        oauth_client = await OAuthClient.from_dynamic_registration(**kwargs)
-
-    if not oauth_client:
-        raise NoAgentAvailableError(
-            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret "
-            "and the server does not support dynamic client registration."
-        )
-    
-    auth_endpoint = metadata.authorization_endpoint
-    redirect_uri = get_redirect_uri(websocket.url.hostname)
-
-    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
-
-    cookie_key = agent_cfg.name
-    session_token = websocket.cookies.get("R_SESS", "")
-    oauth_store.set_state(state, {
-        "verifier": verifier,
-        "oauth_client": oauth_client,
-        "token_endpoint": metadata.token_endpoint,
-        "cookie_key": cookie_key,
-    }, session_token)
-
-    await websocket.send_text(
-        f'<authentication>{{"type": "oauth2", "url": "{str(url)}", "agent": "{agent_cfg.name}"}}</authentication>'
-    )
-    return False
-
-
-async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
-    """
-    Inject the OAuth access token into the WebSocket's cookies dict.
-
-    WebSocket cookies are frozen at handshake time so they never reflect cookies
-    set later by the HTTP OAuth callback. This reads the token from the shared
-    oauth_store (populated by the callback) and injects it so that
-    create_mcp_client can find it via websocket.cookies.get(...).
-    """
-    cookie_name = get_oauth_cookie_names(agent_cfg.name)["access_token"]
-    session_token = websocket.cookies.get("R_SESS", "")
-    token = oauth_store.pop_token(cookie_name, session_token)
-    if token:
-        websocket.cookies[cookie_name] = token
-        logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")
-    else:
-        logging.warning(f"No OAuth token found in store for agent '{agent_cfg.name}'")
 
 
 def _should_stream_text(stream: dict) -> bool:

@@ -26,6 +26,7 @@ from .discovery import (
 from .client import OAuthClient
 from .credentials import get_oauth_client_credentials
 from .store import oauth_store
+from .handler import handle_oauth_authentication
 
 __all__ = [
     "OAuthDiscoveryError",
@@ -48,4 +49,5 @@ __all__ = [
     "OAuthClient",
     "get_oauth_client_credentials",
     "oauth_store",
+    "handle_oauth_authentication",
 ]

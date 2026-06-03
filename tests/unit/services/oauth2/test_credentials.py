@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from app.services.oauth2.credentials import AGENT_NAMESPACE, get_oauth_client_credentials
-from app.services.oauth2.models import OAuthClientCredentials
+from app.services.oauth2.models import OAuthClientCredentials, OAuthSecretError
 
 
 class TestGetOAuthClientCredentials:
@@ -57,7 +57,7 @@ class TestGetOAuthClientCredentials:
         mock_v1.read_namespaced_secret.return_value = mock_secret
         mock_k8s_client.CoreV1Api.return_value = mock_v1
 
-        with pytest.raises(RuntimeError, match="is empty"):
+        with pytest.raises(OAuthSecretError, match="does not have data"):
             get_oauth_client_credentials("my-secret")
 
     @patch("app.services.oauth2.credentials.config")

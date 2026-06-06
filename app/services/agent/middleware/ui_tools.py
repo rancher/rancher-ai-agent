@@ -11,8 +11,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
-from ...ui_tools.loader import load_ui_tools_from_configmap
-from ...ui_tools.selector import create_ui_tools_selector, filter_tool
+from ...ui_tools.selector import create_ui_tools_selector
 
 
 def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
@@ -87,41 +86,9 @@ async def _dispatch_ui_tools_event(
 
         logging.debug(f"_dispatch_ui_tools_event: config={ui_tools_config}")
 
-        name = ui_tools_config.get("name", "")
-        tool_filters = ui_tools_config.get("tools", [])
-
-        if not name:
-            logging.debug("UI tools config name is missing, skipping ui tools dispatch")
+        selector = create_ui_tools_selector(llm, ui_tools_config)
+        if not selector:
             return []
-
-        if not tool_filters:
-            logging.debug("UI tools list is empty, skipping ui tools dispatch")
-            return []
-
-        ui_tools_config_data = load_ui_tools_from_configmap(name)
-
-        if not ui_tools_config_data or not ui_tools_config_data.config:
-            logging.debug(f"UI tools config {name} not found, skipping ui tools dispatch")
-            return []
-
-        if not ui_tools_config_data.config.enabled:
-            logging.debug(f"UI tools config {name} are disabled, skipping ui tools dispatch")
-            return []
-
-        filtered_tools = [t for t in ui_tools_config_data.tools if filter_tool(t, tool_filters)]
-        logging.debug(
-            f"Filtered UI tools: {[t.name for t in filtered_tools]} "
-            f"based on filters: {tool_filters}"
-        )
-
-        if not filtered_tools:
-            logging.debug("No UI tools available after filtering, skipping ui tools dispatch")
-            return []
-
-        system_prompt = ui_tools_config_data.config.system_prompt
-        max_tools = ui_tools_config_data.config.max_tools
-
-        selector = create_ui_tools_selector(llm, system_prompt=system_prompt or "", max_tools=max_tools)
 
         await adispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
@@ -134,7 +101,6 @@ async def _dispatch_ui_tools_event(
             context=context,
             mcp_response=mcp_response,
             mcp_data=mcp_data,
-            available_tools=filtered_tools,
         )
 
         _dispatch_ui_tools(ui_tools_list)

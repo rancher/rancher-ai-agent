@@ -266,6 +266,95 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /complete/plain:
+    post:
+      summary: Make a simple request to the LLM
+      description: Sends a prompt to the LLM and returns the response
+      operationId: complete_plain
+      tags:
+        - LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LLMRequest'
+      responses:
+        '200':
+          description: LLM response
+          content:
+            application/json:
+              schema:
+                type: string
+                description: The generated text response from the LLM
+                example: "This is the LLM response to your prompt"
+        '400':
+          description: Bad request - prompt is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /complete/ui-tools:
+    post:
+      summary: Select appropriate UI tools based user input
+      description: Uses the LLM to select appropriate UI tools based on the provided context and prompt
+      operationId: complete_ui_tools
+      tags:
+        - UI Tools
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UIToolsRequest'
+      responses:
+        '200':
+          description: List of selected UI tools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    toolName:
+                      type: string
+                      description: Name of the UI tool
+                    input:
+                      type: object
+                      description: Input parameters for the UI tool
+        '400':
+          description: Bad request - tools.name is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /llm/{llm_name}/models:
     get:
       summary: Get available models for an LLM provider
@@ -531,6 +620,62 @@ components:
       example:
         message: userId not found
 
+    LLMRequest:
+      type: object
+      description: Request model for simple LLM requests
+      properties:
+        prompt:
+          type: string
+          description: The prompt to send to the LLM
+      required:
+        - prompt
+      example:
+        prompt: "What is the capital of France?"
+
+    UIToolsConfig:
+      type: object
+      description: Configuration for UI tools selection
+      properties:
+        name:
+          type: string
+          description: Name of the UI tools configuration
+        tools:
+          type: array
+          nullable: true
+          description: Optional list of specific tools to consider
+          items:
+            type: string
+      required:
+        - name
+      example:
+        name: "default_tools"
+        tools: ["tool1", "tool2"]
+
+    UIToolsRequest:
+      type: object
+      description: Request model for UI tools selection
+      properties:
+        prompt:
+          type: string
+          description: The system prompt for tool selection
+        tools:
+          $ref: '#/components/schemas/UIToolsConfig'
+        context:
+          type: array
+          description: Context information for tool selection
+          items:
+            type: object
+      required:
+        - prompt
+        - tools
+        - context
+      example:
+        prompt: "Select the most appropriate tools for this context"
+        tools:
+          name: "default_tools"
+          tools: null
+        context: [{"key": "value"}]
+
     SettingsUpdate:
       type: object
       description: Configuration settings for the AI agent
@@ -607,5 +752,9 @@ tags:
     description: Chat management operations
   - name: Messages
     description: Message retrieval and filtering
+  - name: LLM
+    description: Large Language Model operations
+  - name: UI Tools
+    description: UI tools selection and management
   - name: Configuration
     description: LLM and agent configuration management

@@ -381,9 +381,9 @@ class TestParseWebsocketRequest:
         assert result.agent == "fleet"
 
     def test_json_request_with_tags(self):
-        request = json.dumps({"prompt": "hello", "tags": ["ephemeral"]})
+        request = json.dumps({"prompt": "hello", "tags": ["mytag"]})
         result = _parse_websocket_request(request)
-        assert result.tags == ["ephemeral"]
+        assert result.tags == ["mytag"]
 
     def test_json_request_with_labels(self):
         request = json.dumps({"prompt": "hello", "labels": {"source": "ui"}})
@@ -450,7 +450,7 @@ class TestBuildConfig:
         base_config = {"configurable": {"thread_id": "t1", "user_id": "u1"}}
         ws_request = WebSocketRequest(
             prompt="hello", user_input="hello", context={},
-            tags=["ephemeral"], labels={}, agent="fleet", ui_tools={}
+            tags=["mytag"], labels={}, agent="fleet", ui_tools={}
         )
         _build_config(base_config, "req-5", ws_request)
         assert base_config["configurable"]["thread_id"] == "t1"

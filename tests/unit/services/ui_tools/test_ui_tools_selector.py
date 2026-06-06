@@ -301,7 +301,7 @@ class TestUIToolsSelectorInitialization:
     def test_selector_initialization(self, mock_llm):
         """Test selector initialization."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "Test prompt", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "Test prompt", [], max_tools=5)
         
         assert selector.llm == mock_llm
         assert selector.max_tools == 5
@@ -311,7 +311,7 @@ class TestUIToolsSelectorInitialization:
     def test_selector_initialization_with_zero_max_tools(self, mock_llm):
         """Test selector with zero max_tools (unlimited)."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "Test prompt", max_tools=0)
+        selector = UIToolsSelector(mock_llm, "Test prompt", [], max_tools=0)
         
         assert selector.max_tools is None
     
@@ -319,7 +319,7 @@ class TestUIToolsSelectorInitialization:
         """Test selector with custom prompt."""
         from app.services.ui_tools.selector import UIToolsSelector
         custom_prompt = "Custom system prompt"
-        selector = UIToolsSelector(mock_llm, custom_prompt, max_tools=5)
+        selector = UIToolsSelector(mock_llm, custom_prompt, [], max_tools=5)
         
         assert custom_prompt in selector.system_prompt
         assert "UI component selector" in selector.system_prompt
@@ -331,7 +331,7 @@ class TestUIToolsSelectorPromptBuilding:
     def test_build_default_system_prompt(self, mock_llm):
         """Test default system prompt building."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         prompt = selector.system_prompt
         assert "UI component selector" in prompt
@@ -342,7 +342,7 @@ class TestUIToolsSelectorPromptBuilding:
     def test_build_system_prompt_without_max_tools(self, mock_llm):
         """Test system prompt when max_tools is 0 (unlimited)."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=0)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=0)
         
         prompt = selector.system_prompt
         assert "at most" not in prompt
@@ -350,7 +350,7 @@ class TestUIToolsSelectorPromptBuilding:
     def test_build_text_prompt(self, mock_llm, agent_config, sample_ui_tool):
         """Test text prompt building."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         context = "Showing pod nginx-pod"
         text_prompt = selector._build_text_prompt(context, None)
@@ -361,7 +361,7 @@ class TestUIToolsSelectorPromptBuilding:
     def test_build_text_prompt_with_mcp_response(self, mock_llm, agent_config):
         """Test text prompt with MCP response."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         context = "Got resources"
         mcp_response = "MCP Response data"
@@ -381,7 +381,7 @@ class TestUIToolsSelectorToolSelection:
     ):
         """Test successful tool selection."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [sample_ui_tool], max_tools=5)
         
         # Mock LLM response with tool calls
         response = MagicMock()
@@ -397,7 +397,7 @@ class TestUIToolsSelectorToolSelection:
         ]
         mock_validator.return_value = mock_validator_instance
         
-        result = await selector.select_tools("test context", None, available_tools=[sample_ui_tool])
+        result = await selector.select_tools("test context", None)
         
         assert len(result) == 1
         assert result[0]["toolName"] == "show-yaml"
@@ -407,9 +407,9 @@ class TestUIToolsSelectorToolSelection:
     async def test_select_tools_no_available_tools(self, mock_validator, mock_llm, agent_config):
         """Test tool selection with no available tools."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
-        result = await selector.select_tools("test context", None, available_tools=[])
+        result = await selector.select_tools("test context", None)
         
         assert result == []
     
@@ -418,11 +418,11 @@ class TestUIToolsSelectorToolSelection:
     async def test_select_tools_error_handling(self, mock_validator, mock_llm, agent_config, sample_ui_tool):
         """Test error handling in tool selection."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [sample_ui_tool], max_tools=5)
         
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(side_effect=Exception("LLM error"))
         
-        result = await selector.select_tools("test context", None, available_tools=[sample_ui_tool])
+        result = await selector.select_tools("test context", None)
         
         assert result == []
     
@@ -433,7 +433,7 @@ class TestUIToolsSelectorToolSelection:
     ):
         """Test when LLM response has no tool calls."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [sample_ui_tool], max_tools=5)
         
         response = MagicMock()
         response.tool_calls = []
@@ -443,7 +443,7 @@ class TestUIToolsSelectorToolSelection:
         mock_validator_instance.validate_tool_calls.return_value = []
         mock_validator.return_value = mock_validator_instance
         
-        result = await selector.select_tools("test context", None, available_tools=[sample_ui_tool])
+        result = await selector.select_tools("test context", None)
         
         assert result == []
 
@@ -454,7 +454,7 @@ class TestExtractToolCalls:
     def test_extract_tool_calls_from_response(self, mock_llm, sample_ui_tool):
         """Test extracting tool calls from LLM response."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         response = MagicMock()
         response.tool_calls = [
@@ -470,7 +470,7 @@ class TestExtractToolCalls:
     def test_extract_tool_calls_alternative_format(self, mock_llm, sample_ui_tool):
         """Test extracting tool calls with alternative format."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         response = MagicMock()
         response.tool_calls = [
@@ -485,7 +485,7 @@ class TestExtractToolCalls:
     def test_extract_tool_calls_filter_unknown_tools(self, mock_llm, sample_ui_tool):
         """Test filtering out unknown tools."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         response = MagicMock()
         response.tool_calls = [
@@ -502,7 +502,7 @@ class TestExtractToolCalls:
     def test_extract_tool_calls_no_tool_calls(self, mock_llm, sample_ui_tool):
         """Test extracting when no tool calls present."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         response = MagicMock()
         response.tool_calls = None
@@ -519,7 +519,7 @@ class TestSanitizeUITools:
     def test_sanitize_deduplicates_tools(self, mock_validator, mock_llm, sample_ui_tool):
         """Test deduplication of identical tool calls."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         tool_calls = [
             UIToolCall(tool_name="show-yaml", input={"name": "pod-1"}),
@@ -550,7 +550,7 @@ class TestSanitizeUITools:
             category="editor", schema=schema, metadata={}, enabled=True
         )
         
-        selector = UIToolsSelector(mock_llm, "", max_tools=2)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=2)
         
         # Create tools with 3 unique tool names (should be capped to 2)
         tools = [
@@ -588,7 +588,7 @@ class TestSanitizeUITools:
             category="viewer", schema=schema, metadata={}, enabled=True
         )
         
-        selector = UIToolsSelector(mock_llm, "", max_tools=1)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=1)
         
         tools = [
             UIToolCall(tool_name="tool1", input={"param": "val1"}),
@@ -614,7 +614,7 @@ class TestSanitizeUITools:
     def test_sanitize_empty_list(self, mock_validator, mock_llm, sample_ui_tool):
         """Test sanitizing empty tool list."""
         from app.services.ui_tools.selector import UIToolsSelector
-        selector = UIToolsSelector(mock_llm, "", max_tools=5)
+        selector = UIToolsSelector(mock_llm, "", [], max_tools=5)
         
         mock_validator_instance = MagicMock()
         mock_validator_instance.validate_tool_calls.return_value = []
@@ -635,25 +635,198 @@ class TestCreateUIToolsSelector:
     def test_create_selector_with_defaults(self, mock_llm):
         """Test creating selector with default parameters."""
         from app.services.ui_tools.selector import create_ui_tools_selector
-        selector = create_ui_tools_selector(mock_llm, "Test prompt")
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
+        
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            schema = UIToolSchema(type="object", properties={}, required=[])
+            tool = UITool(
+                name="test-tool",
+                description="Test tool",
+                prompt="Test",
+                category="viewer",
+                schema=schema,
+                metadata={},
+                enabled=True
+            )
+            config = UIToolsConfig(enabled=True, max_tools=5)
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[tool])
+            
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["test-tool"]}, 
+                system_prompt="Test prompt"
+            )
         
         assert isinstance(selector, UIToolsSelector)
         assert selector.llm == mock_llm
         assert selector.max_tools == 5
+        assert "Test prompt" in selector.system_prompt
     
     def test_create_selector_with_custom_max_tools(self, mock_llm):
         """Test creating selector with custom max_tools."""
         from app.services.ui_tools.selector import create_ui_tools_selector
-        selector = create_ui_tools_selector(mock_llm, "Test prompt", max_tools=10)
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
+        
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            schema = UIToolSchema(type="object", properties={}, required=[])
+            tool = UITool(
+                name="test-tool",
+                description="Test tool",
+                prompt="Test",
+                category="viewer",
+                schema=schema,
+                metadata={},
+                enabled=True
+            )
+            config = UIToolsConfig(enabled=True, max_tools=10)
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[tool])
+            
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["test-tool"]}, 
+                system_prompt="Test prompt"
+            )
         
         assert selector.max_tools == 10
     
     def test_create_selector_with_unlimited_tools(self, mock_llm):
         """Test creating selector with unlimited tools."""
         from app.services.ui_tools.selector import create_ui_tools_selector
-        selector = create_ui_tools_selector(mock_llm, "Test prompt", max_tools=0)
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
         
-        assert selector.max_tools is None
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            schema = UIToolSchema(type="object", properties={}, required=[])
+            tool = UITool(
+                name="test-tool",
+                description="Test tool",
+                prompt="Test",
+                category="viewer",
+                schema=schema,
+                metadata={},
+                enabled=True
+            )
+            config = UIToolsConfig(enabled=True, max_tools=0)  # 0 in config defaults to 5
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[tool])
+            
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["test-tool"]}, 
+                system_prompt="Test prompt"
+            )
+        
+        # When config max_tools=0, factory applies 'or 5' so it becomes 5
+        assert selector.max_tools == 5
+    
+    def test_create_selector_missing_name(self, mock_llm):
+        """Test that selector returns None when name is missing."""
+        from app.services.ui_tools.selector import create_ui_tools_selector
+        
+        selector = create_ui_tools_selector(
+            mock_llm, 
+            {"tools": ["test-tool"]},  # name missing
+            system_prompt="Test prompt"
+        )
+        
+        assert selector is None
+    
+    def test_create_selector_empty_tool_filters(self, mock_llm):
+        """Test that selector returns None when tool_filters is empty."""
+        from app.services.ui_tools.selector import create_ui_tools_selector
+        
+        selector = create_ui_tools_selector(
+            mock_llm, 
+            {"name": "test", "tools": []},  # empty tools list
+            system_prompt="Test prompt"
+        )
+        
+        assert selector is None
+    
+    def test_create_selector_config_not_found(self, mock_llm):
+        """Test that selector returns None when config is not found in configmap."""
+        from app.services.ui_tools.selector import create_ui_tools_selector
+        
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            mock_load.return_value = None  # config not found
+            
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["test-tool"]}, 
+                system_prompt="Test prompt"
+            )
+        
+        assert selector is None
+    
+    def test_create_selector_config_no_config_object(self, mock_llm):
+        """Test that selector returns None when ConfigData has no config object."""
+        from app.services.ui_tools.selector import create_ui_tools_selector
+        from app.services.ui_tools.models import UIToolsConfigData
+        
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            # ConfigData exists but config is None
+            mock_load.return_value = UIToolsConfigData(config=None, tools=[])
+            
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["test-tool"]}, 
+                system_prompt="Test prompt"
+            )
+        
+        assert selector is None
+    
+    def test_create_selector_config_disabled(self, mock_llm):
+        """Test that selector returns None when config is disabled."""
+        from app.services.ui_tools.selector import create_ui_tools_selector
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
+        
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            schema = UIToolSchema(type="object", properties={}, required=[])
+            tool = UITool(
+                name="test-tool",
+                description="Test tool",
+                prompt="Test",
+                category="viewer",
+                schema=schema,
+                metadata={},
+                enabled=True
+            )
+            config = UIToolsConfig(enabled=False, max_tools=5)  # disabled
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[tool])
+            
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["test-tool"]}, 
+                system_prompt="Test prompt"
+            )
+        
+        assert selector is None
+    
+    def test_create_selector_no_matching_tools(self, mock_llm):
+        """Test that selector returns None when no tools match the filters."""
+        from app.services.ui_tools.selector import create_ui_tools_selector
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
+        
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            schema = UIToolSchema(type="object", properties={}, required=[])
+            tool = UITool(
+                name="test-tool",
+                description="Test tool",
+                prompt="Test",
+                category="viewer",
+                schema=schema,
+                metadata={},
+                enabled=True
+            )
+            config = UIToolsConfig(enabled=True, max_tools=5)
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[tool])
+            
+            # Ask for a tool that doesn't exist
+            selector = create_ui_tools_selector(
+                mock_llm, 
+                {"name": "test", "tools": ["non-existent-tool"]},  # tool doesn't exist
+                system_prompt="Test prompt"
+            )
+        
+        assert selector is None
 
 
 # ============================================================================
@@ -670,7 +843,7 @@ class TestUIToolsSelectorIntegration:
     ):
         """Test full workflow of tool selection."""
         from app.services.ui_tools.selector import create_ui_tools_selector
-        selector = create_ui_tools_selector(mock_llm, "Custom prompt", max_tools=5)
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
         
         # Mock LLM response
         response = MagicMock()
@@ -686,10 +859,20 @@ class TestUIToolsSelectorIntegration:
         ]
         mock_validator.return_value = mock_validator_instance
         
+        # Use the factory function to create the selector
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            config = UIToolsConfig(enabled=True, max_tools=5)
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[sample_ui_tool])
+            
+            selector = create_ui_tools_selector(
+                mock_llm,
+                {"name": "test", "tools": ["show-yaml"]},
+                system_prompt="Select the best tool"
+            )
+        
         result = await selector.select_tools(
             "Deploy nginx pod to default namespace",
-            None,
-            available_tools=[sample_ui_tool]
+            None
         )
         
         assert len(result) == 1
@@ -703,7 +886,7 @@ class TestUIToolsSelectorIntegration:
     ):
         """Test workflow with MCP response context."""
         from app.services.ui_tools.selector import create_ui_tools_selector
-        selector = create_ui_tools_selector(mock_llm, "", max_tools=5)
+        from app.services.ui_tools.models import UIToolsConfig, UIToolsConfigData
         
         mcp_response = """
         Resources:
@@ -725,10 +908,20 @@ class TestUIToolsSelectorIntegration:
         ]
         mock_validator.return_value = mock_validator_instance
         
+        # Use the factory function to create the selector
+        with patch('app.services.ui_tools.selector.load_ui_tools_from_configmap') as mock_load:
+            config = UIToolsConfig(enabled=True, max_tools=5)
+            mock_load.return_value = UIToolsConfigData(config=config, tools=[sample_ui_tool])
+            
+            selector = create_ui_tools_selector(
+                mock_llm,
+                {"name": "test", "tools": ["show-yaml"]},
+                system_prompt="Select the best tool"
+            )
+        
         result = await selector.select_tools(
             "Show yaml for nginx pod",
-            mcp_response,
-            available_tools=[sample_ui_tool]
+            mcp_response
         )
         
         assert len(result) == 1

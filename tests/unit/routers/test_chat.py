@@ -1,8 +1,8 @@
 import pytest
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import status, HTTPException
 from app.routers import chat as chat_router
-import json
 
 @pytest.fixture
 def mock_request():

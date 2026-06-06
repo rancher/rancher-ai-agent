@@ -11,7 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import Tool
 from pydantic import create_model, Field
 
-from ..agent.loader import AgentConfig
+from .loader import load_ui_tools_from_configmap
 from .models import UITool, UIToolCall
 from .validator import create_ui_tools_validator
 
@@ -122,17 +122,20 @@ class UIToolsSelector:
     Added as step in the LangGraph workflow
     """
     
-    def __init__(self, llm: BaseChatModel, system_prompt: str, max_tools: int = 5):
+    def __init__(self, llm: BaseChatModel, system_prompt: str, filtered_tools: list, max_tools: int = 5):
         """
         Initialize the UI Tools Selector
         
         Args:
             llm: llm provider to use for selection
             system_prompt: System prompt to guide the LLM in selecting tools
+            filtered_tools: List of filtered UI tools available for selection
             max_tools: Maximum number of UI tools to select per response (0 = unlimited)
         """
         self.llm = llm
-        
+
+        self.filtered_tools = filtered_tools
+
         self.max_tools = max_tools if max_tools > 0 else None
         
         self._build_system_prompt(system_prompt)
@@ -239,7 +242,6 @@ If no tools are appropriate, do not invoke any tools."""
         context: str,  # Current response/context from agent
         mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
         mcp_data: Optional[str] = None,  # Full MCP server response (last tool call)
-        available_tools: Optional[List[UITool]] = None,
     ) -> List[dict]:
         """
         Use any LLM to select appropriate UI tools using bind_tools for structured output.
@@ -248,23 +250,22 @@ If no tools are appropriate, do not invoke any tools."""
             context: The response/context to enhance with UI tools
             mcp_response: Raw MCP response if available for better tool selection
             mcp_data: Full data returned by the MCP server from the last tool call
-            available_tools: List of available tools (uses all if not specified)
             
         Returns:
             List of recommended UI tool calls
         """
-        if not available_tools:
+        if not self.filtered_tools:
             logging.warning("No UI tools available for selection")
             return []
         
         try:
             # Convert UITools to LangChain Tool objects with proper schemas
-            langchain_tools = [ui_tool_to_langchain_tool(tool) for tool in available_tools]
+            langchain_tools = [ui_tool_to_langchain_tool(tool) for tool in self.filtered_tools]
             
             # Bind tools to the LLM for structured tool calling
             llm_with_tools = self.llm.bind_tools(langchain_tools)
             
-            logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in available_tools]}")
+            logging.debug(f"Calling LLM for UI tool selection with bind_tools. Available tools: {[t.name for t in self.filtered_tools]}")
             
             # Build the prompt with the agent, context and MCP response if available            
             text_prompt = self._build_text_prompt(context, mcp_response, mcp_data)
@@ -280,11 +281,11 @@ If no tools are appropriate, do not invoke any tools."""
             )
             
             # Extract tool calls
-            ui_tool_calls = self._extract_tool_calls_from_response(response, available_tools)
+            ui_tool_calls = self._extract_tool_calls_from_response(response, self.filtered_tools)
             logging.debug(f"UI tool selection result: {len(ui_tool_calls)} UI tools selected before validation")
             
             # Sanitize and validate tool calls against schema
-            ui_tools_list = self._sanitize_ui_tools(ui_tool_calls, available_tools)
+            ui_tools_list = self._sanitize_ui_tools(ui_tool_calls, self.filtered_tools)
             logging.debug(f"UI tool selection result after validation: {len(ui_tools_list)} valid UI tools")
 
             return ui_tools_list
@@ -393,6 +394,41 @@ If no tools are appropriate, do not invoke any tools."""
         return deduplicated_tools
 
 
-def create_ui_tools_selector(llm: BaseChatModel, system_prompt: str, max_tools: int = 5) -> UIToolsSelector:
+def create_ui_tools_selector(llm: BaseChatModel, ui_tools_config: dict[str, Any], system_prompt: Optional[str] = None) -> UIToolsSelector | None:
     """Factory function to create a UI Tools Selector with any LLM"""
-    return UIToolsSelector(llm, system_prompt, max_tools)
+
+    name = ui_tools_config.get("name", "")
+    tool_filters = ui_tools_config.get("tools", [])
+        
+    if not name:
+        logging.debug("UI tools config name is missing, skipping ui tools dispatch")
+        return None
+
+    if not tool_filters:
+        logging.debug("UI tools list is empty, skipping ui tools dispatch")
+        return None
+
+    ui_tools_config_data = load_ui_tools_from_configmap(name)
+
+    if not ui_tools_config_data or not ui_tools_config_data.config:
+        logging.debug(f"UI tools config {name} not found, skipping ui tools dispatch")
+        return None
+
+    if not ui_tools_config_data.config.enabled:
+        logging.debug(f"UI tools config {name} are disabled, skipping ui tools dispatch")
+        return None
+
+    filtered_tools = [t for t in ui_tools_config_data.tools if filter_tool(t, tool_filters)]
+    logging.debug(
+        f"Filtered UI tools: {[t.name for t in filtered_tools]} "
+        f"based on filters: {tool_filters}"
+    )
+
+    if not filtered_tools:
+        logging.debug("No UI tools available after filtering, skipping ui tools dispatch")
+        return None
+
+    system_prompt = system_prompt or ui_tools_config_data.config.system_prompt
+    max_tools = ui_tools_config_data.config.max_tools or 5
+    
+    return UIToolsSelector(llm, system_prompt, filtered_tools, max_tools)

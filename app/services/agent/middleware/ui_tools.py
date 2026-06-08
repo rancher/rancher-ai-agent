@@ -38,8 +38,6 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
         if only_when_direct and not config.get("configurable", {}).get("agent"):
             return None
 
-        await adispatch_custom_event("notify_processing", "<processing-ui-tools/>")
-
         ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
 
         if ui_tools_list:
@@ -124,6 +122,8 @@ async def _dispatch_ui_tools_event(
         max_tools = ui_tools_config_data.config.max_tools
 
         selector = create_ui_tools_selector(llm, system_prompt=system_prompt or "", max_tools=max_tools)
+
+        await adispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
         context = _collect_context_until_human(state)
 

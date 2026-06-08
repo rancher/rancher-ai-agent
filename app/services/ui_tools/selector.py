@@ -273,7 +273,12 @@ If no tools are appropriate, do not invoke any tools."""
             system_msg = SystemMessage(content=self.system_prompt)
             
             # Call the LLM with bound tools
-            response = llm_with_tools.invoke([system_msg, user_msg])
+            # Call the LLM with bound tools, tagged as "no-stream" to prevent internal
+            # LLM call output from being sent to the client
+            response = llm_with_tools.invoke(
+                [system_msg, user_msg],
+                config={"tags": ["no-stream"]}
+            )
             
             # Extract tool calls
             ui_tool_calls = self._extract_tool_calls_from_response(response, available_tools)

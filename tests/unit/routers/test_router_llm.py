@@ -13,29 +13,9 @@ def mock_request():
 
 
 @pytest.mark.asyncio
-async def test_complete_plain_success(mock_request):
-    mock_response = MagicMock(content="LLM response")
-    mock_llm = MagicMock()
-    mock_llm.invoke.return_value = mock_response
-    with patch("app.routers.llm.get_user_id_from_request", AsyncMock(return_value="u")):
-        llm_request = llm_router.LLMRequest(prompt="test prompt")
-        resp = await llm_router.complete_plain(mock_request, llm_request, mock_llm)
-        assert resp.status_code == status.HTTP_200_OK
-
-
-@pytest.mark.asyncio
-async def test_complete_plain_empty_prompt(mock_request):
-    with patch("app.routers.llm.get_user_id_from_request", AsyncMock(return_value="u")):
-        llm_request = llm_router.LLMRequest(prompt="")
-        with pytest.raises(HTTPException) as exc:
-            await llm_router.complete_plain(mock_request, llm_request, MagicMock())
-        assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
-
-
-@pytest.mark.asyncio
 async def test_complete_ui_tools_success(mock_request):
     mock_selector = MagicMock()
-    mock_selector.select_tools.return_value = [{"toolName": "show"}]
+    mock_selector.select_tools = AsyncMock(return_value=[{"toolName": "show"}])
     
     with patch("app.routers.llm.get_user_id_from_request", AsyncMock(return_value="u")):
         ui_tools_config = llm_router.UIToolsConfig(name="tools", tools=["show"])

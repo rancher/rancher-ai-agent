@@ -266,47 +266,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /complete/plain:
-    post:
-      summary: Make a simple request to the LLM
-      description: Sends a prompt to the LLM and returns the response
-      operationId: complete_plain
-      tags:
-        - LLM
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LLMRequest'
-      responses:
-        '200':
-          description: LLM response
-          content:
-            application/json:
-              schema:
-                type: string
-                description: The generated text response from the LLM
-                example: "This is the LLM response to your prompt"
-        '400':
-          description: Bad request - prompt is required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
   /complete/ui-tools:
     post:
       summary: Select appropriate UI tools based user input
@@ -619,18 +578,6 @@ components:
         - message
       example:
         message: userId not found
-
-    LLMRequest:
-      type: object
-      description: Request model for simple LLM requests
-      properties:
-        prompt:
-          type: string
-          description: The prompt to send to the LLM
-      required:
-        - prompt
-      example:
-        prompt: "What is the capital of France?"
 
     UIToolsConfig:
       type: object

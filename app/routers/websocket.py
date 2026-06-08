@@ -109,6 +109,8 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             request_id = str(uuid.uuid4())
 
             ws_request = _parse_websocket_request(request)
+            if not ws_request.agent and single_agent_name:
+                ws_request.agent = single_agent_name
             config = _build_config(base_config, request_id, ws_request)
             target_agent, target_config = _resolve_target_agent(agent, config, ws_request)
             input_data = await _build_input_data(target_agent, target_config, ws_request)

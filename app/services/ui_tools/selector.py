@@ -234,7 +234,7 @@ CONTEXT:
 
 If no tools are appropriate, do not invoke any tools."""
 
-    def select_tools(
+    async def select_tools(
         self,
         context: str,  # Current response/context from agent
         mcp_response: Optional[str] = None,  # Raw MCP response if available for better tool selection
@@ -272,10 +272,9 @@ If no tools are appropriate, do not invoke any tools."""
             user_msg = HumanMessage(content=text_prompt)
             system_msg = SystemMessage(content=self.system_prompt)
             
-            # Call the LLM with bound tools
             # Call the LLM with bound tools, tagged as "no-stream" to prevent internal
             # LLM call output from being sent to the client
-            response = llm_with_tools.invoke(
+            response = await llm_with_tools.ainvoke(
                 [system_msg, user_msg],
                 config={"tags": ["no-stream"]}
             )
@@ -293,7 +292,7 @@ If no tools are appropriate, do not invoke any tools."""
         except Exception as e:
             logging.error(f"Error selecting UI tools with bind_tools: {e}")
             return []
-    
+
     def _extract_tool_calls_from_response(self, response: Any, available_tools: List[UITool]) -> List[UIToolCall]:
         """
         Extract tool calls from the LLM response when using bind_tools.

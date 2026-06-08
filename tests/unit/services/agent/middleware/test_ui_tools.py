@@ -1,8 +1,9 @@
 """Unit tests for ui_tools middleware (ui_tools_middleware, _collect_context_until_human, _extract_tool_text)."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain.messages import ToolMessage
 
@@ -15,38 +16,42 @@ from app.services.agent.middleware.ui_tools import (
 )
 
 
+@pytest.mark.asyncio
 @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
 @patch("app.services.agent.middleware.ui_tools.get_config")
-def test_ui_tools_skips_when_last_message_not_ai(mock_get_config, mock_dispatch_event):
+async def test_ui_tools_skips_when_last_message_not_ai(mock_get_config, mock_dispatch_event):
     """Verify None returned when last message is not AIMessage."""
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm)
     state = {"messages": [HumanMessage(content="hi")]}
 
-    result = middleware.after_agent(state, MagicMock())
+    result = await middleware.aafter_agent(state, MagicMock())
 
     assert result is None
     mock_dispatch_event.assert_not_called()
 
 
+@pytest.mark.asyncio
 @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
 @patch("app.services.agent.middleware.ui_tools.get_config")
-def test_ui_tools_skips_when_only_when_direct_and_no_agent_in_config(mock_get_config, mock_dispatch_event):
+async def test_ui_tools_skips_when_only_when_direct_and_no_agent_in_config(mock_get_config, mock_dispatch_event):
     """Verify middleware skips when only_when_direct=True and no agent in config."""
     mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm, only_when_direct=True)
     state = {"messages": [AIMessage(content="answer")]}
 
-    result = middleware.after_agent(state, MagicMock())
+    result = await middleware.aafter_agent(state, MagicMock())
 
     assert result is None
     mock_dispatch_event.assert_not_called()
 
 
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.ui_tools.adispatch_custom_event", new_callable=AsyncMock)
 @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
 @patch("app.services.agent.middleware.ui_tools.get_config")
-def test_ui_tools_executes_when_only_when_direct_and_agent_set(mock_get_config, mock_dispatch_event):
+async def test_ui_tools_executes_when_only_when_direct_and_agent_set(mock_get_config, mock_dispatch_event, mock_adispatch):
     """Verify middleware executes when only_when_direct=True and agent is set."""
     mock_get_config.return_value = {
         "configurable": {"request_id": "req-1", "agent": "rancher"}
@@ -57,7 +62,7 @@ def test_ui_tools_executes_when_only_when_direct_and_agent_set(mock_get_config, 
     ai_msg = AIMessage(content="answer")
     state = {"messages": [ai_msg]}
 
-    result = middleware.after_agent(state, MagicMock())
+    result = await middleware.aafter_agent(state, MagicMock())
 
     assert result is not None
     assert result["messages"][0].additional_kwargs["ui_tools"] == [
@@ -65,9 +70,11 @@ def test_ui_tools_executes_when_only_when_direct_and_agent_set(mock_get_config, 
     ]
 
 
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.ui_tools.adispatch_custom_event", new_callable=AsyncMock)
 @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
 @patch("app.services.agent.middleware.ui_tools.get_config")
-def test_ui_tools_returns_none_when_no_ui_tools_selected(mock_get_config, mock_dispatch_event):
+async def test_ui_tools_returns_none_when_no_ui_tools_selected(mock_get_config, mock_dispatch_event, mock_adispatch):
     """Verify None returned when no UI tools are selected."""
     mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
     mock_dispatch_event.return_value = []
@@ -75,14 +82,16 @@ def test_ui_tools_returns_none_when_no_ui_tools_selected(mock_get_config, mock_d
     middleware = ui_tools_middleware(mock_llm, only_when_direct=False)
     state = {"messages": [AIMessage(content="answer")]}
 
-    result = middleware.after_agent(state, MagicMock())
+    result = await middleware.aafter_agent(state, MagicMock())
 
     assert result is None
 
 
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.ui_tools.adispatch_custom_event", new_callable=AsyncMock)
 @patch("app.services.agent.middleware.ui_tools._dispatch_ui_tools_event")
 @patch("app.services.agent.middleware.ui_tools.get_config")
-def test_ui_tools_skips_when_no_request_id(mock_get_config, mock_dispatch_event):
+async def test_ui_tools_skips_when_no_request_id(mock_get_config, mock_dispatch_event, mock_adispatch):
     """Verify None returned when request_id is missing from config."""
     mock_get_config.return_value = {"configurable": {}}
     mock_dispatch_event.return_value = [{"toolName": "show-yaml", "input": {}}]
@@ -90,7 +99,7 @@ def test_ui_tools_skips_when_no_request_id(mock_get_config, mock_dispatch_event)
     middleware = ui_tools_middleware(mock_llm)
     state = {"messages": [AIMessage(content="answer")]}
 
-    result = middleware.after_agent(state, MagicMock())
+    result = await middleware.aafter_agent(state, MagicMock())
 
     assert result is None
 

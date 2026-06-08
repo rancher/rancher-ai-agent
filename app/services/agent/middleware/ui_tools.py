@@ -4,7 +4,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentState, after_agent
 from langchain.messages import AIMessage, ToolMessage
-from langchain_core.callbacks.manager import dispatch_custom_event
+from langchain_core.callbacks.manager import adispatch_custom_event, dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables.config import RunnableConfig
@@ -28,7 +28,7 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
     """
 
     @after_agent
-    def ui_tools_dispatch(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    async def ui_tools_dispatch(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         last_message = state["messages"][-1] if state["messages"] else None
         if not isinstance(last_message, AIMessage):
             return None
@@ -38,7 +38,9 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
         if only_when_direct and not config.get("configurable", {}).get("agent"):
             return None
 
-        ui_tools_list = _dispatch_ui_tools_event(llm, state, config)
+        await adispatch_custom_event("notify_processing", "<processing-ui-tools/>")
+
+        ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
 
         if ui_tools_list:
             request_id = config.get("configurable", {}).get("request_id")
@@ -71,7 +73,7 @@ def _dispatch_ui_tools(tools: list[dict]) -> None:
         logging.error(f"Error dispatching UI tools: {e}", exc_info=True)
 
 
-def _dispatch_ui_tools_event(
+async def _dispatch_ui_tools_event(
     llm: BaseChatModel,
     state: AgentState[Any],
     config: RunnableConfig,
@@ -123,14 +125,12 @@ def _dispatch_ui_tools_event(
 
         selector = create_ui_tools_selector(llm, system_prompt=system_prompt or "", max_tools=max_tools)
 
-        dispatch_custom_event("notify_processing", "<processing-ui-tools/>")
-
         context = _collect_context_until_human(state)
 
         mcp_response = _collect_all_mcp_responses(state)
         mcp_data = _find_last_mcp_data(state)
 
-        ui_tools_list = selector.select_tools(
+        ui_tools_list = await selector.select_tools(
             context=context,
             mcp_response=mcp_response,
             mcp_data=mcp_data,

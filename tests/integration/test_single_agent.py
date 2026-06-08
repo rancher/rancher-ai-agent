@@ -388,13 +388,13 @@ def test_websocket_with_ui_tools():
                     mock_selector = MagicMock()
                     mock_selector_factory.return_value = mock_selector
                     # Mock select_tools to return a formatted UI tool
-                    mock_selector.select_tools.return_value = [
+                    mock_selector.select_tools = AsyncMock(return_value=[
                         {
                             "toolName": "show-yaml",
                             "description": "Display resource in YAML format",
                             "prompt": "Show resource YAML",
                         }
-                    ]
+                    ])
                     
                     messages = []
                     with client.websocket_connect("/v1/ws/messages") as websocket:

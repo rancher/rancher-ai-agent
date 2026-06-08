@@ -586,13 +586,13 @@ def test_delegate_to_child_agent_with_ui_tools():
                 with patch('app.services.agent.middleware.ui_tools.create_ui_tools_selector') as mock_selector_factory:
                     mock_selector = MagicMock()
                     mock_selector_factory.return_value = mock_selector
-                    mock_selector.select_tools.return_value = [
+                    mock_selector.select_tools = AsyncMock(return_value=[
                         {
                             "toolName": "show-yaml",
                             "description": "Display resource in YAML format",
                             "prompt": "Show resource YAML",
                         }
-                    ]
+                    ])
                     
                     messages = []
                     with client.websocket_connect("/v1/ws/messages") as websocket:

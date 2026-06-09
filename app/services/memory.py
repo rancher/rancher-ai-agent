@@ -332,17 +332,14 @@ class MemoryManager:
                 })
             elif message.type == 'ai' and message.content != "":
                 request_metadata = message.additional_kwargs.get("request_metadata", {})
-                tags = request_metadata.get("tags", [])
 
                 rows.append({
                     "chatId": chat_id,
                     "role": "agent",
                     "agent": request_metadata.get("agent", None),
                     "message": (message.additional_kwargs.get("mcp_response") or "") + str(message.text),
-                    "context": request_metadata.get("context", None),
-                    "labels": request_metadata.get("labels", None),
                     "tools": message.additional_kwargs.get("ui_tools", []),
-                    "tags": tags,
+                    "tags": request_metadata.get("tags", []),
                     "createdAt": message.additional_kwargs.get("created_at"),
                 })
             elif message.type == 'tool' and message.additional_kwargs.get("interrupt_message", "") != "":

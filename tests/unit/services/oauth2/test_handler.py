@@ -13,7 +13,7 @@ from app.services.oauth2.handler import (
     get_redirect_uri,
     handle_oauth_authentication,
 )
-from app.services.oauth2.models import OAuthClientCredentials, OAuthDiscoveryResult, OAuthSecretError
+from app.services.oauth2.models import AuthorizationServerMetadata, OAuthClientCredentials, OAuthDiscoveryResult, OAuthSecretError
 
 
 class TestGetRedirectUri:
@@ -97,14 +97,15 @@ class TestInitiateOauthFlow:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_static_credentials_path(self):
+    async def test_credentials_from_secret(self):
         ws = _make_websocket(cookies={"R_SESS": "sess"})
         cfg = _make_agent_cfg(authentication_secret="my-secret")
 
         discovery_result = OAuthDiscoveryResult(
-            authorization_endpoint="https://auth.example.com/authorize",
-            token_endpoint="https://auth.example.com/token",
-            registration_endpoint=None,
+            auth_server_metadata=AuthorizationServerMetadata(
+                authorization_endpoint="https://auth.example.com/authorize",
+                token_endpoint="https://auth.example.com/token",
+            ),
         )
         creds = OAuthClientCredentials(client_id="cid", client_secret="csecret", scopes="read")
 
@@ -113,8 +114,7 @@ class TestInitiateOauthFlow:
 
         with (
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.discover_oauth_metadata", new_callable=AsyncMock, return_value=discovery_result),
-            patch("app.services.oauth2.handler.get_oauth_client_credentials", return_value=creds),
+            patch("app.services.oauth2.handler.get_oauth_secret_data", return_value=(creds, discovery_result)),
             patch("app.services.oauth2.handler.OAuthClient", return_value=mock_oauth_client) as mock_cls,
         ):
             result = await _initiate_oauth_flow(cfg, ws)
@@ -126,47 +126,32 @@ class TestInitiateOauthFlow:
         assert "https://auth-url" in ws.send_text.call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_dynamic_registration_fallback(self):
-        ws = _make_websocket(cookies={"R_SESS": "sess"})
-        cfg = _make_agent_cfg(authentication_secret=None)
-
-        discovery_result = OAuthDiscoveryResult(
-            authorization_endpoint="https://auth.example.com/authorize",
-            token_endpoint="https://auth.example.com/token",
-            registration_endpoint="https://auth.example.com/register",
-        )
-
-        mock_oauth_client = MagicMock()
-        mock_oauth_client.get_auth_url = AsyncMock(return_value=("https://auth-url", "verifier", "state123"))
-
-        with (
-            patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.discover_oauth_metadata", new_callable=AsyncMock, return_value=discovery_result),
-            patch("app.services.oauth2.handler.OAuthClient") as mock_cls,
-        ):
-            mock_cls.from_dynamic_registration = AsyncMock(return_value=mock_oauth_client)
-            result = await _initiate_oauth_flow(cfg, ws)
-
-        assert result is False
-        mock_cls.from_dynamic_registration.assert_awaited_once()
-        ws.send_text.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_raises_when_no_credentials_and_no_registration(self):
+    async def test_raises_when_no_authentication_secret(self):
         ws = _make_websocket()
         cfg = _make_agent_cfg(authentication_secret=None)
 
+        with patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False):
+            with pytest.raises(NoAgentAvailableError, match="no authentication secret"):
+                await _initiate_oauth_flow(cfg, ws)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_client_credentials_in_secret(self):
+        ws = _make_websocket()
+        cfg = _make_agent_cfg(authentication_secret="my-secret")
+
         discovery_result = OAuthDiscoveryResult(
-            authorization_endpoint="https://auth.example.com/authorize",
-            token_endpoint="https://auth.example.com/token",
-            registration_endpoint=None,
+            auth_server_metadata=AuthorizationServerMetadata(
+                authorization_endpoint="https://auth.example.com/authorize",
+                token_endpoint="https://auth.example.com/token",
+            ),
         )
+        creds = OAuthClientCredentials(client_id="", client_secret="")
 
         with (
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.discover_oauth_metadata", new_callable=AsyncMock, return_value=discovery_result),
+            patch("app.services.oauth2.handler.get_oauth_secret_data", return_value=(creds, discovery_result)),
         ):
-            with pytest.raises(NoAgentAvailableError):
+            with pytest.raises(NoAgentAvailableError, match="clientID and clientSecret"):
                 await _initiate_oauth_flow(cfg, ws)
 
     @pytest.mark.asyncio
@@ -175,8 +160,10 @@ class TestInitiateOauthFlow:
         cfg = _make_agent_cfg(authentication_secret="my-secret")
 
         discovery_result = OAuthDiscoveryResult(
-            authorization_endpoint="https://auth.example.com/authorize",
-            token_endpoint="https://auth.example.com/token",
+            auth_server_metadata=AuthorizationServerMetadata(
+                authorization_endpoint="https://auth.example.com/authorize",
+                token_endpoint="https://auth.example.com/token",
+            ),
         )
         creds = OAuthClientCredentials(client_id="cid", client_secret="csecret")
         mock_oauth_client = MagicMock()
@@ -184,8 +171,7 @@ class TestInitiateOauthFlow:
 
         with (
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.discover_oauth_metadata", new_callable=AsyncMock, return_value=discovery_result),
-            patch("app.services.oauth2.handler.get_oauth_client_credentials", return_value=creds),
+            patch("app.services.oauth2.handler.get_oauth_secret_data", return_value=(creds, discovery_result)),
             patch("app.services.oauth2.handler.OAuthClient", return_value=mock_oauth_client),
             patch("app.services.oauth2.handler.oauth_store") as mock_store,
         ):

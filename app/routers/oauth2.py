@@ -1,9 +1,23 @@
+import hashlib
 import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
-from ..services.oauth2 import OAuthClient, discover_oauth_metadata, get_oauth_client_credentials, get_oauth_cookie_names, get_redirect_uri, oauth_store
+from ..services.oauth2 import (
+    OAuthClient,
+    OAuthDiscoveryError,
+    OAuthSecretError,
+    discover_oauth_metadata,
+    get_oauth_client_credentials,
+    get_oauth_cookie_names,
+    get_oauth_secret_data,
+    get_redirect_uri,
+    oauth_store,
+    _discover_auth_server_metadata,
+    create_oauth_secret,
+    update_oauth_secret_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,11 +155,10 @@ async def refresh_token_endpoint(request: Request):
     if not agent_cfg.authentication_secret:
         return JSONResponse({"error": f"Agent '{agent_name}' has no authentication secret"}, status_code=400)
 
-    # Discover OAuth metadata and resolve the cookie key
     try:
-        metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
-    except Exception as e:
-        return JSONResponse({"error": f"OAuth discovery failed: {e}"}, status_code=502)
+        credentials, metadata = get_oauth_secret_data(agent_cfg.authentication_secret)
+    except OAuthSecretError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     cookie_names = get_oauth_cookie_names(agent_cfg.name)
 
@@ -153,8 +166,6 @@ async def refresh_token_endpoint(request: Request):
     if not refresh_token_value:
         return JSONResponse({"error": "No refresh token available"}, status_code=401)
 
-    # Build the OAuth client from the agent's credentials
-    credentials = get_oauth_client_credentials(agent_cfg.authentication_secret)
     oauth_client = OAuthClient(
         client_id=credentials.client_id,
         client_secret=credentials.client_secret,
@@ -162,7 +173,7 @@ async def refresh_token_endpoint(request: Request):
     )
 
     try:
-        token = await oauth_client.refresh_token(metadata.token_endpoint, refresh_token_value)
+        token = await oauth_client.refresh_token(metadata.auth_server_metadata.token_endpoint, refresh_token_value)
     except Exception as e:
         logger.debug(f"Token refresh failed for agent '{agent_name}': {e}")
         return JSONResponse({"error": f"Token refresh failed: {e}"}, status_code=401)
@@ -195,6 +206,98 @@ async def refresh_token_endpoint(request: Request):
 
 
     return response
+
+
+@router.post("/oauth/metadata")
+async def get_metadata(request: Request):
+    """
+    Discover OAuth metadata for an MCP server URL and persist it in a Kubernetes secret.
+    Returns the metadata URL (issuer) and secret name, or an empty response if discovery fails.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    mcp_url = body.get("mcp_url", "")
+    if not mcp_url:
+        return JSONResponse({"error": "Missing mcp_url"}, status_code=400)
+
+    try:
+        discovery_result = await discover_oauth_metadata(mcp_url)
+    except OAuthDiscoveryError as e:
+        logger.info(f"OAuth metadata discovery failed for {mcp_url}: {e}")
+        return JSONResponse(content=None, status_code=200)
+
+    url_hash = hashlib.sha256(mcp_url.encode("utf-8")).hexdigest()[:12]
+    secret_name = f"oauth-{url_hash}"
+
+    try:
+        create_oauth_secret(secret_name, discovery_result)
+    except Exception as e:
+        logger.error(f"Failed to create OAuth secret '{secret_name}': {e}")
+        return JSONResponse({"error": f"Failed to create secret: {e}"}, status_code=500)
+
+    return JSONResponse({
+        "secret_name": secret_name,
+        **discovery_result.to_dict(),
+    })
+
+
+@router.post("/oauth/dynamic-registration")
+async def dynamic_registration(request: Request):
+    """
+    Perform OAuth2 dynamic client registration (RFC 7591) and store credentials in a Kubernetes secret.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    auth_server_metadata = body.get("auth_server_metadata", "")
+    secret_name = body.get("secret_name", "")
+
+    if not auth_server_metadata:
+        return JSONResponse({"error": "Missing auth_server_metadata"}, status_code=400)
+    if not secret_name:
+        return JSONResponse({"error": "Missing secret_name"}, status_code=400)
+
+    if not auth_server_metadata.get("registration_endpoint"):
+        return JSONResponse(
+            {"error": "Authorization server does not support dynamic client registration"},
+            status_code=400,
+        )
+
+    #scope = " ".join(auth_server_metadata.scopes_supported) if auth_server_metadata.scopes_supported else None
+    redirect_uri = get_redirect_uri(request.url.hostname)
+
+    try:
+        # TODO move this out of the client class!
+        oauth_client = await OAuthClient.from_dynamic_registration(
+            registration_endpoint=auth_server_metadata.get("registration_endpoint"),
+            redirect_uri=redirect_uri,
+        #    scope=scope,
+        )
+    except OAuthDiscoveryError as e:
+        return JSONResponse({"error": f"Dynamic registration failed: {e}"}, status_code=502)
+
+    try:
+        update_oauth_secret_credentials(
+            secret_name,
+            client_id=oauth_client.client_id,
+            client_secret=oauth_client.client_secret,
+            scopes="",
+        )
+    except OAuthSecretError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except Exception as e:
+        logger.error(f"Failed to update OAuth secret '{secret_name}': {e}")
+        return JSONResponse({"error": f"Failed to update secret: {e}"}, status_code=500)
+
+    return JSONResponse({
+        "client_id": oauth_client.client_id,
+        #"scopes": scope or "",
+    })
 
 
 def _find_oauth_agent_config(agent_name: str) -> AgentConfig | None:

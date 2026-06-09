@@ -8,8 +8,8 @@ from ..agent._constants import NoAgentAvailableError
 from ..agent.loader import AgentConfig
 from .client import OAuthClient
 from .cookies import get_oauth_cookie_names
-from .credentials import AGENT_NAMESPACE, get_oauth_client_credentials
-from .discovery import discover_oauth_metadata
+from .credentials import AGENT_NAMESPACE, get_oauth_secret_data
+from .models import OAuthSecretError
 from .store import oauth_store
 
 async def handle_oauth_authentication(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
@@ -78,9 +78,10 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     Initiate the OAuth2 authentication flow for an agent that requires it.
 
     First attempts to refresh the access token using a stored refresh token.
-    If no refresh token is available or the refresh fails, performs the full
-    OAuth discovery on the agent's MCP URL, generates the authorization URL,
-    stores the state for the callback, and sends the auth URL to the client.
+    If no refresh token is available or the refresh fails, reads pre-provisioned
+    credentials and metadata from the agent's authentication secret, generates
+    the authorization URL, stores the state for the callback, and sends the
+    auth URL to the client.
 
     Args:
         agent_cfg: The agent configuration requiring OAuth2 authentication.
@@ -90,47 +91,29 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
         True if the token was silently refreshed (no user interaction needed),
         False if the full OAuth flow was initiated and user action is required.
     """
-    # Try to refresh the token before initiating the full OAuth flow
     if await _try_refresh_oauth_token(agent_cfg, websocket):
         return True
 
-    metadata = await discover_oauth_metadata(agent_cfg.mcp_url)
-
-    oauth_client = None
-    credentials = None
-
-    # Fetch credentials if a secret exists
-    if agent_cfg.authentication_secret:
-        credentials = get_oauth_client_credentials(agent_cfg.authentication_secret)
-
-    #  Try static client credentials first
-    if credentials and credentials.client_id and credentials.client_secret:
-        oauth_client = OAuthClient(
-            client_id=credentials.client_id,
-            client_secret=credentials.client_secret,
-            scope=credentials.scopes,
-        )
-
-    # Fallback to dynamic client registration
-    elif metadata.registration_endpoint:
-        kwargs = {
-            "registration_endpoint": metadata.registration_endpoint,
-            "redirect_uri": get_redirect_uri(websocket.url.hostname),
-        }
-
-        # Only inject scope if credentials were successfully fetched
-        if credentials:
-            kwargs["scope"] = credentials.scopes
-
-        oauth_client = await OAuthClient.from_dynamic_registration(**kwargs)
-
-    if not oauth_client:
+    if not agent_cfg.authentication_secret:
         raise NoAgentAvailableError(
-            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret "
-            "and the server does not support dynamic client registration."
+            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret configured."
         )
 
-    auth_endpoint = metadata.authorization_endpoint
+    credentials, metadata = get_oauth_secret_data(agent_cfg.authentication_secret)
+
+    if not credentials.client_id or not credentials.client_secret:
+        raise NoAgentAvailableError(
+            f"Agent '{agent_cfg.name}' requires OAuth2 but the authentication secret "
+            "does not contain clientID and clientSecret."
+        )
+
+    oauth_client = OAuthClient(
+        client_id=credentials.client_id,
+        client_secret=credentials.client_secret,
+        scope=credentials.scopes,
+    )
+
+    auth_endpoint = metadata.auth_server_metadata.authorization_endpoint
     redirect_uri = get_redirect_uri(websocket.url.hostname)
 
     url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
@@ -140,7 +123,7 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     oauth_store.set_state(state, {
         "verifier": verifier,
         "oauth_client": oauth_client,
-        "token_endpoint": metadata.token_endpoint,
+        "token_endpoint": metadata.auth_server_metadata.token_endpoint,
         "cookie_key": cookie_key,
     }, session_token)
 

@@ -10,7 +10,7 @@ from .cookies import (
     OAUTH_COOKIE_PREFIX,
     get_oauth_cookie_names,
 )
-from .credentials import AGENT_NAMESPACE
+from .credentials import AGENT_NAMESPACE, get_oauth_secret_data, create_oauth_secret, update_oauth_secret_credentials
 from .client import _get_tls_verify
 from .handler import get_redirect_uri
 from .discovery import (
@@ -46,6 +46,9 @@ __all__ = [
     "discover_oauth_metadata",
     "OAuthClient",
     "get_oauth_client_credentials",
+    "get_oauth_secret_data",
+    "create_oauth_secret",
+    "update_oauth_secret_credentials",
     "oauth_store",
     "handle_oauth_authentication",
 ]

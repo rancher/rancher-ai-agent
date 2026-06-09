@@ -281,7 +281,7 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
             
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
             result = await child_agent.agent.ainvoke(
-                {"messages": [{"role": "user", "content": query}]},
+                {"messages": [HumanMessage(content=query)]},
                 config=child_config,
             )
             _dispatch_subagent_event("processing-subagent-end", agent_name, query)

@@ -263,8 +263,8 @@ class TestDiscoverOAuthMetadata:
             )
 
             result = await discover_oauth_metadata("https://mcp.example.com")
-            assert result.authorization_endpoint == "https://auth.example.com/authorize"
-            assert result.token_endpoint == "https://auth.example.com/token"
+            assert result.auth_server_metadata.authorization_endpoint == "https://auth.example.com/authorize"
+            assert result.auth_server_metadata.token_endpoint == "https://auth.example.com/token"
             assert result.required_scopes == ["read"]
             mock_wk.assert_not_called()
 
@@ -285,7 +285,7 @@ class TestDiscoverOAuthMetadata:
             )
 
             result = await discover_oauth_metadata("https://mcp.example.com")
-            assert result.authorization_endpoint == "https://mcp.example.com/authorize"
+            assert result.auth_server_metadata.authorization_endpoint == "https://mcp.example.com/authorize"
             assert result.resource_metadata is None
 
     @pytest.mark.asyncio

@@ -64,7 +64,6 @@ class OAuthClient:
                 response.raise_for_status()
                 data = response.json()
 
-                logger.info(f"Successfully registered OAuth client '{client_name}' at {registration_endpoint}")
                 return cls(
                     client_id=data["client_id"],
                     client_secret=data.get("client_secret", ""),

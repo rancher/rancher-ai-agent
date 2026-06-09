@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
-from ..oauth2 import discover_oauth_metadata, get_oauth_cookie_names
+from ..oauth2 import get_oauth_cookie_names
 from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
 from ._constants import NoAgentAvailableError, NeedsOauth2
@@ -241,7 +241,6 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
     elif agent_config.authentication == AuthenticationType.OAUTH2:
         mcp_url = agent_config.mcp_url
 
-        discovery = await discover_oauth_metadata(agent_config.mcp_url)
         cookie_name = get_oauth_cookie_names(agent_config.name)["access_token"]
         oauth_token = websocket.cookies.get(cookie_name) if websocket else None
 

@@ -174,3 +174,129 @@ async def test_fetch_messages_payload():
     assert len(agent_msg["tools"]) == 2
     assert agent_msg["tools"][0]["toolName"] == "chart_tool"
     assert agent_msg["tools"][1]["toolName"] == "table_tool"
+
+@pytest.mark.asyncio
+async def test_message_types_have_correct_fields():
+    """Verify that different message types have the correct fields in fetch_messages.
+    
+    This test ensures:
+    - ALL messages include chatId, role, agent, message, createdAt
+    - USER messages: include also context, labels, tags from request metadata
+    - AI messages: include also tools, tags, but NOT context or labels
+    - TOOL messages: include also tools and confirmation, but NOT context or labels or tags
+    """
+    from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+    
+    mock_checkpointer = MagicMock()
+    checkpoint_tuple = MagicMock()
+    chat_id = "chat-123"
+    
+    # Create user message with labels, context, and tags
+    human_msg = MagicMock(spec=HumanMessage)
+    human_msg.type = "human"
+    human_msg.content = "Show pod logs from namespace-1"
+    human_msg.additional_kwargs = {
+        "request_id": "req1",
+        "request_metadata": {
+            "user_input": "Show pod logs from namespace-1",
+            "agent": "kubernetes-agent",
+            "tags": ["kubernetes", "logs"],
+            "labels": {"summary": "Log viewer"},
+            "context": {"namespace": "namespace-1"},
+        },
+        "created_at": "2024-01-01T00:00:00Z",
+    }
+    
+    # Create AI message - should have tools and tags, but NOT context/labels
+    ai_msg = MagicMock(spec=AIMessage)
+    ai_msg.type = "ai"
+    ai_msg.content = "Here are the pod logs"
+    ai_msg.text = "Here are the pod logs"
+    ai_msg.additional_kwargs = {
+        "request_id": "req1",
+        "created_at": "2024-01-01T00:00:01Z",
+        "agent": "kubernetes-agent",
+        "ui_tools": [
+            {"toolName": "log_viewer", "description": "View logs"}
+        ],
+        "request_metadata": {
+            "agent": "kubernetes-agent",
+            "tags": ["kubernetes", "logs"],
+            # Note: labels and context are NOT included to prevent inheriting user input metadata
+        },
+    }
+    
+    # Create tool message with interrupt - should have tools and confirmation, but NOT context/labels/tags
+    tool_msg = MagicMock(spec=ToolMessage)
+    tool_msg.type = "tool"
+    tool_msg.name = "confirm_action"
+    tool_msg.content = "User confirmed"
+    tool_msg.additional_kwargs = {
+        "interrupt_message": "Confirm deletion of pod?",
+        "selected_agent": "kubernetes-agent",
+        "confirmation": True,
+        "ui_tools": [{"toolName": "action_tool"}],
+    }
+    
+    # Setup checkpoint tuple
+    checkpoint_tuple.checkpoint = {
+        "channel_values": {
+            "messages_history": [human_msg, ai_msg, tool_msg],
+        }
+    }
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)
+    
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    
+    messages = await manager.fetch_messages(chat_id, "user1", {})
+    
+    assert len(messages) == 3
+    
+    # ===== VERIFY USER MESSAGE =====
+    user_msg = messages[0]
+    # Common fields (ALL messages)
+    assert user_msg["chatId"] == chat_id, "User message should have chatId"
+    assert user_msg["role"] == "user", "User message role should be 'user'"
+    assert user_msg["agent"] == "kubernetes-agent", "User message should have agent"
+    assert user_msg["message"] == "Show pod logs from namespace-1", "User message should contain content"
+    assert "createdAt" in user_msg, "User message should have createdAt"
+    # USER-specific fields
+    assert user_msg["labels"] == {"summary": "Log viewer"}, "User message should have labels"
+    assert user_msg["context"] == {"namespace": "namespace-1"}, "User message should have context"
+    assert user_msg["tags"] == ["kubernetes", "logs"], "User message should have tags"
+    
+    # ===== VERIFY AI MESSAGE =====
+    agent_msg = messages[1]
+    # Common fields (ALL messages)
+    assert agent_msg["chatId"] == chat_id, "AI message should have chatId"
+    assert agent_msg["role"] == "agent", "AI message role should be 'agent'"
+    assert agent_msg["message"] == "Here are the pod logs", "AI message should contain content"
+    assert "createdAt" in agent_msg, "AI message should have createdAt"
+    # AI-specific fields (from request_metadata, but WITHOUT labels/context)
+    assert agent_msg["agent"] == "kubernetes-agent", "AI message should have agent"
+    assert agent_msg["tags"] == ["kubernetes", "logs"], "AI message should have tags"
+    assert "tools" in agent_msg, "AI message should have tools"
+    assert len(agent_msg["tools"]) == 1, "AI message should have 1 tool"
+    assert agent_msg["tools"][0]["toolName"] == "log_viewer", "AI message should preserve tool info"
+    # Fields AI should NOT have
+    assert "context" not in agent_msg, "AI message should NOT have context from user request"
+    assert "labels" not in agent_msg, "AI message should NOT have labels from user request"
+    
+    # ===== VERIFY TOOL MESSAGE =====
+    interrupt_msg = messages[2]
+    # Common fields (ALL messages)
+    assert interrupt_msg["chatId"] == chat_id, "Tool message should have chatId"
+    assert interrupt_msg["role"] == "agent", "Tool message role should be 'agent'"
+    assert interrupt_msg["agent"] == "kubernetes-agent", "Tool message should have agent"
+    assert interrupt_msg["message"] == "Confirm deletion of pod?", "Tool message should contain interrupt_message"
+    assert "createdAt" in interrupt_msg, "Tool message should have createdAt"
+    # TOOL-specific fields
+    assert "tools" in interrupt_msg, "Tool message should have tools"
+    assert len(interrupt_msg["tools"]) == 1, "Tool message should have 1 tool"
+    assert interrupt_msg["tools"][0]["toolName"] == "action_tool", "Tool message should preserve tool info"
+    assert interrupt_msg["confirmation"] == True, "Tool message should have confirmation flag"
+    # Fields TOOL should NOT have
+    assert "context" not in interrupt_msg, "Tool message should NOT have context"
+    assert "labels" not in interrupt_msg, "Tool message should NOT have labels"
+    assert "tags" not in interrupt_msg, "Tool message should NOT have tags"

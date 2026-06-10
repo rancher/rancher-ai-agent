@@ -1,319 +1,274 @@
 """Tests for app.services.oauth2.discovery"""
 
 import pytest
+import httpx
 from unittest.mock import AsyncMock, patch, MagicMock
 
-import httpx
-
 from app.services.oauth2.discovery import (
+    DiscoveredMetadata,
     _parse_www_authenticate,
     _discover_from_www_authenticate,
-    _discover_from_well_known,
-    _fetch_resource_metadata,
     _discover_auth_server_metadata_endpoint,
-    discover_oauth_metadata,
+    discover_metadata_endpoint,
 )
-from app.services.oauth2.models import (
-    OAuthDiscoveryError,
-    ResourceMetadata,
-    AuthorizationServerMetadata,
-)
+from app.services.oauth2.models import OAuthDiscoveryError
 
 
 class TestParseWwwAuthenticate:
-    def test_full_header(self):
-        header = 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="files:read files:write"'
-        url, scopes = _parse_www_authenticate(header)
-        assert url == "https://mcp.example.com/.well-known/oauth-protected-resource"
-        assert scopes == ["files:read", "files:write"]
-
-    def test_resource_metadata_only(self):
+    def test_extracts_resource_metadata_url(self):
         header = 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"'
-        url, scopes = _parse_www_authenticate(header)
-        assert url == "https://mcp.example.com/.well-known/oauth-protected-resource"
-        assert scopes is None
+        result = _parse_www_authenticate(header)
+        assert result == "https://mcp.example.com/.well-known/oauth-protected-resource"
 
-    def test_scope_only(self):
-        header = 'Bearer scope="read write"'
-        url, scopes = _parse_www_authenticate(header)
-        assert url is None
-        assert scopes == ["read", "write"]
+    def test_returns_none_when_no_resource_metadata(self):
+        header = 'Bearer realm="example"'
+        result = _parse_www_authenticate(header)
+        assert result is None
 
-    def test_empty_header(self):
-        url, scopes = _parse_www_authenticate("")
-        assert url is None
-        assert scopes is None
+    def test_returns_none_for_empty_header(self):
+        result = _parse_www_authenticate("")
+        assert result is None
 
-    def test_no_bearer(self):
-        header = 'Basic realm="test"'
-        url, scopes = _parse_www_authenticate(header)
-        assert url is None
-        assert scopes is None
-
-    def test_single_scope(self):
-        header = 'Bearer scope="read"'
-        url, scopes = _parse_www_authenticate(header)
-        assert scopes == ["read"]
+    def test_handles_extra_parameters(self):
+        header = 'Bearer realm="example", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="openid"'
+        result = _parse_www_authenticate(header)
+        assert result == "https://mcp.example.com/.well-known/oauth-protected-resource"
 
 
 class TestDiscoverFromWwwAuthenticate:
     @pytest.mark.asyncio
-    async def test_401_with_www_authenticate(self):
+    async def test_returns_url_from_401_with_www_authenticate(self):
         mock_response = MagicMock()
         mock_response.status_code = 401
-        mock_response.headers = httpx.Headers(
-            {"www-authenticate": 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="read"'}
-        )
+        mock_response.headers = {
+            "www-authenticate": 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"'
+        }
+
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        url, scopes = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com")
-        assert url == "https://mcp.example.com/.well-known/oauth-protected-resource"
-        assert scopes == ["read"]
-
-    @pytest.mark.asyncio
-    async def test_non_401_response(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        url, scopes = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com")
-        assert url is None
-        assert scopes is None
-
-    @pytest.mark.asyncio
-    async def test_401_without_header(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.headers = httpx.Headers({})
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        url, scopes = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com")
-        assert url is None
-        assert scopes is None
-
-    @pytest.mark.asyncio
-    async def test_request_error(self):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.RequestError("connection failed"))
-
-        url, scopes = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com")
-        assert url is None
-        assert scopes is None
-
-
-class TestDiscoverFromWellKnown:
-    @pytest.mark.asyncio
-    async def test_found_with_path(self):
-        mock_response_ok = MagicMock()
-        mock_response_ok.status_code = 200
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response_ok)
-
-        result = await _discover_from_well_known(mock_client, "https://mcp.example.com/path/to/mcp")
-        assert result == "https://mcp.example.com/.well-known/oauth-protected-resource/path/to/mcp"
-
-    @pytest.mark.asyncio
-    async def test_found_at_root(self):
-        mock_response_404 = MagicMock()
-        mock_response_404.status_code = 404
-        mock_response_ok = MagicMock()
-        mock_response_ok.status_code = 200
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=[mock_response_404, mock_response_ok])
-
-        result = await _discover_from_well_known(mock_client, "https://mcp.example.com/path")
+        result = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com/sse")
         assert result == "https://mcp.example.com/.well-known/oauth-protected-resource"
 
     @pytest.mark.asyncio
-    async def test_not_found(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        result = await _discover_from_well_known(mock_client, "https://mcp.example.com")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_request_error(self):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.RequestError("timeout"))
-
-        result = await _discover_from_well_known(mock_client, "https://mcp.example.com")
-        assert result is None
-
-
-class TestFetchResourceMetadata:
-    @pytest.mark.asyncio
-    async def test_success(self):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "resource": "https://mcp.example.com",
-            "authorization_servers": ["https://auth.example.com"],
-            "scopes_supported": ["read"],
-            "bearer_methods_supported": ["header"],
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        rm = await _fetch_resource_metadata(mock_client, "https://mcp.example.com/.well-known/oauth-protected-resource")
-        assert rm.resource == "https://mcp.example.com"
-        assert rm.authorization_servers == ["https://auth.example.com"]
-
-    @pytest.mark.asyncio
-    async def test_http_error(self):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.RequestError("fail"))
-
-        with pytest.raises(OAuthDiscoveryError, match="Failed to fetch resource metadata"):
-            await _fetch_resource_metadata(mock_client, "https://mcp.example.com/.well-known/oauth-protected-resource")
-
-
-class TestDiscoverAuthServerMetadata:
-    @pytest.mark.asyncio
-    async def test_success_no_path(self):
-        metadata = {
-            "issuer": "https://auth.example.com",
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token",
-            "registration_endpoint": "https://auth.example.com/register",
-            "scopes_supported": ["openid"],
-            "response_types_supported": ["code"],
-            "code_challenge_methods_supported": ["S256"],
-        }
+    async def test_returns_none_when_not_401(self):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = metadata
+        mock_response.headers = {}
+
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        result = await _discover_auth_server_metadata_endpoint(mock_client, "https://auth.example.com")
-        assert result.authorization_endpoint == "https://auth.example.com/authorize"
-        assert result.token_endpoint == "https://auth.example.com/token"
-        assert result.registration_endpoint == "https://auth.example.com/register"
+        result = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com/sse")
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_success_with_path(self):
-        metadata = {
-            "issuer": "https://auth.example.com",
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token",
-        }
-        mock_response_404 = MagicMock()
-        mock_response_404.status_code = 404
-        mock_response_ok = MagicMock()
-        mock_response_ok.status_code = 200
-        mock_response_ok.json.return_value = metadata
+    async def test_returns_none_when_no_www_authenticate_header(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=[mock_response_404, mock_response_ok])
+        mock_client.get = AsyncMock(return_value=mock_response)
 
-        result = await _discover_auth_server_metadata_endpoint(mock_client, "https://auth.example.com/tenant1")
-        assert result.authorization_endpoint == "https://auth.example.com/authorize"
+        result = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com/sse")
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_all_fail(self):
+    async def test_returns_none_on_request_error(self):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.RequestError("connection failed", request=MagicMock()))
+
+        result = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com/sse")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_handles_case_insensitive_header(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {
+            "Www-Authenticate": 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"'
+        }
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        result = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com/sse")
+        assert result == "https://mcp.example.com/.well-known/oauth-protected-resource"
+
+
+class TestDiscoverAuthServerMetadataEndpoint:
+    @pytest.mark.asyncio
+    async def test_finds_oauth_authorization_server_at_root(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        result = await _discover_auth_server_metadata_endpoint(
+            mock_client, "https://auth.example.com"
+        )
+        assert result == "https://auth.example.com/.well-known/oauth-authorization-server"
+
+    @pytest.mark.asyncio
+    async def test_finds_oauth_authorization_server_with_path(self):
+        async def mock_get(url):
+            response = MagicMock()
+            if url == "https://auth.example.com/.well-known/oauth-authorization-server/tenant1":
+                response.status_code = 200
+            else:
+                response.status_code = 404
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+
+        result = await _discover_auth_server_metadata_endpoint(
+            mock_client, "https://auth.example.com/tenant1"
+        )
+        assert result == "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_openid_configuration(self):
+        async def mock_get(url):
+            response = MagicMock()
+            if url == "https://auth.example.com/.well-known/openid-configuration":
+                response.status_code = 200
+            else:
+                response.status_code = 404
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+
+        result = await _discover_auth_server_metadata_endpoint(
+            mock_client, "https://auth.example.com"
+        )
+        assert result == "https://auth.example.com/.well-known/openid-configuration"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_root_with_path(self):
+        """When path-based URLs fail, falls back to root-level endpoints."""
+        async def mock_get(url):
+            response = MagicMock()
+            if url == "https://auth.example.com/.well-known/oauth-authorization-server":
+                response.status_code = 200
+            else:
+                response.status_code = 404
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+
+        result = await _discover_auth_server_metadata_endpoint(
+            mock_client, "https://auth.example.com/tenant1"
+        )
+        assert result == "https://auth.example.com/.well-known/oauth-authorization-server"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_all_attempts_fail(self):
         mock_response = MagicMock()
         mock_response.status_code = 404
+
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        with pytest.raises(OAuthDiscoveryError, match="Failed to discover authorization server metadata"):
-            await _discover_auth_server_metadata_endpoint(mock_client, "https://auth.example.com")
-
-
-class TestDiscoverOAuthMetadata:
-    @pytest.mark.asyncio
-    @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
-    async def test_full_discovery_chain(self, _mock_tls):
-        resource_metadata_response = MagicMock()
-        resource_metadata_response.json.return_value = {
-            "resource": "https://mcp.example.com",
-            "authorization_servers": ["https://auth.example.com"],
-            "scopes_supported": ["read"],
-        }
-        resource_metadata_response.raise_for_status = MagicMock()
-
-        auth_server_response = MagicMock()
-        auth_server_response.status_code = 200
-        auth_server_response.json.return_value = {
-            "issuer": "https://auth.example.com",
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token",
-        }
-
-        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www, \
-             patch("app.services.oauth2.discovery._discover_from_well_known") as mock_wk, \
-             patch("app.services.oauth2.discovery._fetch_resource_metadata") as mock_fetch_rm, \
-             patch("app.services.oauth2.discovery._discover_auth_server_metadata") as mock_auth:
-
-            mock_www.return_value = ("https://mcp.example.com/.well-known/oauth-protected-resource", ["read"])
-            mock_fetch_rm.return_value = ResourceMetadata(
-                resource="https://mcp.example.com",
-                authorization_servers=["https://auth.example.com"],
-                scopes_supported=["read"],
+        with pytest.raises(OAuthDiscoveryError, match="Failed to discover"):
+            await _discover_auth_server_metadata_endpoint(
+                mock_client, "https://auth.example.com"
             )
-            mock_auth.return_value = AuthorizationServerMetadata(
-                issuer="https://auth.example.com",
-                authorization_endpoint="https://auth.example.com/authorize",
-                token_endpoint="https://auth.example.com/token",
-            )
-
-            result = await discover_oauth_metadata("https://mcp.example.com")
-            assert result.auth_server_metadata.authorization_endpoint == "https://auth.example.com/authorize"
-            assert result.auth_server_metadata.token_endpoint == "https://auth.example.com/token"
-            assert result.required_scopes == ["read"]
-            mock_wk.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_handles_request_errors_gracefully(self):
+        async def mock_get(url):
+            if "oauth-authorization-server" in url:
+                raise httpx.RequestError("connection failed", request=MagicMock())
+            response = MagicMock()
+            response.status_code = 200
+            return response
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+
+        result = await _discover_auth_server_metadata_endpoint(
+            mock_client, "https://auth.example.com"
+        )
+        assert result == "https://auth.example.com/.well-known/openid-configuration"
+
+
+class TestDiscoverMetadataEndpoint:
+    @pytest.mark.asyncio
     @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
-    async def test_fallback_to_direct_auth_server(self, _mock_tls):
-        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www, \
-             patch("app.services.oauth2.discovery._discover_from_well_known") as mock_wk, \
-             patch("app.services.oauth2.discovery._discover_auth_server_metadata") as mock_auth:
+    async def test_discovers_metadata_successfully(self, mock_tls):
+        resource_metadata_url = "https://mcp.example.com/.well-known/oauth-protected-resource"
+        auth_server_url = "https://auth.example.com/.well-known/oauth-authorization-server"
 
-            mock_www.return_value = (None, None)
-            mock_wk.return_value = None
-            mock_auth.return_value = AuthorizationServerMetadata(
-                issuer="https://mcp.example.com",
-                authorization_endpoint="https://mcp.example.com/authorize",
-                token_endpoint="https://mcp.example.com/token",
-                scopes_supported=["read"],
-            )
+        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www_auth, \
+             patch("app.services.oauth2.discovery._discover_auth_server_metadata_endpoint") as mock_auth_server:
 
-            result = await discover_oauth_metadata("https://mcp.example.com")
-            assert result.auth_server_metadata.authorization_endpoint == "https://mcp.example.com/authorize"
-            assert result.resource_metadata is None
+            mock_www_auth.return_value = resource_metadata_url
+
+            resource_response = MagicMock()
+            resource_response.status_code = 200
+            resource_response.json.return_value = {
+                "authorization_servers": ["https://auth.example.com"],
+                "scopes_supported": ["openid", "profile"],
+            }
+            resource_response.raise_for_status = MagicMock()
+
+            mock_auth_server.return_value = auth_server_url
+
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get = AsyncMock(return_value=resource_response)
+                mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client_instance
+
+                result = await discover_metadata_endpoint("https://mcp.example.com/sse")
+
+                assert isinstance(result, DiscoveredMetadata)
+                assert result.metadata_endpoint == auth_server_url
+                assert result.scopes_supported == ["openid", "profile"]
 
     @pytest.mark.asyncio
     @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
-    async def test_all_discovery_fails(self, _mock_tls):
-        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www, \
-             patch("app.services.oauth2.discovery._discover_from_well_known") as mock_wk, \
-             patch("app.services.oauth2.discovery._discover_auth_server_metadata") as mock_auth:
+    async def test_raises_when_www_authenticate_fails(self, mock_tls):
+        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www_auth:
+            mock_www_auth.return_value = None
 
-            mock_www.return_value = (None, None)
-            mock_wk.return_value = None
-            mock_auth.side_effect = OAuthDiscoveryError("fail")
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client_instance
 
-            with pytest.raises(OAuthDiscoveryError, match="Failed to discover OAuth metadata"):
-                await discover_oauth_metadata("https://mcp.example.com")
+                with pytest.raises(OAuthDiscoveryError, match="Failed to discover"):
+                    await discover_metadata_endpoint("https://mcp.example.com/sse")
 
     @pytest.mark.asyncio
     @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
-    async def test_resource_metadata_no_auth_servers(self, _mock_tls):
-        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www, \
-             patch("app.services.oauth2.discovery._discover_from_well_known") as mock_wk, \
-             patch("app.services.oauth2.discovery._fetch_resource_metadata") as mock_fetch_rm:
+    async def test_raises_when_no_authorization_servers(self, mock_tls):
+        resource_metadata_url = "https://mcp.example.com/.well-known/oauth-protected-resource"
 
-            mock_www.return_value = ("https://mcp.example.com/.well-known/opr", None)
-            mock_fetch_rm.return_value = ResourceMetadata(
-                resource="https://mcp.example.com",
-                authorization_servers=[],
-            )
+        with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www_auth:
+            mock_www_auth.return_value = resource_metadata_url
 
-            with pytest.raises(OAuthDiscoveryError, match="did not include any authorization servers"):
-                await discover_oauth_metadata("https://mcp.example.com")
+            resource_response = MagicMock()
+            resource_response.status_code = 200
+            resource_response.json.return_value = {
+                "authorization_servers": [],
+                "scopes_supported": [],
+            }
+            resource_response.raise_for_status = MagicMock()
+
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get = AsyncMock(return_value=resource_response)
+                mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client_instance
+
+                with pytest.raises(OAuthDiscoveryError, match="did not include any authorization servers"):
+                    await discover_metadata_endpoint("https://mcp.example.com/sse")

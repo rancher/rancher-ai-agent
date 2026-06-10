@@ -45,7 +45,8 @@ async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
             protected_resource_metadata = response.json()
-            issuer_url = protected_resource_metadata.get("authorization_servers", [None])[0]
+            authorization_servers = protected_resource_metadata.get("authorization_servers") or []
+            issuer_url = authorization_servers[0] if authorization_servers else None
             if not issuer_url:
                 raise OAuthDiscoveryError(
                     f"Resource metadata at {resource_metadata_url} did not include any authorization servers."

@@ -193,7 +193,7 @@ async def test_invoke_normal_sends_messages_to_child(child_agent, mock_compiled_
     call_args = mock_compiled_graph.ainvoke.call_args
     input_data = call_args[0][0]
     assert "messages" in input_data
-    assert input_data["messages"][0]["content"] == "test query"
+    assert input_data["messages"][0].content == "test query"
 
 
 @pytest.mark.asyncio

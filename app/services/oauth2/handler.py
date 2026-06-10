@@ -54,7 +54,7 @@ async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket)
         # Send a custom message to the client so it can call the HTTP refresh
         # endpoint to persist the new tokens as browser cookies.
         refresh_data = json.dumps({"agent": agent_cfg.name})
-        await websocket.send_text(f'<token-refreshed>{refresh_data}</token-refreshed>')
+        await websocket.send_text(f'<token-refresh>{refresh_data}</token-refresh>')
         # Wait for the refresh token response
         #TODO check response!
         response = await websocket.receive_text()

@@ -57,8 +57,8 @@
                 }
 
                 // Handle token refresh: call the HTTP endpoint to persist cookies
-                if (data.startsWith("<token-refreshed>")) {
-                    const jsonStr = data.substring(17, data.indexOf("</token-refreshed>"));
+                if (data.startsWith("<token-refresh>")) {
+                    const jsonStr = data.substring(15, data.indexOf("</token-refresh>"));
                     try {
                         const refreshData = JSON.parse(jsonStr);
                         fetch("/oauth/refresh", {
@@ -69,6 +69,7 @@
                         }).then(resp => {
                             if (resp.ok) {
                                 console.log("OAuth token cookies refreshed successfully.");
+                                ws.send("ok");
                             } else {
                                 console.warn("Failed to refresh OAuth token cookies:", resp.status);
                             }
@@ -76,7 +77,7 @@
                             console.error("Error calling /oauth/refresh:", err);
                         });
                     } catch (e) {
-                        console.error("Failed to parse token-refreshed data:", e);
+                        console.error("Failed to parse token-refresh data:", e);
                     }
                     return;
                 }

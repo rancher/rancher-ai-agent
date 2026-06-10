@@ -3,19 +3,19 @@ import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+import httpx
+
+from ..services.oauth2.client import _get_tls_verify
+from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
 from ..services.oauth2 import (
     OAuthClient,
     OAuthDiscoveryError,
     OAuthSecretError,
-    discover_oauth_metadata,
-    get_oauth_client_credentials,
     get_oauth_cookie_names,
     get_oauth_secret_data,
     get_redirect_uri,
     oauth_store,
-    _discover_auth_server_metadata,
-    create_oauth_secret,
     update_oauth_secret_credentials,
 )
 
@@ -208,96 +208,62 @@ async def refresh_token_endpoint(request: Request):
     return response
 
 
-@router.post("/oauth/metadata")
-async def get_metadata(request: Request):
+@router.get("/oauth/metadata")
+async def get_metadata(mcp_url: str):
     """
     Discover OAuth metadata for an MCP server URL and persist it in a Kubernetes secret.
     Returns the metadata URL (issuer) and secret name, or an empty response if discovery fails.
     """
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid request body"}, status_code=400)
-
-    mcp_url = body.get("mcp_url", "")
     if not mcp_url:
         return JSONResponse({"error": "Missing mcp_url"}, status_code=400)
 
     try:
-        discovery_result = await discover_oauth_metadata(mcp_url)
+        return await discover_metadata_endpoint(mcp_url)
     except OAuthDiscoveryError as e:
         logger.info(f"OAuth metadata discovery failed for {mcp_url}: {e}")
         return JSONResponse(content=None, status_code=200)
 
-    url_hash = hashlib.sha256(mcp_url.encode("utf-8")).hexdigest()[:12]
-    secret_name = f"oauth-{url_hash}"
 
-    try:
-        create_oauth_secret(secret_name, discovery_result)
-    except Exception as e:
-        logger.error(f"Failed to create OAuth secret '{secret_name}': {e}")
-        return JSONResponse({"error": f"Failed to create secret: {e}"}, status_code=500)
-
-    return JSONResponse({
-        "secret_name": secret_name,
-        **discovery_result.to_dict(),
-    })
-
-
-@router.post("/oauth/dynamic-registration")
-async def dynamic_registration(request: Request):
+@router.get("/oauth/dynamic-registration")
+async def dynamic_registration(request: Request, metadata_endpoint: str):
     """
     Perform OAuth2 dynamic client registration (RFC 7591) and store credentials in a Kubernetes secret.
     """
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid request body"}, status_code=400)
 
-    auth_server_metadata = body.get("auth_server_metadata", "")
-    secret_name = body.get("secret_name", "")
-
-    if not auth_server_metadata:
-        return JSONResponse({"error": "Missing auth_server_metadata"}, status_code=400)
-    if not secret_name:
-        return JSONResponse({"error": "Missing secret_name"}, status_code=400)
-
-    if not auth_server_metadata.get("registration_endpoint"):
-        return JSONResponse(
-            {"error": "Authorization server does not support dynamic client registration"},
-            status_code=400,
-        )
-
-    #scope = " ".join(auth_server_metadata.scopes_supported) if auth_server_metadata.scopes_supported else None
+    if not metadata_endpoint:
+        return JSONResponse({"error": "Missing metadata_endpoint"}, status_code=400)
+    
     redirect_uri = get_redirect_uri(request.url.hostname)
 
-    try:
-        # TODO move this out of the client class!
-        oauth_client = await OAuthClient.from_dynamic_registration(
-            registration_endpoint=auth_server_metadata.get("registration_endpoint"),
-            redirect_uri=redirect_uri,
-        #    scope=scope,
-        )
-    except OAuthDiscoveryError as e:
-        return JSONResponse({"error": f"Dynamic registration failed: {e}"}, status_code=502)
+    async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:
+        metadata = await http_client.get(metadata_endpoint)
+        metadata.raise_for_status()
+        data = metadata.json()
+        registration_endpoint = data.get("registration_endpoint")
+        if not registration_endpoint:
+            return JSONResponse({"error": "Authorization server metadata does not include registration_endpoint"}, status_code=400)
+        
+        registration_data = {
+            "client_name": "Rancher AI Agent",
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"]
+        }
 
-    try:
-        update_oauth_secret_credentials(
-            secret_name,
-            client_id=oauth_client.client_id,
-            client_secret=oauth_client.client_secret,
-            scopes="",
-        )
-    except OAuthSecretError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
-    except Exception as e:
-        logger.error(f"Failed to update OAuth secret '{secret_name}': {e}")
-        return JSONResponse({"error": f"Failed to update secret: {e}"}, status_code=500)
-
-    return JSONResponse({
-        "client_id": oauth_client.client_id,
-        #"scopes": scope or "",
-    })
+        response = await http_client.post(registration_endpoint, json=registration_data)
+        response.raise_for_status()
+        reg_data = response.json()
+        client_id = reg_data.get("client_id")
+        client_secret = reg_data.get("client_secret", "")
+        if not client_id:
+            return JSONResponse({"error": "Registration response did not include client_id"}, status_code=502)
+        if not client_secret:
+            return JSONResponse({"error": "Registration response did not include client_secret"}, status_code=502)
+        
+        return JSONResponse({
+            "client_id": client_id,
+            "client_secret": client_secret,
+        })
 
 
 def _find_oauth_agent_config(agent_name: str) -> AgentConfig | None:

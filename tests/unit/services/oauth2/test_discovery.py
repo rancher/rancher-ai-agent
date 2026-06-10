@@ -10,7 +10,7 @@ from app.services.oauth2.discovery import (
     _discover_from_www_authenticate,
     _discover_from_well_known,
     _fetch_resource_metadata,
-    _discover_auth_server_metadata,
+    _discover_auth_server_metadata_endpoint,
     discover_oauth_metadata,
 )
 from app.services.oauth2.models import (
@@ -191,7 +191,7 @@ class TestDiscoverAuthServerMetadata:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        result = await _discover_auth_server_metadata(mock_client, "https://auth.example.com")
+        result = await _discover_auth_server_metadata_endpoint(mock_client, "https://auth.example.com")
         assert result.authorization_endpoint == "https://auth.example.com/authorize"
         assert result.token_endpoint == "https://auth.example.com/token"
         assert result.registration_endpoint == "https://auth.example.com/register"
@@ -211,7 +211,7 @@ class TestDiscoverAuthServerMetadata:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=[mock_response_404, mock_response_ok])
 
-        result = await _discover_auth_server_metadata(mock_client, "https://auth.example.com/tenant1")
+        result = await _discover_auth_server_metadata_endpoint(mock_client, "https://auth.example.com/tenant1")
         assert result.authorization_endpoint == "https://auth.example.com/authorize"
 
     @pytest.mark.asyncio
@@ -222,7 +222,7 @@ class TestDiscoverAuthServerMetadata:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         with pytest.raises(OAuthDiscoveryError, match="Failed to discover authorization server metadata"):
-            await _discover_auth_server_metadata(mock_client, "https://auth.example.com")
+            await _discover_auth_server_metadata_endpoint(mock_client, "https://auth.example.com")
 
 
 class TestDiscoverOAuthMetadata:

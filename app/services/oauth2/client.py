@@ -53,8 +53,7 @@ class OAuthClient:
                 "client_name": client_name,
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "token_endpoint_auth_method": "client_secret_basic",
+                "response_types": ["code"]
             }
             if scope:
                 registration_data["scope"] = scope

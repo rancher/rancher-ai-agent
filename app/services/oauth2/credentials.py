@@ -7,7 +7,7 @@ import logging
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from .models import OAuthClientCredentials, OAuthDiscoveryResult, OAuthSecretError
+from .models import OAuthClientCredentials, OAuthSecretError
 
 AGENT_NAMESPACE = "cattle-ai-agent-system"
 
@@ -67,13 +67,13 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
     )
 
 
-def get_oauth_secret_data(secret_name: str) -> tuple[OAuthClientCredentials, OAuthDiscoveryResult]:
+def get_oauth_secret_data(secret_name: str) -> OAuthClientCredentials:
     """
     Read both client credentials and discovery metadata from a Kubernetes secret.
     Args:
         secret_name: Name of the secret in the agent namespace.
     Returns:
-        Tuple of (OAuthClientCredentials, OAuthDiscoveryResult).
+        OAuthClientCredentials with client_id, client_secret, scopes, and metadata_endpoint.
     Raises:
         OAuthSecretError: If the secret does not exist or has no metadata key.
     """
@@ -84,29 +84,16 @@ def get_oauth_secret_data(secret_name: str) -> tuple[OAuthClientCredentials, OAu
             f"OAuth secret '{secret_name}' does not have data."
         )
 
-    credentials = OAuthClientCredentials(
+    return OAuthClientCredentials(
         client_id=_decode_key(secret.data, "clientID"),
         client_secret=_decode_key(secret.data, "clientSecret"),
         scopes=_decode_key(secret.data, "scopes"),
+        metadata_endpoint=_decode_key(secret.data, "metadata_endpoint"),
     )
 
-    metadata_json = _decode_key(secret.data, "metadata")
-    if not metadata_json:
-        raise OAuthSecretError(
-            f"OAuth secret '{secret_name}' does not contain a 'metadata' key."
-        )
-
-    try:
-        metadata = OAuthDiscoveryResult.from_dict(json.loads(metadata_json))
-    except (json.JSONDecodeError, KeyError) as e:
-        raise OAuthSecretError(
-            f"OAuth secret '{secret_name}' has invalid metadata: {e}"
-        ) from e
-
-    return credentials, metadata
 
 
-def create_oauth_secret(secret_name: str, metadata: OAuthDiscoveryResult) -> None:
+def create_oauth_secret(secret_name: str) -> None:
     """
     Create or update a Kubernetes secret with OAuth discovery metadata.
     Args:
@@ -116,9 +103,8 @@ def create_oauth_secret(secret_name: str, metadata: OAuthDiscoveryResult) -> Non
     _load_kube_config()
     v1 = client.CoreV1Api()
 
-    metadata_json = json.dumps(metadata.to_dict())
     secret_data = {
-        "metadata": base64.b64encode(metadata_json.encode("utf-8")).decode("utf-8"),
+       # "metadata": base64.b64encode(metadata_json.encode("utf-8")).decode("utf-8"),
     }
 
     try:

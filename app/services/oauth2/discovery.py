@@ -14,104 +14,75 @@ import httpx
 from urllib.parse import urlparse
 
 from .models import (
-    AuthorizationServerMetadata,
     OAuthDiscoveryError,
-    OAuthDiscoveryResult,
-    ResourceMetadata,
 )
 from .client import _get_tls_verify
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-async def discover_oauth_metadata(mcp_url: str) -> OAuthDiscoveryResult:
+
+@dataclass
+class DiscoveredMetadata:
+    """Data class to hold discovered OAuth metadata."""
+    metadata_endpoint: str
+    scopes_supported: list = field(default_factory=list)
+
+
+async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
     """
-    Discover OAuth metadata from an MCP server following the MCP specification.
-    Implements the full discovery chain:
-    1. Request MCP server, parse 401 WWW-Authenticate header for resource_metadata URL
-    2. Fall back to well-known resource metadata URIs (RFC 9728)
-    3. Fetch resource metadata to find authorization server, then discover its metadata (RFC 8414)
-    Fallback (for servers that skip RFC 9728 resource metadata):
-    4. If resource metadata discovery fails entirely, attempt RFC 8414 authorization server
-       metadata discovery directly on the MCP server's base domain.
+    Discover OAuth metadata endpoint from an MCP server
     Args:
         mcp_url: The URL of the MCP server endpoint.
     Returns:
-        OAuthDiscoveryResult with discovered authorization and token endpoints.
+        The discovered OAuth metadata endpoint URL.
     Raises:
         OAuthDiscoveryError: If all discovery strategies fail.
     """
     async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as client:
-        # Try WWW-Authenticate header discovery
-        resource_metadata_url, required_scopes = await _discover_from_www_authenticate(client, mcp_url)
-
-        # Fall back to well-known resource metadata URIs 
-        if not resource_metadata_url:
-            resource_metadata_url = await _discover_from_well_known(client, mcp_url)
-
+        resource_metadata_url = await _discover_from_www_authenticate(client, mcp_url)
         if resource_metadata_url:
-            # Fetch resource metadata and discover the authorization server
-            resource_metadata = await _fetch_resource_metadata(client, resource_metadata_url)
-
-            if not resource_metadata.authorization_servers:
+            response = await client.get(resource_metadata_url)
+            response.raise_for_status()
+            protected_resource_metadata = response.json()
+            issuer_url = protected_resource_metadata.get("authorization_servers", [None])[0]
+            if not issuer_url:
                 raise OAuthDiscoveryError(
                     f"Resource metadata at {resource_metadata_url} did not include any authorization servers."
                 )
+            auth_server_metadata_endpoint = await _discover_auth_server_metadata_endpoint(client, issuer_url)
 
-            issuer_url = resource_metadata.authorization_servers[0]
-            auth_server_metadata = await _discover_auth_server_metadata(client, issuer_url)
-
-            return OAuthDiscoveryResult(
-                auth_server_metadata=auth_server_metadata,
-                required_scopes=required_scopes or [],
-                resource_metadata=resource_metadata,
+            return DiscoveredMetadata(
+                metadata_endpoint=auth_server_metadata_endpoint,
+                scopes_supported=protected_resource_metadata.get("scopes_supported", []),
             )
 
-        # Fallback — some MCP servers (e.g. Atlassian) don't implement RFC 9728
-        # resource metadata but do serve RFC 8414 auth server metadata directly on the
-        # MCP server's base domain.
-        logger.info(
-            f"No RFC 9728 resource metadata found for {mcp_url}. "
-            "Falling back to direct RFC 8414 authorization server metadata discovery."
-        )
-        try:
-            auth_server_metadata = await _discover_auth_server_metadata(client, mcp_url)
-        except OAuthDiscoveryError:
+        else:
             raise OAuthDiscoveryError(f"Failed to discover OAuth metadata for MCP server at {mcp_url}. ")
 
-        return OAuthDiscoveryResult(
-            auth_server_metadata=auth_server_metadata,
-            required_scopes=required_scopes or auth_server_metadata.scopes_supported,
-            resource_metadata=None,
-        )
-
-
-def _parse_www_authenticate(header: str) -> tuple[str | None, list[str] | None]:
+  
+def _parse_www_authenticate(header: str) -> str | None:
     """
-    Parse WWW-Authenticate header for resource_metadata and scope.
+    Parse WWW-Authenticate header for resource_metadata.
     Handles Bearer scheme as per RFC 9728 Section 5.1 and RFC 6750 Section 3.
     Example header:
-        Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource",
-               scope="files:read"
+        Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
     Returns:
-        Tuple of (resource_metadata_url, required_scopes), with None for missing values.
+        resource_metadata_url
     """
     resource_metadata_url = None
-    scopes = None
 
     rm_match = re.search(r'resource_metadata="([^"]+)"', header)
     if rm_match:
         resource_metadata_url = rm_match.group(1)
 
-    scope_match = re.search(r'scope="([^"]+)"', header)
-    if scope_match:
-        scopes = scope_match.group(1).split()
 
-    return resource_metadata_url, scopes
+    return resource_metadata_url
 
 
 async def _discover_from_www_authenticate(
     client: httpx.AsyncClient, mcp_url: str
-) -> tuple[str | None, list[str] | None]:
+) -> str | None:
     """
     Discover resource metadata URL from a 401 WWW-Authenticate header.
     Makes a request to the MCP server and parses the WWW-Authenticate header
@@ -124,7 +95,7 @@ async def _discover_from_www_authenticate(
 
         if response.status_code != 401:
             logger.debug(f"MCP server at {mcp_url} returned {response.status_code}, expected 401")
-            return None, None
+            return None
 
         # Use case-insensitive lookup to handle any header casing (e.g. Www-Authenticate)
         www_auth = next(
@@ -133,66 +104,17 @@ async def _discover_from_www_authenticate(
         )
         if not www_auth:
             logger.debug(f"No WWW-Authenticate header in 401 response from {mcp_url}")
-            return None, None
+            return None
 
         return _parse_www_authenticate(www_auth)
     except httpx.RequestError as e:
         logger.warning(f"Failed to connect to MCP server at {mcp_url} for OAuth discovery: {e}")
-        return None, None
+        return None
 
 
-async def _discover_from_well_known(
-    client: httpx.AsyncClient, mcp_url: str
-) -> str | None:
-    """
-    Discover resource metadata from well-known URIs (RFC 9728).
-    Tries the following URLs in order:
-    1. Path-specific: https://example.com/.well-known/oauth-protected-resource/path/to/mcp
-    2. Root: https://example.com/.well-known/oauth-protected-resource
-    """
-    parsed = urlparse(mcp_url)
-    base = f"{parsed.scheme}://{parsed.netloc}"
-    path = parsed.path.rstrip("/")
-
-    urls_to_try = []
-    if path:
-        urls_to_try.append(f"{base}/.well-known/oauth-protected-resource{path}")
-    urls_to_try.append(f"{base}/.well-known/oauth-protected-resource")
-
-    for url in urls_to_try:
-        try:
-            response = await client.get(url)
-            if response.status_code == 200:
-                logger.info(f"Found resource metadata at {url}")
-                return url
-        except httpx.RequestError as e:
-            logger.debug(f"Failed to fetch resource metadata from {url}: {e}")
-
-    return None
-
-
-async def _fetch_resource_metadata(
-    client: httpx.AsyncClient, url: str
-) -> ResourceMetadata:
-    """Fetch and parse OAuth Protected Resource Metadata (RFC 9728)."""
-    try:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.json()
-
-        return ResourceMetadata(
-            resource=data.get("resource", ""),
-            authorization_servers=data.get("authorization_servers", []),
-            scopes_supported=data.get("scopes_supported", []),
-            bearer_methods_supported=data.get("bearer_methods_supported", []),
-        )
-    except (httpx.RequestError, httpx.HTTPStatusError) as e:
-        raise OAuthDiscoveryError(f"Failed to fetch resource metadata from {url}: {e}")
-
-
-async def _discover_auth_server_metadata(
-    client: httpx.AsyncClient, issuer_url: str
-) -> AuthorizationServerMetadata:
+async def _discover_auth_server_metadata_endpoint(
+    client: httpx.AsyncClient, protected_resource_endpoint: str
+) -> str:
     """
     Discover authorization server metadata following RFC 8414.
     For issuer URLs with path components (e.g., https://auth.example.com/tenant1):
@@ -203,7 +125,7 @@ async def _discover_auth_server_metadata(
     1. https://auth.example.com/.well-known/oauth-authorization-server
     2. https://auth.example.com/.well-known/openid-configuration
     """
-    parsed = urlparse(issuer_url)
+    parsed = urlparse(protected_resource_endpoint)
     base = f"{parsed.scheme}://{parsed.netloc}"
     path = parsed.path.rstrip("/")
 
@@ -225,22 +147,12 @@ async def _discover_auth_server_metadata(
         try:
             response = await client.get(url)
             if response.status_code == 200:
-                data = response.json()
-                logger.info(f"Found authorization server metadata at {url}")
-                return AuthorizationServerMetadata(
-                    issuer=data.get("issuer", issuer_url),
-                    authorization_endpoint=data["authorization_endpoint"],
-                    token_endpoint=data["token_endpoint"],
-                    registration_endpoint=data.get("registration_endpoint"),
-                    scopes_supported=data.get("scopes_supported", []),
-                    response_types_supported=data.get("response_types_supported", []),
-                    code_challenge_methods_supported=data.get("code_challenge_methods_supported", []),
-                )
+                return url
         except (httpx.RequestError, KeyError, ValueError) as e:
             logger.debug(f"Failed to fetch auth server metadata from {url}: {e}")
 
     raise OAuthDiscoveryError(
-        f"Failed to discover authorization server metadata for issuer {issuer_url}. "
+        f"Failed to discover authorization server metadata for issuer {protected_resource_endpoint}. "
         f"Tried: {', '.join(urls_to_try)}"
     )
 

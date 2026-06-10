@@ -7,7 +7,7 @@ from .cookies import (
     OAUTH_COOKIE_PREFIX,
     get_oauth_cookie_names,
 )
-from .credentials import AGENT_NAMESPACE, get_oauth_secret_data, create_oauth_secret, update_oauth_secret_credentials
+from .credentials import AGENT_NAMESPACE, get_oauth_secret_data
 from .client import _get_tls_verify, OAuthClientManager
 from .handler import get_redirect_uri
 from .discovery import (
@@ -15,7 +15,6 @@ from .discovery import (
     _discover_from_www_authenticate,
     _discover_auth_server_metadata_endpoint,
 )
-from .credentials import get_oauth_client_credentials
 from .store import oauth_store
 from .handler import handle_oauth_authentication
 
@@ -32,10 +31,7 @@ __all__ = [
     "_discover_from_www_authenticate",
     "_discover_auth_server_metadata_endpoint",
     "OAuthClientManager",
-    "get_oauth_client_credentials",
     "get_oauth_secret_data",
-    "create_oauth_secret",
-    "update_oauth_secret_credentials",
     "oauth_store",
     "handle_oauth_authentication",
 ]

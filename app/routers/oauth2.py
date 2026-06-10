@@ -9,11 +9,9 @@ from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
 from ..services.oauth2 import (
     OAuthDiscoveryError,
-    OAuthSecretError,
     get_oauth_cookie_names,
     get_redirect_uri,
     oauth_store,
-    update_oauth_secret_credentials,
 )
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,7 @@ from app.services.oauth2.handler import (
     get_redirect_uri,
     handle_oauth_authentication,
 )
-from app.services.oauth2.models import AuthorizationServerMetadata, OAuthClientCredentials, OAuthDiscoveryResult, OAuthSecretError
+from app.services.oauth2.client import OAuthClientManager
 
 
 class TestGetRedirectUri:
@@ -86,6 +86,10 @@ class TestTryRefreshOauthToken:
         mock_inject.assert_not_awaited()
 
 class TestInitiateOauthFlow:
+    def setup_method(self):
+        """Reset singleton between tests."""
+        OAuthClientManager._instance = None
+
     @pytest.mark.asyncio
     async def test_returns_true_when_refresh_succeeds(self):
         ws = _make_websocket()
@@ -97,61 +101,45 @@ class TestInitiateOauthFlow:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_credentials_from_secret(self):
+    async def test_uses_registered_client(self):
         ws = _make_websocket(cookies={"R_SESS": "sess"})
         cfg = _make_agent_cfg(authentication_secret="my-secret")
 
-        discovery_result = OAuthDiscoveryResult(
-            auth_server_metadata=AuthorizationServerMetadata(
-                authorization_endpoint="https://auth.example.com/authorize",
-                token_endpoint="https://auth.example.com/token",
-            ),
-        )
-        creds = OAuthClientCredentials(client_id="cid", client_secret="csecret", scopes="read")
+        mock_client = MagicMock()
+        mock_client.create_authorization_url = AsyncMock(return_value={
+            "url": "https://auth-url",
+            "state": "state123",
+            "code_verifier": "verifier123",
+        })
 
-        mock_oauth_client = MagicMock()
-        mock_oauth_client.get_auth_url = AsyncMock(return_value=("https://auth-url", "verifier", "state123"))
+        mock_manager = MagicMock()
+        mock_manager.get_client.return_value = mock_client
 
         with (
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.get_oauth_secret_data", return_value=(creds, discovery_result)),
-            patch("app.services.oauth2.handler.OAuthClient", return_value=mock_oauth_client) as mock_cls,
+            patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
         ):
             result = await _initiate_oauth_flow(cfg, ws)
 
         assert result is False
-        mock_cls.assert_called_once_with(client_id="cid", client_secret="csecret", scope="read")
+        mock_manager.get_client.assert_called_once_with("test-agent")
         ws.send_text.assert_called_once()
         assert "<authentication>" in ws.send_text.call_args[0][0]
         assert "https://auth-url" in ws.send_text.call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_raises_when_no_authentication_secret(self):
-        ws = _make_websocket()
-        cfg = _make_agent_cfg(authentication_secret=None)
-
-        with patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False):
-            with pytest.raises(NoAgentAvailableError, match="no authentication secret"):
-                await _initiate_oauth_flow(cfg, ws)
-
-    @pytest.mark.asyncio
-    async def test_raises_when_no_client_credentials_in_secret(self):
+    async def test_raises_when_no_client_registered(self):
         ws = _make_websocket()
         cfg = _make_agent_cfg(authentication_secret="my-secret")
 
-        discovery_result = OAuthDiscoveryResult(
-            auth_server_metadata=AuthorizationServerMetadata(
-                authorization_endpoint="https://auth.example.com/authorize",
-                token_endpoint="https://auth.example.com/token",
-            ),
-        )
-        creds = OAuthClientCredentials(client_id="", client_secret="")
+        mock_manager = MagicMock()
+        mock_manager.get_client.return_value = None
 
         with (
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.get_oauth_secret_data", return_value=(creds, discovery_result)),
+            patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
         ):
-            with pytest.raises(NoAgentAvailableError, match="clientID and clientSecret"):
+            with pytest.raises(NoAgentAvailableError, match="no OAuth client is registered"):
                 await _initiate_oauth_flow(cfg, ws)
 
     @pytest.mark.asyncio
@@ -159,20 +147,19 @@ class TestInitiateOauthFlow:
         ws = _make_websocket(cookies={"R_SESS": "sess-abc"})
         cfg = _make_agent_cfg(authentication_secret="my-secret")
 
-        discovery_result = OAuthDiscoveryResult(
-            auth_server_metadata=AuthorizationServerMetadata(
-                authorization_endpoint="https://auth.example.com/authorize",
-                token_endpoint="https://auth.example.com/token",
-            ),
-        )
-        creds = OAuthClientCredentials(client_id="cid", client_secret="csecret")
-        mock_oauth_client = MagicMock()
-        mock_oauth_client.get_auth_url = AsyncMock(return_value=("https://auth-url", "my-verifier", "state-xyz"))
+        mock_client = MagicMock()
+        mock_client.create_authorization_url = AsyncMock(return_value={
+            "url": "https://auth-url",
+            "state": "state-xyz",
+            "code_verifier": "my-verifier",
+        })
+
+        mock_manager = MagicMock()
+        mock_manager.get_client.return_value = mock_client
 
         with (
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
-            patch("app.services.oauth2.handler.get_oauth_secret_data", return_value=(creds, discovery_result)),
-            patch("app.services.oauth2.handler.OAuthClient", return_value=mock_oauth_client),
+            patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
             patch("app.services.oauth2.handler.oauth_store") as mock_store,
         ):
             await _initiate_oauth_flow(cfg, ws)
@@ -180,10 +167,9 @@ class TestInitiateOauthFlow:
         mock_store.set_state.assert_called_once_with(
             "state-xyz",
             {
-                "verifier": "my-verifier",
-                "oauth_client": mock_oauth_client,
-                "token_endpoint": "https://auth.example.com/token",
-                "cookie_key": "test-agent",
+                "code_verifier": "my-verifier",
+                "agent_name": "test-agent",
+                "redirect_uri": mock_store.set_state.call_args[0][1]["redirect_uri"],
             },
             "sess-abc",
         )

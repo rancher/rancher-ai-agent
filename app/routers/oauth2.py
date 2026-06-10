@@ -1,19 +1,16 @@
-import hashlib
 import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 
-from ..services.oauth2.client import _get_tls_verify
+from ..services.oauth2.client import OAuthClientManager, _get_tls_verify
 from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
 from ..services.oauth2 import (
-    OAuthClient,
     OAuthDiscoveryError,
     OAuthSecretError,
     get_oauth_cookie_names,
-    get_oauth_secret_data,
     get_redirect_uri,
     oauth_store,
     update_oauth_secret_credentials,
@@ -46,20 +43,30 @@ async def get(request: Request):
             </html>
         """, status_code=400)
 
-    verifier = oauth_data["verifier"]
-    oauth_client = oauth_data["oauth_client"]
-    token_endpoint = oauth_data["token_endpoint"]
-    cookie_key = oauth_data.get("cookie_key", "")
+    code_verifier = oauth_data["code_verifier"]
+    agent_name = oauth_data["agent_name"]
+    redirect_uri = oauth_data["redirect_uri"]
 
-    # Exchange the code for the actual Access Token
-    redirect_uri = get_redirect_uri(request.url.hostname)
+    # Get the registered OAuth client for this agent
+    manager = OAuthClientManager.get_instance()
+    client = manager.get_client(agent_name)
+    if not client:
+        return HTMLResponse(content="""
+            <!DOCTYPE html>
+            <html>
+            <head><title>Authentication Error</title></head>
+            <body>
+                <h2>Authentication Error</h2>
+                <p>OAuth client not found for this agent. Please close this window and try again.</p>
+            </body>
+            </html>
+        """, status_code=400)
 
     try:
-        token = await oauth_client.fetch_token(
-            token_endpoint=token_endpoint,
-            authorization_response=str(request.url),
+        token = await client.fetch_access_token(
             redirect_uri=redirect_uri,
-            verifier=verifier
+            code=code,
+            code_verifier=code_verifier,
         )
 
         access_token = token.get("access_token", "")
@@ -87,31 +94,29 @@ async def get(request: Request):
         response = HTMLResponse(content=html_content)
 
         # Store tokens as httponly cookies for subsequent connections
-        if cookie_key:
-            cookie_names = get_oauth_cookie_names(cookie_key)
-            is_secure = request.url.scheme == "https"
+        cookie_names = get_oauth_cookie_names(agent_name)
+        is_secure = request.url.scheme == "https"
 
-            if access_token:
-                response.set_cookie(
-                    cookie_names["access_token"], access_token,
-                    httponly=True, secure=is_secure, samesite="strict", path="/",
-                    max_age=_COOKIE_MAX_AGE,
-                )
-                # Store the access token so the WebSocket handler can inject it
-                # into the connection's cookies (WebSocket cookies are frozen at
-                # handshake time and won't reflect new HTTP cookies).
-                oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
-            else:
-                logger.warning(f"No access token received")
+        if access_token:
+            response.set_cookie(
+                cookie_names["access_token"], access_token,
+                httponly=True, secure=is_secure, samesite="strict", path="/",
+                max_age=_COOKIE_MAX_AGE,
+            )
+            # Store the access token so the WebSocket handler can inject it
+            # into the connection's cookies (WebSocket cookies are frozen at
+            # handshake time and won't reflect new HTTP cookies).
+            oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
+        else:
+            logger.warning(f"No access token received")
 
-            if refresh_token:
-                response.set_cookie(
-                    cookie_names["refresh_token"], refresh_token,
-                    httponly=True, secure=is_secure, samesite="strict", path="/",
-                    max_age=_COOKIE_MAX_AGE,
-                )
-                oauth_store.set_token(cookie_names["refresh_token"], refresh_token, session_token)
-
+        if refresh_token:
+            response.set_cookie(
+                cookie_names["refresh_token"], refresh_token,
+                httponly=True, secure=is_secure, samesite="strict", path="/",
+                max_age=_COOKIE_MAX_AGE,
+            )
+            oauth_store.set_token(cookie_names["refresh_token"], refresh_token, session_token)
 
         return response
 
@@ -135,8 +140,8 @@ async def refresh_token_endpoint(request: Request):
     Refresh the OAuth2 access token using the refresh token stored in cookies.
 
     Expects a JSON body with 'agent' (the agent config name). The endpoint
-    resolves credentials from the agent's Kubernetes secret and performs
-    OAuth discovery to obtain the token endpoint.
+    uses the singleton OAuth client (registered at AIAgentConfig create/update)
+    to perform the refresh.
     """
     try:
         body = await request.json()
@@ -152,13 +157,10 @@ async def refresh_token_endpoint(request: Request):
     if not agent_cfg:
         return JSONResponse({"error": f"Agent '{agent_name}' not found or not OAuth2"}, status_code=404)
 
-    if not agent_cfg.authentication_secret:
-        return JSONResponse({"error": f"Agent '{agent_name}' has no authentication secret"}, status_code=400)
-
-    try:
-        credentials, metadata = get_oauth_secret_data(agent_cfg.authentication_secret)
-    except OAuthSecretError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+    manager = OAuthClientManager.get_instance()
+    client = manager.get_client(agent_name)
+    if not client:
+        return JSONResponse({"error": f"No OAuth client registered for agent '{agent_name}'"}, status_code=400)
 
     cookie_names = get_oauth_cookie_names(agent_cfg.name)
 
@@ -166,14 +168,11 @@ async def refresh_token_endpoint(request: Request):
     if not refresh_token_value:
         return JSONResponse({"error": "No refresh token available"}, status_code=401)
 
-    oauth_client = OAuthClient(
-        client_id=credentials.client_id,
-        client_secret=credentials.client_secret,
-        scope=credentials.scopes,
-    )
-
     try:
-        token = await oauth_client.refresh_token(metadata.auth_server_metadata.token_endpoint, refresh_token_value)
+        token = await client.fetch_access_token(
+            grant_type="refresh_token",
+            refresh_token=refresh_token_value,
+        )
     except Exception as e:
         logger.debug(f"Token refresh failed for agent '{agent_name}': {e}")
         return JSONResponse({"error": f"Token refresh failed: {e}"}, status_code=401)

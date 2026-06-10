@@ -63,7 +63,7 @@ def get_oauth_client_credentials(secret_name: str) -> OAuthClientCredentials:
     return OAuthClientCredentials(
         client_id=_decode_key(secret.data, "clientID"),
         client_secret=_decode_key(secret.data, "clientSecret"),
-        scopes=_decode_key(secret.data, "scopes"),
+        scope=_decode_key(secret.data, "scope"),
     )
 
 
@@ -73,7 +73,7 @@ def get_oauth_secret_data(secret_name: str) -> OAuthClientCredentials:
     Args:
         secret_name: Name of the secret in the agent namespace.
     Returns:
-        OAuthClientCredentials with client_id, client_secret, scopes, and metadata_endpoint.
+        OAuthClientCredentials with client_id, client_secret, scope, and metadata_endpoint.
     Raises:
         OAuthSecretError: If the secret does not exist or has no metadata key.
     """
@@ -87,7 +87,7 @@ def get_oauth_secret_data(secret_name: str) -> OAuthClientCredentials:
     return OAuthClientCredentials(
         client_id=_decode_key(secret.data, "clientID"),
         client_secret=_decode_key(secret.data, "clientSecret"),
-        scopes=_decode_key(secret.data, "scopes"),
+        scope=_decode_key(secret.data, "scope"),
         metadata_endpoint=_decode_key(secret.data, "metadata_endpoint"),
     )
 

@@ -6,10 +6,9 @@ from fastapi import WebSocket
 
 from ..agent._constants import NoAgentAvailableError
 from ..agent.loader import AgentConfig
-from .client import OAuthClient
+from .client import OAuthClientManager
 from .cookies import get_oauth_cookie_names
-from .credentials import AGENT_NAMESPACE, get_oauth_secret_data
-from .models import OAuthSecretError
+from .credentials import AGENT_NAMESPACE
 from .store import oauth_store
 
 async def handle_oauth_authentication(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
@@ -94,41 +93,29 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     if await _try_refresh_oauth_token(agent_cfg, websocket):
         return True
 
-    if not agent_cfg.authentication_secret:
+    manager = OAuthClientManager.get_instance()
+    client = manager.get_client(agent_cfg.name)
+
+    if not client:
         raise NoAgentAvailableError(
-            f"Agent '{agent_cfg.name}' requires OAuth2 but has no authentication secret configured."
+            f"Agent '{agent_cfg.name}' requires OAuth2 but no OAuth client is registered. "
+            "Ensure the AIAgentConfig has a valid authenticationSecret with clientID, "
+            "clientSecret, and metadata_endpoint."
         )
 
-    credentials, metadata = get_oauth_secret_data(agent_cfg.authentication_secret)
-
-    if not credentials.client_id or not credentials.client_secret:
-        raise NoAgentAvailableError(
-            f"Agent '{agent_cfg.name}' requires OAuth2 but the authentication secret "
-            "does not contain clientID and clientSecret."
-        )
-
-    oauth_client = OAuthClient(
-        client_id=credentials.client_id,
-        client_secret=credentials.client_secret,
-        scope=credentials.scopes,
-    )
-
-    auth_endpoint = metadata.auth_server_metadata.authorization_endpoint
     redirect_uri = get_redirect_uri(websocket.url.hostname)
+    rv = await client.create_authorization_url(redirect_uri)
 
-    url, verifier, state = await oauth_client.get_auth_url(auth_endpoint, redirect_uri)
-
-    cookie_key = agent_cfg.name
+    state = rv["state"]
     session_token = websocket.cookies.get("R_SESS", "")
     oauth_store.set_state(state, {
-        "verifier": verifier,
-        "oauth_client": oauth_client,
-        "token_endpoint": metadata.auth_server_metadata.token_endpoint,
-        "cookie_key": cookie_key,
+        "code_verifier": rv.get("code_verifier"),
+        "agent_name": agent_cfg.name,
+        "redirect_uri": redirect_uri,
     }, session_token)
 
     await websocket.send_text(
-        f'<authentication>{{"type": "oauth2", "url": "{str(url)}", "agent": "{agent_cfg.name}"}}</authentication>'
+        f'<authentication>{{"type": "oauth2", "url": "{rv["url"]}", "agent": "{agent_cfg.name}"}}</authentication>'
     )
     return False
 

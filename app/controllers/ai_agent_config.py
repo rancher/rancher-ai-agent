@@ -15,6 +15,9 @@ from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
 from ..services.agent.loader import AgentConfig, AuthenticationType, CABundleRef
 from ..services.agent.factory import create_mcp_client
+from ..services.oauth2.client import OAuthClientManager
+from ..services.oauth2.credentials import get_oauth_secret_data
+from ..services.oauth2.models import OAuthSecretError
 
 # Transient exception types that indicate the MCP server may not be ready yet.
 # These warrant a retry with backoff rather than a permanent failure.
@@ -241,6 +244,51 @@ async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
                 delay=delay,
             )
 
-        raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}") 
-        
+        raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}")
+
+    # Register/update the OAuth client if this agent uses OAuth2 authentication
+    _register_oauth_client(agent_config, logger)
+
+
+def _register_oauth_client(agent_config: AgentConfig, logger) -> None:
+    """
+    Register or update the OAuth client for an agent with OAuth2 authentication.
+
+    Reads the client credentials and metadata endpoint from the agent's
+    authentication secret and registers the client in the singleton
+    OAuthClientManager.
+
+    Args:
+        agent_config: The agent configuration to register.
+        logger: Logger instance for diagnostic output.
+    """
+    if agent_config.authentication != AuthenticationType.OAUTH2:
+        return
+
+    if not agent_config.authentication_secret:
+        logger.debug(f"Agent '{agent_config.name}' uses OAuth2 but has no authentication secret")
+        return
+
+    try:
+        credentials = get_oauth_secret_data(agent_config.authentication_secret)
+    except OAuthSecretError as e:
+        logger.warning(f"Cannot register OAuth client for '{agent_config.name}': {e}")
+        return
+
+    if not credentials.client_id or not credentials.metadata_endpoint:
+        logger.debug(
+            f"Agent '{agent_config.name}' OAuth secret missing clientID or metadata_endpoint, "
+            "skipping OAuth client registration"
+        )
+        return
+
+    manager = OAuthClientManager.get_instance()
+    manager.register_client(
+        name=agent_config.name,
+        client_id=credentials.client_id,
+        client_secret=credentials.client_secret,
+        scope=credentials.scope,
+        server_metadata_url=credentials.metadata_endpoint,
+    )
+    logger.info(f"Registered OAuth client for agent '{agent_config.name}'")
     

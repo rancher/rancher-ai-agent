@@ -1,125 +1,84 @@
-"""OAuth2 client with PKCE support for MCP server authentication."""
+"""OAuth2 client manager using authlib starlette integration."""
 
-import hashlib
-import base64
-import os
-import secrets
 import logging
+import os
 
-import httpx
-
-from authlib.integrations.httpx_client import AsyncOAuth2Client
-
-from .models import OAuthDiscoveryError
+from authlib.integrations.starlette_client import OAuth
 
 logger = logging.getLogger(__name__)
 
 
-class OAuthClient:
-    """OAuth2 client with PKCE support for MCP server authentication."""
+class OAuthClientManager:
+    """Singleton OAuth client manager using authlib starlette integration.
 
-    def __init__(self, client_id: str, client_secret: str = "", scope: str | None = None):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.scope = scope
-        self.client = AsyncOAuth2Client(
-            client_id=client_id,
-            client_secret=client_secret,
-            scope=scope,
-        )
+    Manages OAuth2 client registrations for AIAgentConfig resources with
+    OAUTH2 authentication type. Each agent is registered as a named client
+    with its credentials and server metadata URL from the Kubernetes secret.
+    """
+
+    _instance: "OAuthClientManager | None" = None
+
+    def __init__(self):
+        self._oauth = OAuth()
 
     @classmethod
-    async def from_dynamic_registration(
-        cls,
-        registration_endpoint: str,
-        redirect_uri: str,
-        client_name: str = "Rancher AI Agent",
-        scope: str | None = None,
-    ) -> "OAuthClient":
-        """
-        Create an OAuthClient via Dynamic Client Registration (RFC 7591).
+    def get_instance(cls) -> "OAuthClientManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def register_client(
+        self,
+        name: str,
+        client_id: str,
+        client_secret: str,
+        scope: str,
+        server_metadata_url: str,
+    ) -> None:
+        """Register or update an OAuth client for an agent.
+
+        If a client with the same name already exists, it is removed and
+        re-registered with the new configuration.
+
         Args:
-            registration_endpoint: The authorization server's registration endpoint.
-            redirect_uri: The redirect URI for the client.
-            client_name: Human-readable name for the client.
-            scope: Space-separated scopes to request.
+            name: Agent name used as the client key.
+            client_id: OAuth2 client ID from the authentication secret.
+            client_secret: OAuth2 client secret from the authentication secret.
+            scope: Space-separated OAuth2 scopes.
+            server_metadata_url: OpenID/OAuth2 server metadata endpoint URL.
+        """
+        # Remove existing registration so it can be re-registered
+        self._oauth._registry.pop(name, None)
+        self._oauth._clients.pop(name, None)
+
+        self._oauth.register(
+            name=name,
+            client_id=client_id,
+            client_secret=client_secret,
+            server_metadata_url=server_metadata_url,
+            client_kwargs={
+                "scope": scope,
+                "code_challenge_method": "S256",
+            },
+        )
+        logger.info(f"Registered OAuth client for agent '{name}'")
+
+    def remove_client(self, name: str) -> None:
+        """Remove a registered OAuth client."""
+        self._oauth._registry.pop(name, None)
+        self._oauth._clients.pop(name, None)
+
+    def get_client(self, name: str):
+        """Get the registered OAuth client for an agent.
+
         Returns:
-            A configured OAuthClient with registered credentials.
-        Raises:
-            OAuthDiscoveryError: If registration fails.
+            A StarletteOAuth2App instance, or None if not registered.
         """
-        async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:
-            registration_data = {
-                "client_name": client_name,
-                "redirect_uris": [redirect_uri],
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"]
-            }
-            if scope:
-                registration_data["scope"] = scope
+        return self._oauth.create_client(name)
 
-            try:
-                response = await http_client.post(registration_endpoint, json=registration_data)
-                response.raise_for_status()
-                data = response.json()
-
-                return cls(
-                    client_id=data["client_id"],
-                    client_secret=data.get("client_secret", ""),
-                    scope=scope,
-                )
-            except (httpx.RequestError, httpx.HTTPStatusError, KeyError) as e:
-                raise OAuthDiscoveryError(
-                    f"Dynamic client registration failed at {registration_endpoint}: {e}"
-                )
-
-    def generate_pkce_pair(self) -> tuple[str, str]:
-        """Generate PKCE code_verifier and code_challenge pair."""
-        verifier = secrets.token_urlsafe(64)
-        sha256_hash = hashlib.sha256(verifier.encode('utf-8')).digest()
-        challenge = base64.urlsafe_b64encode(sha256_hash).decode('utf-8').replace('=', '')
-        return verifier, challenge
-
-    async def get_auth_url(self, auth_endpoint: str, redirect_uri: str) -> tuple[str, str, str]:
-        """
-        Create the authorization URL with PKCE.
-        Args:
-            auth_endpoint: The authorization endpoint URL.
-            redirect_uri: The redirect URI for the callback.
-        Returns:
-            Tuple of (authorization_url, code_verifier, state).
-        """
-        verifier, challenge = self.generate_pkce_pair()
-        state = secrets.token_urlsafe(16)
-
-        url, _ = self.client.create_authorization_url(
-            auth_endpoint,
-            redirect_uri=redirect_uri,
-            code_challenge=challenge,
-            code_challenge_method='S256',
-            state=state,
-            scope=self.scope,
-        )
-        return url, verifier, state
-
-    async def fetch_token(self, token_endpoint: str, authorization_response: str, redirect_uri: str, verifier: str) -> dict:
-        """Exchange the authorization code for an access token using PKCE."""
-        token = await self.client.fetch_token(
-            token_endpoint,
-            authorization_response=authorization_response,
-            redirect_uri=redirect_uri,
-            code_verifier=verifier,
-        )
-        return token
-
-    async def refresh_token(self, token_endpoint: str, refresh_token: str) -> dict:
-        """Refresh the access token using a refresh token."""
-        token = await self.client.refresh_token(
-            token_endpoint,
-            refresh_token=refresh_token,
-            scope=self.scope,
-        )
-        return token
+    def has_client(self, name: str) -> bool:
+        """Check if a client is registered for the given agent name."""
+        return name in self._oauth._registry
 
 
 def _get_tls_verify() -> bool:

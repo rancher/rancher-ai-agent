@@ -8,14 +8,13 @@ from .cookies import (
     get_oauth_cookie_names,
 )
 from .credentials import AGENT_NAMESPACE, get_oauth_secret_data, create_oauth_secret, update_oauth_secret_credentials
-from .client import _get_tls_verify
+from .client import _get_tls_verify, OAuthClientManager
 from .handler import get_redirect_uri
 from .discovery import (
     _parse_www_authenticate,
     _discover_from_www_authenticate,
     _discover_auth_server_metadata_endpoint,
 )
-from .client import OAuthClient
 from .credentials import get_oauth_client_credentials
 from .store import oauth_store
 from .handler import handle_oauth_authentication
@@ -31,11 +30,8 @@ __all__ = [
     "get_redirect_uri",
     "_parse_www_authenticate",
     "_discover_from_www_authenticate",
-    "_discover_from_well_known",
-    "_fetch_resource_metadata",
     "_discover_auth_server_metadata_endpoint",
-    "discover_oauth_metadata",
-    "OAuthClient",
+    "OAuthClientManager",
     "get_oauth_client_credentials",
     "get_oauth_secret_data",
     "create_oauth_secret",

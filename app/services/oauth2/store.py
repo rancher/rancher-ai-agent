@@ -41,9 +41,9 @@ class OAuthTokenStore:
     Two kinds of entries are managed:
 
     * **State entries** – keyed by the random ``state`` parameter generated
-      during the authorization redirect.  They hold the PKCE verifier, the
-      ``OAuthClient`` instance, and the token endpoint URL needed to complete
-      the code exchange in the callback handler.
+      during the authorization redirect.  They hold the PKCE code verifier,
+      the agent name, and redirect URI needed to complete the code exchange
+      in the callback handler.
 
     * **Token entries** – keyed by the cookie name.  They hold the raw
       access/refresh token string produced by the callback and consumed once

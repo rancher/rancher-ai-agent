@@ -62,7 +62,8 @@ async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket)
         if response == "ok":
             # The client has refreshed the token and set it as a cookie, so we can now inject it into the WebSocket's cookie dict for the agent to use.
             await _inject_oauth_cookie(agent_cfg, websocket)
-
+        else:
+            return False
 
         logging.debug(f"Successfully refreshed OAuth token for agent '{agent_cfg.name}'")
         return True
@@ -115,7 +116,7 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     }, session_token)
 
     await websocket.send_text(
-        f'<authentication>{{"type": "oauth2", "url": "{rv["url"]}", "agent": "{agent_cfg.name}"}}</authentication>'
+        f'<authentication>{json.dumps({"type": "oauth2", "url": rv["url"], "agent": agent_cfg.name})}</authentication>'
     )
     return False
 

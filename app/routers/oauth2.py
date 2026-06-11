@@ -208,8 +208,9 @@ async def refresh_token_endpoint(request: Request):
 @router.get("/oauth/metadata")
 async def get_metadata(mcp_url: str):
     """
-    Discover OAuth metadata for an MCP server URL and persist it in a Kubernetes secret.
-    Returns the metadata URL (issuer) and secret name, or an empty response if discovery fails.
+    Discover OAuth metadata for an MCP server URL.
+
+    Returns discovered metadata (or `null` if discovery fails).
     """
     if not mcp_url:
         return JSONResponse({"error": "Missing mcp_url"}, status_code=400)

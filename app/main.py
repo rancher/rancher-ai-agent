@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 class _NoisyEndpointFilter(logging.Filter):
     """Suppress uvicorn access log entries for noisy endpoints (probes, polling, etc.)."""
-    _NOISY_PATHS = ("/v1/api/health", "/v1/api/readiness", "/v1/api/llm/bedrock/models")
+    _NOISY_PATHS = ("/v1/api/health", "/v1/api/readiness", "/v1/api/llm/bedrock/models", "/oauth")
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
@@ -68,7 +68,8 @@ NOISY_LOGGERS = [
     "asyncio",
     "mcp.client.streamable_http",
     "openai._base_client",
-    "httpcore.connection"
+    "httpcore.connection",
+    "authlib"
 ]
 
 @asynccontextmanager

@@ -176,7 +176,7 @@ async def _validate(agent_config: AgentConfig) -> None:
     await client.get_tools()
 
 
-@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
+@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec',  backoff=5.0, timeout=3600.0)
 @kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
 @kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
 async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
@@ -266,17 +266,17 @@ def _register_oauth_client(agent_config: AgentConfig, logger) -> None:
         return
 
     if not agent_config.authentication_secret:
-        logger.debug(f"Agent '{agent_config.name}' uses OAuth2 but has no authentication secret")
+        logger.error(f"Agent '{agent_config.name}' uses OAuth2 but has no authentication secret")
         return
 
     try:
         credentials = get_oauth_secret_data(agent_config.authentication_secret)
     except OAuthSecretError as e:
         logger.warning(f"Cannot register OAuth client for '{agent_config.name}': {e}")
-        return
+        raise kopf.TemporaryError("OAuth2 authentication requires an authentication secret, retrying...")
 
     if not credentials.client_id or not credentials.metadata_endpoint:
-        logger.debug(
+        logger.warning(
             f"Agent '{agent_config.name}' OAuth secret missing clientID or metadata_endpoint, "
             "skipping OAuth client registration"
         )

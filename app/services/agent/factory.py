@@ -96,10 +96,10 @@ async def _build_child_agents(
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active"})
         except NeedsOauth2 as e:
-            logging.warning(f"OAuth2 authentication required for agent '{agent_cfg.name}': {e}")
+            logging.debug(f"OAuth2 authentication required for agent '{agent_cfg.name}': {e}")
             child_agents.append(ChildAgent(
                 config=agent_cfg,
-                agent=None,
+                agent=create_child_agent(llm, [], agent_cfg.system_prompt, checkpointer, agent_cfg),
                 needs_oauth2=True
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "needs_oauth2", "description": str(e)})
@@ -156,10 +156,6 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
         if agent_cfg.authentication == AuthenticationType.OAUTH2 and (
             "401" in error_message or "Unauthorized" in error_message
         ):
-            logging.warning(
-                f"OAuth2 agent '{agent_cfg.name}' returned 401 during tool load — "
-                "no token yet. Tools will be loaded after OAuth2 authentication."
-            )
             raise NeedsOauth2(agent_cfg)
         else:
             _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")

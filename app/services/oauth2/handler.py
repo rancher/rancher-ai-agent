@@ -11,7 +11,7 @@ from .cookies import get_oauth_cookie_names
 from .credentials import AGENT_NAMESPACE
 from .store import oauth_store
 
-async def handle_oauth_authentication(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
+async def handle_oauth_authentication(agent_name: str, websocket: WebSocket) -> None:
     """
     Handle OAuth2 authentication for an agent that requires it.
 
@@ -21,16 +21,16 @@ async def handle_oauth_authentication(agent_cfg: AgentConfig, websocket: WebSock
     Re-raises OAuthSecretError so the caller can handle the error response.
 
     Args:
-        agent_cfg: The agent configuration requiring OAuth2 authentication.
+        agent_name: The name of the agent requiring OAuth2 authentication.
         websocket: The WebSocket connection.
     """
-    token_refreshed = await _initiate_oauth_flow(agent_cfg, websocket)
+    token_refreshed = await _initiate_oauth_flow(agent_name, websocket)
     if not token_refreshed:
         await websocket.receive_text()
-        await _inject_oauth_cookie(agent_cfg, websocket)
+        await _inject_oauth_cookie(agent_name, websocket)
 
 
-async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket) -> bool:
+async def _try_refresh_oauth_token(agent_name: str, websocket: WebSocket) -> bool:
     """
     Attempt to refresh the OAuth2 access token using a stored refresh token.
 
@@ -45,7 +45,7 @@ async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket)
         True if the token was successfully refreshed and injected, False otherwise.
     """
     try:
-        cookie_names = get_oauth_cookie_names(agent_cfg.name)
+        cookie_names = get_oauth_cookie_names(agent_name)
 
         refresh_token = websocket.cookies.get(cookie_names["refresh_token"])
         if not refresh_token:
@@ -53,7 +53,7 @@ async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket)
 
         # Send a custom message to the client so it can call the HTTP refresh
         # endpoint to persist the new tokens as browser cookies.
-        refresh_data = json.dumps({"agent": agent_cfg.name})
+        refresh_data = json.dumps({"agent": agent_name})
         await websocket.send_text(f'<token-refresh>{refresh_data}</token-refresh>')
         # Wait for the refresh token response
         #TODO check response!
@@ -61,19 +61,19 @@ async def _try_refresh_oauth_token(agent_cfg: AgentConfig, websocket: WebSocket)
 
         if response == "ok":
             # The client has refreshed the token and set it as a cookie, so we can now inject it into the WebSocket's cookie dict for the agent to use.
-            await _inject_oauth_cookie(agent_cfg, websocket)
+            await _inject_oauth_cookie(agent_name, websocket)
         else:
             return False
 
-        logging.debug(f"Successfully refreshed OAuth token for agent '{agent_cfg.name}'")
+        logging.debug(f"Successfully refreshed OAuth token for agent '{agent_name}'")
         return True
 
     except Exception as e:
-        logging.debug(f"Token refresh failed for agent '{agent_cfg.name}': {e}")
+        logging.debug(f"Token refresh failed for agent '{agent_name}': {e}")
         return False
 
 
-async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> bool:
+async def _initiate_oauth_flow(agent_name: str, websocket: WebSocket) -> bool:
     """
     Initiate the OAuth2 authentication flow for an agent that requires it.
 
@@ -84,22 +84,22 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     auth URL to the client.
 
     Args:
-        agent_cfg: The agent configuration requiring OAuth2 authentication.
+        agent_name: The name of the agent requiring OAuth2 authentication.
         websocket: The WebSocket connection to send the auth URL to.
 
     Returns:
         True if the token was silently refreshed (no user interaction needed),
         False if the full OAuth flow was initiated and user action is required.
     """
-    if await _try_refresh_oauth_token(agent_cfg, websocket):
+    if await _try_refresh_oauth_token(agent_name, websocket):
         return True
 
     manager = OAuthClientManager.get_instance()
-    client = manager.get_client(agent_cfg.name)
+    client = manager.get_client(agent_name)
 
     if not client:
         raise NoAgentAvailableError(
-            f"Agent '{agent_cfg.name}' requires OAuth2 but no OAuth client is registered. "
+            f"Agent '{agent_name}' requires OAuth2 but no OAuth client is registered. "
             "Ensure the AIAgentConfig has a valid authenticationSecret with clientID, "
             "clientSecret, and metadata_endpoint."
         )
@@ -111,17 +111,17 @@ async def _initiate_oauth_flow(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     session_token = websocket.cookies.get("R_SESS", "")
     oauth_store.set_state(state, {
         "code_verifier": rv.get("code_verifier"),
-        "agent_name": agent_cfg.name,
+        "agent_name": agent_name,
         "redirect_uri": redirect_uri,
     }, session_token)
 
     await websocket.send_text(
-        f'<authentication>{json.dumps({"type": "oauth2", "url": rv["url"], "agent": agent_cfg.name})}</authentication>'
+        f'<authentication>{json.dumps({"type": "oauth2", "url": rv["url"], "agent": agent_name})}</authentication>'
     )
     return False
 
 
-async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> None:
+async def _inject_oauth_cookie(agent_name: str, websocket: WebSocket) -> None:
     """
     Inject the OAuth access token into the WebSocket's cookies dict.
 
@@ -130,14 +130,14 @@ async def _inject_oauth_cookie(agent_cfg: AgentConfig, websocket: WebSocket) -> 
     oauth_store (populated by the callback) and injects it so that
     create_mcp_client can find it via websocket.cookies.get(...).
     """
-    cookie_name = get_oauth_cookie_names(agent_cfg.name)["access_token"]
+    cookie_name = get_oauth_cookie_names(agent_name)["access_token"]
     session_token = websocket.cookies.get("R_SESS", "")
     token = oauth_store.pop_token(cookie_name, session_token)
     if token:
         websocket.cookies[cookie_name] = token
-        logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_cfg.name}'")
+        logging.debug(f"Injected OAuth token into websocket cookies for agent '{agent_name}'")
     else:
-        logging.warning(f"No OAuth token found in store for agent '{agent_cfg.name}'")
+        logging.warning(f"No OAuth token found in store for agent '{agent_name}'")
 
 
 def get_redirect_uri(url: str | None = None) -> str:

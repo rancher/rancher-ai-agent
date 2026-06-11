@@ -66,12 +66,12 @@ class TestTryRefreshOauthToken:
         cfg = _make_agent_cfg()
 
         with patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject:
-            result = await _try_refresh_oauth_token(cfg, ws)
+            result = await _try_refresh_oauth_token(cfg.name, ws)
 
         assert result is True
         ws.send_text.assert_called_once()
         assert "<token-refresh>" in ws.send_text.call_args[0][0]
-        mock_inject.assert_awaited_once_with(cfg, ws)
+        mock_inject.assert_awaited_once_with(cfg.name, ws)
 
     @pytest.mark.asyncio
     async def test_returns_true_without_inject_when_response_not_ok(self):
@@ -119,7 +119,7 @@ class TestInitiateOauthFlow:
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
             patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
         ):
-            result = await _initiate_oauth_flow(cfg, ws)
+            result = await _initiate_oauth_flow(cfg.name, ws)
 
         assert result is False
         mock_manager.get_client.assert_called_once_with("test-agent")
@@ -162,7 +162,7 @@ class TestInitiateOauthFlow:
             patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
             patch("app.services.oauth2.handler.oauth_store") as mock_store,
         ):
-            await _initiate_oauth_flow(cfg, ws)
+            await _initiate_oauth_flow(cfg.name, ws)
 
         mock_store.set_state.assert_called_once_with(
             "state-xyz",
@@ -183,7 +183,7 @@ class TestInjectOauthCookie:
 
         with patch("app.services.oauth2.handler.oauth_store") as mock_store:
             mock_store.pop_token.return_value = "access-token-value"
-            await _inject_oauth_cookie(cfg, ws)
+            await _inject_oauth_cookie(cfg.name, ws)
 
         assert ws.cookies["mcp_oauth_at_test-agent"] == "access-token-value"
         mock_store.pop_token.assert_called_once_with("mcp_oauth_at_test-agent", "sess")

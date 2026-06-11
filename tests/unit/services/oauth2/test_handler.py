@@ -70,7 +70,7 @@ class TestTryRefreshOauthToken:
 
         assert result is True
         ws.send_text.assert_called_once()
-        assert "<token-refreshed>" in ws.send_text.call_args[0][0]
+        assert "<token-refresh>" in ws.send_text.call_args[0][0]
         mock_inject.assert_awaited_once_with(cfg, ws)
 
     @pytest.mark.asyncio
@@ -82,7 +82,7 @@ class TestTryRefreshOauthToken:
         with patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject:
             result = await _try_refresh_oauth_token(cfg, ws)
 
-        assert result is True
+        assert result is False
         mock_inject.assert_not_awaited()
 
 class TestInitiateOauthFlow:

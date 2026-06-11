@@ -215,7 +215,7 @@ authenticationSecret: my-header-auth-secret
 
 ### OAUTH2
 
-OAuth 2.0 with PKCE (Proof Key for Code Exchange) for MCP servers that implement the OAuth 2.0 authorization framework. This is the most complex authentication type and supports:
+OAuth 2.0 with PKCE (Proof Key for Code Exchange) for MCP servers that implement the OAuth 2.0 authorization framework. It supports:
 
 - **OAuth Discovery**: Automatically discovers authorization and token endpoints from the MCP server's `/.well-known/oauth-authorization-server` metadata.
 - **Dynamic Client Registration** (RFC 7591): If no client credentials are provided and the server supports it, the agent registers itself dynamically.
@@ -224,19 +224,26 @@ OAuth 2.0 with PKCE (Proof Key for Code Exchange) for MCP servers that implement
 
 ```yaml
 authenticationType: OAUTH2
-authenticationSecret: my-oauth-secret  # Optional: contains clientID, clientSecret, scope, metadata_endpoint
+authenticationSecret: my-oauth-secret 
+
 ```
 
 **OAuth Secret Format** (when using static credentials):
 
 The Kubernetes secret referenced by `authenticationSecret` should contain:
 
-| Key                | Required | Description                                            |
-|--------------------|----------|--------------------------------------------------------|
-| `clientID`         | Yes      | The OAuth2 client identifier                           |
-| `clientSecret`     | No       | The OAuth2 client secret (for confidential clients)    |
-| `scope`            | No       | Space-separated list of OAuth scopes                   |
-| `metadata_endpoint`| Yes      | Authorization server metadata endpoint (RFC 8414/OIDC) |
+| Key                | Required | Description                                            |
+
+|--------------------|----------|--------------------------------------------------------|
+
+| `clientID`         | Yes      | The OAuth2 client identifier                           |
+
+| `clientSecret`     | No       | The OAuth2 client secret (for confidential clients)    |
+
+| `scope`            | No       | Space-separated list of OAuth scopes                   |
+
+| `metadata_endpoint`| Yes      | Authorization server metadata endpoint (RFC 8414/OIDC) |
+
 
 **Flow:**
 1. The agent detects a `401 Unauthorized` response from the MCP server.

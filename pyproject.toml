@@ -13,7 +13,7 @@ dependencies = [
     "langchain-ollama==1.0.1",
     "langchain-openai==1.1.14",
     "langchain-text-splitters==1.1.2",
-    "langchain-community==0.4.1",
+    "langchain-community==0.4.2",
     "langfuse==3.14.5",
     "langgraph==1.1.9",
     "langgraph-checkpoint-postgres==3.0.4",

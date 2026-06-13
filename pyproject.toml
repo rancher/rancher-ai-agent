@@ -20,7 +20,7 @@ dependencies = [
     "mcp==1.26.0",
     "unstructured==0.21.5",
     "unstructured[md]==0.21.5",
-    "numpy==2.4.2",
+    "numpy==2.4.6",
     "langchain-chroma==1.1.0",
     "kubernetes==35.0.0",
     "fastmcp==3.2.0",

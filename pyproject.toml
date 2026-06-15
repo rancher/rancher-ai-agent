@@ -8,7 +8,7 @@ dependencies = [
     "asyncio==4.0.0",
     "fastapi[standard]==0.136.3",
     "langchain==1.2.15",
-    "langchain-google-genai==4.2.1",
+    "langchain-google-genai==4.2.5",
     "langchain-mcp-adapters==0.2.1",
     "langchain-ollama==1.0.1",
     "langchain-openai==1.1.14",

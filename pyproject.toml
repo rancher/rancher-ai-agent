@@ -9,7 +9,7 @@ dependencies = [
     "fastapi[standard]==0.136.3",
     "langchain==1.2.15",
     "langchain-google-genai==4.2.5",
-    "langchain-mcp-adapters==0.2.1",
+    "langchain-mcp-adapters==0.3.0",
     "langchain-ollama==1.1.0",
     "langchain-openai==1.1.14",
     "langchain-text-splitters==1.1.2",
@@ -24,7 +24,7 @@ dependencies = [
     "langchain-aws==1.5.1",
     "psycopg[binary,pool]==3.3.4",
     "kopf==1.44.6",
-    "boto3==1.42.61",
+    "boto3==1.43.28",
 ]
 
 [dependency-groups]

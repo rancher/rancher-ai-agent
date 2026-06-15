@@ -1,10 +1,10 @@
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14
 ARG UID=1000
 ARG GID=1000
 
 FROM registry.suse.com/bci/bci-micro:15.7 AS target
 
-FROM registry.suse.com/bci/bci-base:15.7 AS builder
+FROM registry.suse.com/bci/python:3.14 AS builder
 ARG PYTHON_VERSION
 ARG UID
 ARG GID

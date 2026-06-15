@@ -10,7 +10,7 @@ dependencies = [
     "langchain==1.2.15",
     "langchain-google-genai==4.2.5",
     "langchain-mcp-adapters==0.2.1",
-    "langchain-ollama==1.0.1",
+    "langchain-ollama==1.1.0",
     "langchain-openai==1.1.14",
     "langchain-text-splitters==1.1.2",
     "langchain-community==0.4.2",

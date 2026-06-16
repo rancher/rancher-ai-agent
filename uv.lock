@@ -1641,7 +1641,7 @@ wheels = [
 
 [[package]]
 name = "langfuse"
-version = "3.14.5"
+version = "3.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -1652,12 +1652,11 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "packaging" },
     { name = "pydantic" },
-    { name = "requests" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ec/6b/7a945e8bc56cbf343b6f6171fd45870b0ea80ea38463b2db8dd5a9dc04a2/langfuse-3.14.5.tar.gz", hash = "sha256:2f543ec1540053d39b08a50ed5992caf1cd54d472a55cb8e5dcf6d4fcb7ff631", size = 235474, upload-time = "2026-02-23T10:42:47.721Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/db/08266f22e1843d4c2743a1d23b7f93828ec6d5f6a4445f7d2ad3074d8b95/langfuse-3.15.0.tar.gz", hash = "sha256:4b6453c82c8159e5f0655ced24b145ed8279b47382a6b4a6d7a57111ef922181", size = 237275, upload-time = "2026-05-21T11:12:59.643Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/a1/10f04224542d6a57073c4f339b6763836a0899c98966f1d4ffcf56d2cf61/langfuse-3.14.5-py3-none-any.whl", hash = "sha256:5054b1c705ec69bce2d7077ce7419727ac629159428da013790979ca9cae77d5", size = 421240, upload-time = "2026-02-23T10:42:46.085Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/5b/1f16b421f5de996abfb10472d47c72bc829a56cbedacfbf908ebf8cc0469/langfuse-3.15.0-py3-none-any.whl", hash = "sha256:66a3c2b75af9402ffc13690fce73181325d6f78e723463e38844b317d37279ac", size = 424191, upload-time = "2026-05-21T11:12:57.493Z" },
 ]
 
 [[package]]
@@ -3008,7 +3007,7 @@ requires-dist = [
     { name = "langchain-ollama", specifier = "==1.1.0" },
     { name = "langchain-openai", specifier = "==1.1.14" },
     { name = "langchain-text-splitters", specifier = "==1.1.2" },
-    { name = "langfuse", specifier = "==3.14.5" },
+    { name = "langfuse", specifier = "==3.15.0" },
     { name = "langgraph", specifier = "==1.1.9" },
     { name = "langgraph-checkpoint-postgres", specifier = "==3.0.4" },
     { name = "mcp", specifier = "==1.26.0" },

@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Optional
 
 from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -7,60 +8,66 @@ from langchain_openai import ChatOpenAI
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_aws import ChatBedrockConverse
 
+VALID_PROVIDERS = ("ollama", "gemini", "openai", "bedrock")
+
+ROLE_ENV_VARS = {
+    "supervisor": ("SUPERVISOR_LLM", "SUPERVISOR_MODEL"),
+    "uitools": ("UITOOLS_LLM", "UITOOLS_MODEL"),
+    "summary": ("SUMMARY_LLM", "SUMMARY_MODEL"),
+}
+
+
 class LLMManager:
-    """
-    Singleton manager for language model instances.
-    
-    This class ensures that only one instance of the language model is created
-    and reused throughout the application, avoiding redundant initializations
-    and ensuring consistent model configuration.
-    """
-    _instance: BaseLanguageModel = None
+    _instances: dict[str, BaseLanguageModel] = {}
 
     @classmethod
-    def get_instance(cls) -> BaseLanguageModel:
-        """
-        Retrieves the singleton instance of the language model.
-        
-        If the instance doesn't exist yet, it initializes it by calling get_llm().
-        Subsequent calls return the same instance.
-        
-        Returns:
-            The singleton language model instance.
-        """
-        if cls._instance is None:
-            cls._instance = get_llm()
-            logging.info(f"Using model: {cls._instance}")
-        return cls._instance
+    def get_instance(cls, key: str = "default") -> BaseLanguageModel:
+        if key not in cls._instances:
+            cls._instances[key] = get_llm()
+            logging.info(f"Created default LLM instance for key '{key}': {cls._instances[key]}")
+        return cls._instances[key]
 
-def get_llm() -> BaseLanguageModel:
-    """
-    Selects and returns a language model instance based on environment variables.
-    - If the active LLM or the model is not configured, it raises a ValueError.
-    - If LLM mocking is enabled, it configures the connections to the mock server.
-    
-    Returns:
-        An instance of a language model.
-        
-    Raises:
-        ValueError: If the active LLM or the model is not configured.
-    """
+    @classmethod
+    def get_instance_for_role(cls, role: str) -> BaseLanguageModel:
+        if role in cls._instances:
+            return cls._instances[role]
+        llm = get_llm_for_role(role)
+        cls._instances[role] = llm
+        logging.info(f"Created LLM instance for role '{role}': {llm}")
+        return llm
 
-    activeLlm = get_active_llm()
-    model = get_llm_model(activeLlm)
-    
+    @classmethod
+    def get_instance_for_agent(cls, agent_name: str, llm_provider: Optional[str], llm_model: Optional[str]) -> BaseLanguageModel:
+        key = f"agent:{agent_name}"
+        if key in cls._instances:
+            return cls._instances[key]
+        llm = get_llm_for_agent(llm_provider, llm_model)
+        cls._instances[key] = llm
+        logging.info(f"Created LLM instance for agent '{agent_name}': {llm}")
+        return llm
+
+    @classmethod
+    def reset(cls):
+        cls._instances = {}
+
+
+def get_llm(llm_provider: Optional[str] = None, model: Optional[str] = None) -> BaseLanguageModel:
+    if llm_provider is None:
+        llm_provider = get_active_llm()
+    if model is None:
+        model = get_llm_model(llm_provider)
+
     llm_mock_enabled = os.environ.get("LLM_MOCK_ENABLED", "false").lower() == "true"
     llm_mock_url = os.environ.get("LLM_MOCK_URL", "")
     if llm_mock_enabled:
         logging.info(f"Connecting to LLM Mock server at {llm_mock_url}")
 
-    if activeLlm == "ollama":
+    if llm_provider == "ollama":
         if llm_mock_enabled:
             return ChatOllama(model=model, base_url=llm_mock_url)
-
         ollama_url = os.environ.get("OLLAMA_URL")
         return ChatOllama(model=model, base_url=ollama_url)
-    if activeLlm == "gemini":
+    if llm_provider == "gemini":
         if llm_mock_enabled:
             return ChatGoogleGenerativeAI(
                 model=model,
@@ -68,55 +75,62 @@ def get_llm() -> BaseLanguageModel:
                 transport="rest"
             )
         if model == "gemini-2.5-flash":
-             # Disable thinking budget for gemini-2.5-flash to avoid empty responses due to all tokens being used for thinking budget
              return ChatGoogleGenerativeAI(model=model, thinking_budget=0)
-        
         return ChatGoogleGenerativeAI(model=model)
-    if activeLlm == "openai":
+    if llm_provider == "openai":
         if llm_mock_enabled:
             return ChatOpenAI(model=model, base_url=llm_mock_url)
-        
         openai_url = os.environ.get("OPENAI_URL")
         if openai_url:
             return ChatOpenAI(model=model, base_url=openai_url)
         return ChatOpenAI(model=model)
-    if activeLlm == "bedrock":
+    if llm_provider == "bedrock":
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
         return ChatBedrockConverse(model=model)
 
-def get_active_llm() -> str:
-    """
-    Retrieves the active LLM identifier from environment variables.
-    
-    Returns:
-        The active LLM as a string, or None if not set.
-    """
-    llm = os.environ.get("ACTIVE_LLM", "")
-    
-    if llm not in ["ollama", "gemini", "openai", "bedrock"]:
-        raise ValueError("LLM not configured.")
+    raise ValueError(f"Unsupported LLM provider: {llm_provider}")
 
+
+def get_llm_for_role(role: str) -> BaseLanguageModel:
+    env_llm, env_model = ROLE_ENV_VARS.get(role, (None, None))
+    if not env_llm:
+        raise ValueError(f"Unknown role: {role}")
+
+    provider = os.environ.get(env_llm, "").strip() or None
+    model = os.environ.get(env_model, "").strip() or None
+
+    if provider and provider not in VALID_PROVIDERS:
+        raise ValueError(f"Invalid LLM provider '{provider}' for role '{role}'.")
+
+    if provider and model:
+        return get_llm(llm_provider=provider, model=model)
+    return get_llm()
+
+
+def get_llm_for_agent(llm_provider: Optional[str], llm_model: Optional[str]) -> BaseLanguageModel:
+    provider = (llm_provider or "").strip() or None
+    model = (llm_model or "").strip() or None
+
+    if provider and provider not in VALID_PROVIDERS:
+        raise ValueError(f"Invalid LLM provider '{provider}' for agent.")
+
+    if provider and model:
+        return get_llm(llm_provider=provider, model=model)
+    return get_llm()
+
+
+def get_active_llm() -> str:
+    llm = os.environ.get("ACTIVE_LLM", "")
+    if llm not in VALID_PROVIDERS:
+        raise ValueError("LLM not configured.")
     return llm
 
+
 def get_llm_model(llm: str) -> str:
-    """
-    Retrieves the model name from environment variables.
-    
-    Args:
-        llm: The LLM identifier, one of 'ollama', 'gemini', 'openai', 'bedrock'.
-
-    Returns:
-        The model name as a string.
-    """
-
     model = None
-
     if llm:
         model = os.environ.get(f"{llm.upper()}_MODEL")
-
     if not model:
         raise ValueError("LLM Model not configured.")
-
     return model
-

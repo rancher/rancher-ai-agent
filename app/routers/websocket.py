@@ -4,16 +4,14 @@ import logging
 import json
 from datetime import datetime
 
-from ..dependencies import get_llm
 from ..services.agent.factory import NoAgentAvailableError, build_agent
 from ..services.agent.supervisor import SupervisorGraph
 from dataclasses import dataclass
 from fastapi import APIRouter
-from fastapi import  WebSocket, WebSocketDisconnect, Depends
+from fastapi import  WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
-from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
@@ -59,7 +57,7 @@ class WebSocketRequest:
 
 @router.websocket("/v1/ws/messages")
 @router.websocket("/v1/ws/messages/{thread_id}")
-async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: BaseLanguageModel = Depends(get_llm)):
+async def websocket_endpoint(websocket: WebSocket, thread_id: str = None):
     """
     WebSocket endpoint for the agent.
     
@@ -77,7 +75,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     logging.debug("ws/messages connection opened")
     
     try:
-        agent, agents_metadata =  await build_agent(llm=llm, websocket=websocket) 
+        agent, agents_metadata =  await build_agent(websocket=websocket)
     except NoAgentAvailableError as e:
         logging.error(f"Error creating agent: {e}")
         await websocket.send_text(f'<chat-error>{json.dumps({"message": str(e)})}</chat-error>')

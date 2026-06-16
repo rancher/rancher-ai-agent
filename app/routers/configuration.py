@@ -396,8 +396,8 @@ async def update_settings(settings: SettingsUpdate, request: Request):
                 secret.data = secret_data
                 v1.patch_namespaced_secret(SETTINGS_SECRET_NAME, AGENT_NAMESPACE, secret)
             
-            # Reset LLMManager singleton to force reinitialization for consistency, but as of now we are redeploying the agent...
-            LLMManager._instance = None
+            # Reset LLMManager to force reinitialization for consistency, but as of now we are redeploying the agent...
+            LLMManager.reset()
 
             # Re-fetch both resources to return the updated content
             updated_cm = v1.read_namespaced_config_map(SETTINGS_CONFIGMAP_NAME, AGENT_NAMESPACE)

@@ -103,11 +103,41 @@ spec:
                 name: llm-secret
                 key: GOOGLE_API_KEY
                 optional: true
-          - name: ACTIVE_LLM
+          - name: SUPERVISOR_LLM
             valueFrom:
               configMapKeyRef:
                 name: llm-config
-                key: ACTIVE_LLM
+                key: SUPERVISOR_LLM
+                optional: true
+          - name: UITOOLS_LLM
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: UITOOLS_LLM
+                optional: true
+          - name: SUMMARY_LLM
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: SUMMARY_LLM
+                optional: true
+          - name: SUPERVISOR_MODEL
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: SUPERVISOR_MODEL
+                optional: true
+          - name: UITOOLS_MODEL
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: UITOOLS_MODEL
+                optional: true
+          - name: SUMMARY_MODEL
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: SUMMARY_MODEL
                 optional: true
           - name: LANGFUSE_PUBLIC_KEY
             valueFrom:

@@ -258,7 +258,7 @@ def test_single_prompt():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         with client.websocket_connect("/v1/ws/messages") as websocket:
@@ -316,7 +316,7 @@ def test_single_prompt():
             "Third call should include tool result from math-agent"
 
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 
 def test_multiple_prompts():
@@ -355,7 +355,7 @@ def test_multiple_prompts():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         with client.websocket_connect("/v1/ws/messages") as websocket:
@@ -432,7 +432,7 @@ def test_multiple_prompts():
         assert isinstance(sixth_call[7], ToolMessage) and sixth_call[7].content == fake_llm_response_2
 
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 
 def test_delegate_to_child_agent_with_tool():
@@ -461,7 +461,7 @@ def test_delegate_to_child_agent_with_tool():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         with client.websocket_connect("/v1/ws/messages") as websocket:
@@ -505,7 +505,7 @@ def test_delegate_to_child_agent_with_tool():
         assert fake_llm.all_calls[3][0] == SystemMessage(content=SUPERVISOR_PROMPT)
 
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 
 def test_delegate_to_child_agent_with_ui_tools():
@@ -547,7 +547,7 @@ def test_delegate_to_child_agent_with_ui_tools():
     ]
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
 
     try:
         # Create agent configs with UI tools enabled
@@ -632,6 +632,6 @@ def test_delegate_to_child_agent_with_ui_tools():
                     mock_load_configmap.assert_called()
 
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 

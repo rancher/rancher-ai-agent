@@ -94,6 +94,8 @@ def create_supervisor_agent(
     llm: BaseChatModel,
     child_agents: list[ChildAgent],
     checkpointer: Checkpointer,
+    summary_llm: BaseChatModel | None = None,
+    uitools_llm: BaseChatModel | None = None,
 ) -> CompiledStateGraph:
     """
     Creates a supervisor agent that coordinates multiple child agents as tools.
@@ -106,6 +108,8 @@ def create_supervisor_agent(
         llm: The language model instance to use for the supervisor agent.
         child_agents: List of child agents read from AIAgentConfig CRDs.
         checkpointer: Checkpointer for persisting agent state.
+        summary_llm: Optional LLM for summarization middleware. Falls back to llm.
+        uitools_llm: Optional LLM for UI tools middleware. Falls back to llm.
 
     Returns:
         A compiled LangGraph StateGraph ready to be invoked.
@@ -128,8 +132,8 @@ def create_supervisor_agent(
             MessagesHistoryMiddleware(),
             cancel_human_validation_middleware(),
             inject_additional_kwargs_middleware(),
-            ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+            ui_tools_middleware(uitools_llm or llm),
+            SummarizationMiddleware(model=summary_llm or llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
         ],
     )
 

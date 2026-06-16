@@ -23,102 +23,112 @@ from app.services.agent.loader import AuthenticationType
 # ============================================================================
 
 @pytest.mark.asyncio
+@patch('app.services.agent.factory.LLMManager')
 @patch('app.services.agent.factory.load_agent_configs')
 @patch('app.services.agent.factory._load_mcp_tools')
 @patch('app.services.agent.factory.create_child_agent')
-async def test_create_agent_single_agent(mock_create_child, mock_load_tools, mock_load_configs):
+async def test_create_agent_single_agent(mock_create_child, mock_load_tools, mock_load_configs, mock_llm_manager):
     """Verify build_agent creates a child agent when one config is available."""
     # Setup mocks
     mock_llm = MagicMock()
+    mock_summary_llm = MagicMock()
+    mock_uitools_llm = MagicMock()
+    mock_llm_manager.get_instance_for_agent.return_value = mock_llm
+    mock_llm_manager.get_instance_for_role.side_effect = lambda role: mock_summary_llm if role == "summary" else mock_uitools_llm
+
     mock_websocket = MagicMock()
     mock_memory_manager = MagicMock()
     mock_checkpointer = MagicMock()
     mock_memory_manager.get_checkpointer.return_value = mock_checkpointer
     mock_websocket.app.memory_manager = mock_memory_manager
-    
+
     mock_agent_config = MagicMock()
     mock_agent_config.name = "RancherAgent"
     mock_agent_config.system_prompt = "Test prompt"
     mock_load_configs.return_value = [mock_agent_config]
-    
+
     mock_tools = [MagicMock()]
     mock_load_tools.return_value = mock_tools
     mock_agent = MagicMock()
     mock_create_child.return_value = mock_agent
-    
+
     # Execute
-    result = await build_agent(mock_llm, mock_websocket)
-    
+    result = await build_agent(mock_websocket)
+
     # Verify
     assert result[0] == mock_agent
     assert result[1] == [{"name": "RancherAgent", "status": "active"}]
     mock_load_tools.assert_called_once_with(mock_agent_config, mock_websocket)
     mock_create_child.assert_called_once_with(
-        mock_llm, mock_tools, "Test prompt", mock_checkpointer, mock_agent_config
+        mock_llm, mock_tools, "Test prompt", mock_checkpointer, mock_agent_config,
+        summary_llm=mock_summary_llm, uitools_llm=mock_uitools_llm
     )
 
 
 @pytest.mark.asyncio
+@patch('app.services.agent.factory.LLMManager')
 @patch('app.services.agent.factory.load_agent_configs')
 @patch('app.services.agent.factory.create_supervisor_agent')
 @patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_build_agent_three_agents(mock_update_status, mock_create_client, mock_create_child, mock_create_parent, mock_load_configs):
+async def test_build_agent_three_agents(mock_update_status, mock_create_client, mock_create_child, mock_create_parent, mock_load_configs, mock_llm_manager):
     """Verify build_agent creates a supervisor agent when three configs are available."""
     # Setup mocks
     mock_llm = MagicMock()
+    mock_llm_manager.get_instance_for_agent.return_value = mock_llm
+    mock_llm_manager.get_instance_for_role.return_value = mock_llm
+
     mock_websocket = MagicMock()
     mock_memory_manager = MagicMock()
     mock_checkpointer = MagicMock()
     mock_memory_manager.get_checkpointer.return_value = mock_checkpointer
     mock_websocket.app.memory_manager = mock_memory_manager
-    
+
     mock_config1 = MagicMock()
     mock_config1.name = "RancherAgent"
     mock_config1.description = "Rancher core agent"
     mock_config1.system_prompt = "Prompt 1"
-    
+
     mock_config2 = MagicMock()
     mock_config2.name = "FleetAgent"
     mock_config2.description = "Fleet agent"
     mock_config2.system_prompt = "Prompt 2"
-    
+
     mock_config3 = MagicMock()
     mock_config3.name = "HarvesterAgent"
     mock_config3.description = "Harvester agent"
     mock_config3.system_prompt = "Prompt 3"
-    
+
     mock_load_configs.return_value = [mock_config1, mock_config2, mock_config3]
-    
+
     # Mock MCP client
     mock_client_instance = MagicMock()
     mock_tools = [MagicMock()]
     mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
     mock_create_client.return_value = mock_client_instance
-    
+
     mock_parent_agent = MagicMock()
     mock_create_parent.return_value = mock_parent_agent
     mock_create_child.return_value = MagicMock()
-    
+
     # Execute
-    result = await build_agent(mock_llm, mock_websocket)
-    
+    result = await build_agent(mock_websocket)
+
     # Verify - build_agent wraps multi-agent result in SupervisorGraph
     from app.services.agent.supervisor import SupervisorGraph
     assert isinstance(result[0], SupervisorGraph)
     assert result[0]._graph == mock_parent_agent
     mock_create_parent.assert_called_once()
-    
+
     # Verify parent was called with correct subagents
     call_args = mock_create_parent.call_args
-    assert call_args[0][0] == mock_llm
     subagents = call_args[0][1]
     assert len(subagents) == 3
     assert subagents[0].config.name == "RancherAgent"
     assert subagents[1].config.name == "FleetAgent"
     assert subagents[2].config.name == "HarvesterAgent"
-    
+
     # Verify metadata includes all agents
     metadata = result[1]
     assert len(metadata) == 3
@@ -126,79 +136,79 @@ async def test_build_agent_three_agents(mock_update_status, mock_create_client, 
 
 
 @pytest.mark.asyncio
+@patch('app.services.agent.factory.LLMManager')
 @patch('app.services.agent.factory.load_agent_configs')
 @patch('app.services.agent.factory.create_supervisor_agent')
 @patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_build_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_child, mock_create_parent, mock_load_configs):
+async def test_build_agent_filters_tools_by_toolset(mock_update_status, mock_create_client, mock_create_child, mock_create_parent, mock_load_configs, mock_llm_manager):
     """Verify build_agent filters tools based on toolset configuration."""
     # Setup mocks
     mock_llm = MagicMock()
+    mock_llm_manager.get_instance_for_agent.return_value = mock_llm
+    mock_llm_manager.get_instance_for_role.return_value = mock_llm
+
     mock_websocket = MagicMock()
     mock_memory_manager = MagicMock()
     mock_checkpointer = MagicMock()
     mock_memory_manager.get_checkpointer.return_value = mock_checkpointer
     mock_websocket.app.memory_manager = mock_memory_manager
-    
+
     mock_config1 = MagicMock()
     mock_config1.name = "RancherAgent"
     mock_config1.description = "Rancher agent with specific toolset"
     mock_config1.system_prompt = "Prompt 1"
-    mock_config1.toolset = "rancher-core"  # Specify toolset filter
-    
+    mock_config1.toolset = "rancher-core"
+
     mock_config2 = MagicMock()
     mock_config2.name = "FleetAgent"
     mock_config2.description = "Fleet agent without toolset filter"
     mock_config2.system_prompt = "Prompt 2"
-    mock_config2.toolset = None  # No toolset filter
-    
+    mock_config2.toolset = None
+
     mock_load_configs.return_value = [mock_config1, mock_config2]
-    
+
     # Mock MCP client with tools that have different toolsets
-    # Create mock tools with metadata
     tool_rancher_core = MagicMock()
     tool_rancher_core.name = "rancher_tool"
     tool_rancher_core.metadata = {"_meta": {"toolset": "rancher-core"}}
-    
+
     tool_rancher_extensions = MagicMock()
     tool_rancher_extensions.name = "extensions_tool"
     tool_rancher_extensions.metadata = {"_meta": {"toolset": "rancher-extensions"}}
-    
+
     tool_fleet = MagicMock()
     tool_fleet.name = "fleet_tool"
     tool_fleet.metadata = {"_meta": {"toolset": "fleet"}}
-    
+
     tool_no_toolset = MagicMock()
     tool_no_toolset.name = "generic_tool"
     tool_no_toolset.metadata = {}
-    
+
     all_tools = [tool_rancher_core, tool_rancher_extensions, tool_fleet, tool_no_toolset]
-    
+
     mock_client_instance = MagicMock()
     mock_client_instance.get_tools = AsyncMock(return_value=all_tools)
     mock_create_client.return_value = mock_client_instance
-    
+
     mock_parent_agent = MagicMock()
     mock_create_parent.return_value = mock_parent_agent
     mock_create_child.return_value = MagicMock()
-    
+
     # Execute
-    result = await build_agent(mock_llm, mock_websocket)
-    
+    result = await build_agent(mock_websocket)
+
     # Verify - build_agent wraps multi-agent result in SupervisorGraph
     from app.services.agent.supervisor import SupervisorGraph
     assert isinstance(result[0], SupervisorGraph)
-    
+
     # Verify subagents passed to create_supervisor_agent have correct tools
     call_args = mock_create_parent.call_args
     subagents = call_args[0][1]
     assert len(subagents) == 2
-    
-    # First subagent (RancherAgent) should have only rancher-core tools
+
     assert subagents[0].config.name == "RancherAgent"
-    
-    # Second subagent (FleetAgent) should have all tools (no toolset filter)
     assert subagents[1].config.name == "FleetAgent"
 
     # Verify create_child_agent was called with filtered tools
@@ -214,63 +224,65 @@ async def test_build_agent_filters_tools_by_toolset(mock_update_status, mock_cre
 
 
 @pytest.mark.asyncio
+@patch('app.services.agent.factory.LLMManager')
 @patch('app.services.agent.factory.load_agent_configs')
 @patch('app.services.agent.factory.create_supervisor_agent')
 @patch('app.services.agent.factory.create_child_agent')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_build_agent_one_fails_mcp_connection(mock_update_status, mock_create_client, mock_create_child, mock_create_parent, mock_load_configs):
+async def test_build_agent_one_fails_mcp_connection(mock_update_status, mock_create_client, mock_create_child, mock_create_parent, mock_load_configs, mock_llm_manager):
     """Verify build_agent handles MCP connection failure for one agent and continues with others."""
     # Setup mocks
     mock_llm = MagicMock()
+    mock_llm_manager.get_instance_for_agent.return_value = mock_llm
+    mock_llm_manager.get_instance_for_role.return_value = mock_llm
+
     mock_websocket = MagicMock()
     mock_memory_manager = MagicMock()
     mock_checkpointer = MagicMock()
     mock_memory_manager.get_checkpointer.return_value = mock_checkpointer
     mock_websocket.app.memory_manager = mock_memory_manager
-    
+
     mock_config1 = MagicMock()
     mock_config1.name = "Agent1"
     mock_config1.description = "First agent"
     mock_config1.system_prompt = "Prompt 1"
     mock_config1.ready = False
-    
+
     mock_config2 = MagicMock()
     mock_config2.name = "Agent2"
     mock_config2.description = "Second agent"
     mock_config2.system_prompt = "Prompt 2"
     mock_config2.ready = False
-    
+
     mock_config3 = MagicMock()
     mock_config3.name = "Agent3"
     mock_config3.description = "Third agent"
     mock_config3.system_prompt = "Prompt 3"
     mock_config3.ready = False
-    
+
     mock_load_configs.return_value = [mock_config1, mock_config2, mock_config3]
-    
+
     # Mock MCP client - first one fails, others succeed
-    # Create three different client instances
     mock_client_fail = MagicMock()
     mock_client_fail.get_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
-    
+
     mock_client_success1 = MagicMock()
     mock_tools = [MagicMock()]
     mock_client_success1.get_tools = AsyncMock(return_value=mock_tools)
-    
+
     mock_client_success2 = MagicMock()
     mock_client_success2.get_tools = AsyncMock(return_value=mock_tools)
-    
-    # Return different clients on each call
+
     mock_create_client.side_effect = [mock_client_fail, mock_client_success1, mock_client_success2]
-    
+
     mock_parent_agent = MagicMock()
     mock_create_parent.return_value = mock_parent_agent
     mock_create_child.return_value = MagicMock()
-    
+
     # Execute
-    result = await build_agent(mock_llm, mock_websocket)
-    
+    result = await build_agent(mock_websocket)
+
     # Should return supervisor since 2 agents succeeded
     from app.services.agent.supervisor import SupervisorGraph
     assert isinstance(result[0], SupervisorGraph)
@@ -278,12 +290,11 @@ async def test_build_agent_one_fails_mcp_connection(mock_update_status, mock_cre
 
     # Verify parent was called with correct subagents
     call_args = mock_create_parent.call_args
-    assert call_args[0][0] == mock_llm
     subagents = call_args[0][1]
     assert len(subagents) == 2
     assert subagents[0].config.name == "Agent2"
     assert subagents[1].config.name == "Agent3"
-    
+
     # Verify metadata includes all three agents with correct status
     metadata = result[1]
     assert len(metadata) == 3
@@ -294,51 +305,54 @@ async def test_build_agent_one_fails_mcp_connection(mock_update_status, mock_cre
     assert metadata[1]["name"] == "Agent2"
     assert metadata[2]["status"] == "active"
     assert metadata[2]["name"] == "Agent3"
-    
-    
+
     # Verify status update was called for the failed agent
     update_calls = [call for call in mock_update_status.call_args_list if call[0][1] == False]
     assert len(update_calls) > 0
 
 
 @pytest.mark.asyncio
+@patch('app.services.agent.factory.LLMManager')
 @patch('app.services.agent.factory.load_agent_configs')
 @patch('app.services.agent.factory.create_mcp_client')
 @patch('app.services.agent.factory._update_agent_status')
-async def test_build_agent_all_fail_mcp_connection(mock_update_status, mock_create_client, mock_load_configs):
+async def test_build_agent_all_fail_mcp_connection(mock_update_status, mock_create_client, mock_load_configs, mock_llm_manager):
     """Verify build_agent raises NoAgentAvailableError when all agents fail MCP connection."""
     # Setup mocks
     mock_llm = MagicMock()
+    mock_llm_manager.get_instance_for_agent.return_value = mock_llm
+    mock_llm_manager.get_instance_for_role.return_value = mock_llm
+
     mock_websocket = MagicMock()
     mock_memory_manager = MagicMock()
     mock_checkpointer = MagicMock()
     mock_memory_manager.get_checkpointer.return_value = mock_checkpointer
     mock_websocket.app.memory_manager = mock_memory_manager
-    
+
     mock_config1 = MagicMock()
     mock_config1.name = "Agent1"
     mock_config1.description = "First agent"
     mock_config1.ready = False
-    
+
     mock_config2 = MagicMock()
     mock_config2.name = "Agent2"
     mock_config2.description = "Second agent"
     mock_config2.ready = False
-    
+
     mock_load_configs.return_value = [mock_config1, mock_config2]
-    
+
     # Mock MCP client - all fail
     mock_client_fail = MagicMock()
     mock_client_fail.get_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
-    
+
     mock_create_client.return_value = mock_client_fail
-    
+
     # Execute and verify exception
     with pytest.raises(NoAgentAvailableError) as exc_info:
-        await build_agent(mock_llm, mock_websocket)
-    
+        await build_agent(mock_websocket)
+
     assert "No agents could be created" in str(exc_info.value)
-    
+
     # Verify status update was called for both failed agents
     assert mock_update_status.call_count >= 2
 
@@ -347,16 +361,15 @@ async def test_build_agent_all_fail_mcp_connection(mock_update_status, mock_crea
 @patch('app.services.agent.factory.load_agent_configs')
 async def test_build_agent_no_configs_raises_error(mock_load_configs):
     """Verify build_agent raises NoAgentAvailableError when no configs are available."""
-    mock_llm = MagicMock()
     mock_websocket = MagicMock()
     mock_memory_manager = MagicMock()
     mock_websocket.app.memory_manager = mock_memory_manager
-    
+
     mock_load_configs.return_value = []
-    
+
     with pytest.raises(NoAgentAvailableError) as exc_info:
-        await build_agent(mock_llm, mock_websocket)
-    
+        await build_agent(mock_websocket)
+
     assert "No agent configurations available" in str(exc_info.value)
 
 

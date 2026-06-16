@@ -12,6 +12,7 @@ from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph.state import Checkpointer, CompiledStateGraph
+from ..llm import LLMManager
 
 NAMESPACE = "cattle-ai-agent-system"
 
@@ -20,16 +21,16 @@ class NoAgentAvailableError(Exception):
     pass
 
 
-async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
+async def build_agent(websocket: WebSocket) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
     Build an agent graph from AIAgentConfig CRDs.
 
     Loads agent configurations and creates either a supervisor (multi-agent) or a
     single child agent depending on how many configs are available and successfully
-    connect to their MCP servers.
+    connect to their MCP servers. LLM instances are resolved per-role and per-agent
+    via LLMManager.
 
     Args:
-        llm: The language model to use for agent reasoning.
         websocket: WebSocket connection for authentication context.
 
     Returns:
@@ -47,15 +48,21 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
 
     logging.info(f"Loaded {len(agent_configs)} agent configuration(s)")
 
+    summary_llm = LLMManager.get_instance_for_role("summary")
+    uitools_llm = LLMManager.get_instance_for_role("uitools")
+
     if len(agent_configs) == 1:
         agent_cfg = agent_configs[0]
+        agent_llm = LLMManager.get_instance_for_agent(agent_cfg.name, agent_cfg.llm, agent_cfg.llm_model)
         tools = await _load_mcp_tools(agent_cfg, websocket)
-        graph = create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+        graph = create_child_agent(agent_llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg,
+                                   summary_llm=summary_llm, uitools_llm=uitools_llm)
         return graph, [{"name": agent_cfg.name, "status": "active"}]
 
     # Multi-agent setup
     logging.info(f"Multi-agent setup detected, creating supervisor with {len(agent_configs)} agents.")
-    child_agents, agents_metadata = await _build_child_agents(llm, agent_configs, checkpointer, websocket)
+    child_agents, agents_metadata = await _build_child_agents(agent_configs, checkpointer, websocket,
+                                                              summary_llm=summary_llm, uitools_llm=uitools_llm)
 
     if not child_agents:
         logging.error("Failed to create any child agents due to MCP connection issues")
@@ -67,7 +74,9 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
         logging.warning("Only one child agent connected successfully. Using it directly instead of a supervisor.")
         return child_agents[0].agent, agents_metadata
 
-    graph = create_supervisor_agent(llm, child_agents, checkpointer)
+    supervisor_llm = LLMManager.get_instance_for_role("supervisor")
+    graph = create_supervisor_agent(supervisor_llm, child_agents, checkpointer,
+                                    summary_llm=summary_llm, uitools_llm=uitools_llm)
     supervisor = SupervisorGraph(
         graph=graph,
         child_agents={ca.config.name: ca.agent for ca in child_agents},
@@ -76,10 +85,11 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
 
 
 async def _build_child_agents(
-    llm: BaseLanguageModel,
     agent_configs: list[AgentConfig],
     checkpointer: Checkpointer,
     websocket: WebSocket,
+    summary_llm: BaseLanguageModel | None = None,
+    uitools_llm: BaseLanguageModel | None = None,
 ) -> tuple[list[ChildAgent], list[dict]]:
     """
     Attempt to build a child agent for each config, collecting successes and failures.
@@ -92,10 +102,12 @@ async def _build_child_agents(
 
     for agent_cfg in agent_configs:
         try:
+            agent_llm = LLMManager.get_instance_for_agent(agent_cfg.name, agent_cfg.llm, agent_cfg.llm_model)
             tools = await _load_mcp_tools(agent_cfg, websocket)
             child_agents.append(ChildAgent(
                 config=agent_cfg,
-                agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg),
+                agent=create_child_agent(agent_llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg,
+                                         summary_llm=summary_llm, uitools_llm=uitools_llm),
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active"})
         except (NoAgentAvailableError, Exception) as e:

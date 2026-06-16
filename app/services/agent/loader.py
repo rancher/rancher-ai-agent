@@ -175,6 +175,8 @@ class AgentConfig(BaseModel):
     toolset: Optional[str] = None
     human_validation_tools: list[str] = []
     ready: bool = False
+    llm: Optional[str] = None
+    llm_model: Optional[str] = None
 
 
 def _load_k8s_config():
@@ -319,7 +321,9 @@ def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:
         ca_bundle_ref=CABundleRef(**spec["caBundleRef"]) if spec.get("caBundleRef") else None,
         toolset=spec.get("toolSet", None),
         human_validation_tools=human_validation_tools,
-        ready=status.get("phase", "Failed") == "Ready"
+        ready=status.get("phase", "Failed") == "Ready",
+        llm=spec.get("llm", None),
+        llm_model=spec.get("llmModel", None),
     )
 
 

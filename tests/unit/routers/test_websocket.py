@@ -79,12 +79,10 @@ def mock_dependencies():
 @pytest.mark.asyncio
 async def test_websocket_endpoint(mock_dependencies):
     mock_ws = MockWebSocket(messages=["test message"])
-    mock_llm = MagicMock()
-
-    await websocket_endpoint(mock_ws, None, mock_llm)
+    await websocket_endpoint(mock_ws, None)
 
     assert mock_ws.accepted
-    mock_dependencies["build_agent"].assert_called_once_with(llm=mock_llm, websocket=mock_ws)
+    mock_dependencies["build_agent"].assert_called_once_with(websocket=mock_ws)
     mock_dependencies["call_agent"].assert_awaited_once()
 
     call_kwargs = mock_dependencies["call_agent"].call_args.kwargs
@@ -97,9 +95,7 @@ async def test_websocket_endpoint_context_message(mock_dependencies):
     mock_ws = MockWebSocket(messages=[
         '{"prompt": "show all pods", "context": {"namespace": "default", "cluster": "local"}}'
     ])
-    mock_llm = MagicMock()
-
-    await websocket_endpoint(mock_ws, None, mock_llm)
+    await websocket_endpoint(mock_ws, None)
 
     mock_dependencies["build_agent"].assert_called_once()
     mock_dependencies["call_agent"].assert_awaited_once()
@@ -115,9 +111,7 @@ async def test_websocket_endpoint_context_message(mock_dependencies):
 @pytest.mark.asyncio
 async def test_websocket_endpoint_sends_chat_metadata(mock_dependencies):
     mock_ws = MockWebSocket(messages=["hello"])
-    mock_llm = MagicMock()
-
-    await websocket_endpoint(mock_ws, None, mock_llm)
+    await websocket_endpoint(mock_ws, None)
 
     # First message sent should be chat metadata
     metadata_msg = mock_ws._send_queue[0]
@@ -131,9 +125,7 @@ async def test_websocket_endpoint_no_agent_available(mock_dependencies):
     from app.services.agent.factory import NoAgentAvailableError
     mock_dependencies["build_agent"].side_effect = NoAgentAvailableError("No agents")
     mock_ws = MockWebSocket(messages=[])
-    mock_llm = MagicMock()
-
-    await websocket_endpoint(mock_ws, None, mock_llm)
+    await websocket_endpoint(mock_ws, None)
 
     assert mock_ws.accepted
     assert mock_ws.closed
@@ -145,9 +137,7 @@ async def test_websocket_endpoint_no_agent_available(mock_dependencies):
 @pytest.mark.asyncio
 async def test_websocket_endpoint_with_thread_id(mock_dependencies):
     mock_ws = MockWebSocket(messages=["hello"])
-    mock_llm = MagicMock()
-
-    await websocket_endpoint(mock_ws, "custom-thread-id", mock_llm)
+    await websocket_endpoint(mock_ws, "custom-thread-id")
 
     assert mock_ws.accepted
     metadata_msg = mock_ws._send_queue[0]
@@ -159,9 +149,7 @@ async def test_websocket_endpoint_error_during_processing(mock_dependencies):
     """Test that errors during message processing are sent to the client."""
     mock_dependencies["call_agent"].side_effect = Exception("Something went wrong")
     mock_ws = MockWebSocket(messages=["test", "second"])
-    mock_llm = MagicMock()
-
-    await websocket_endpoint(mock_ws, None, mock_llm)
+    await websocket_endpoint(mock_ws, None)
 
     # Should have sent error and end message
     error_messages = [m for m in mock_ws._send_queue if "<error>" in m]

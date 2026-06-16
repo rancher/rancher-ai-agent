@@ -26,6 +26,12 @@ awsBedrock:
   bearerToken:
   region:
 activeLlm: # ollama, gemini, openai, bedrock
+supervisorLlm: ""
+supervisorModel: ""
+uitoolsLlm: ""
+uitoolsModel: ""
+summaryLlm: ""
+summaryModel: ""
 # Enable RAG with embedded rancher documentation
 rag:
     enabled: false

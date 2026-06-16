@@ -98,7 +98,7 @@ def test_websocket_single_prompt():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []  # Reset call tracking
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         messages = []
@@ -121,7 +121,7 @@ def test_websocket_single_prompt():
             SystemMessage(content=IDENTITY_PREAMBLE),
         ], "First call should have system prompt and user message"
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 def test_websocket_multiple_prompts():
     """Tests multiple prompt-response interactions in sequence."""
@@ -137,7 +137,7 @@ def test_websocket_multiple_prompts():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []  # Reset call tracking
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         messages = []
@@ -167,7 +167,7 @@ def test_websocket_multiple_prompts():
             HumanMessage(content="fake prompt 2"),
         ], "Second call should include conversation history"
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 def test_websocket_tool_call():
     """Tests agent interaction with tool calling."""
@@ -187,7 +187,7 @@ def test_websocket_tool_call():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []  # Reset call tracking
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         messages = []
@@ -217,7 +217,7 @@ def test_websocket_tool_call():
         assert isinstance(second_call[3], AIMessage) and second_call[3].tool_calls[0]["name"] == "add", "Second call should have AI message with tool call"
         assert isinstance(second_call[4], ToolMessage) and second_call[4].content == "sum is 9", "Second call should have tool result"
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 def test_conversation_history():
     """Tests that conversation history is maintained across multiple prompts."""
@@ -252,7 +252,7 @@ def test_conversation_history():
     
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []  # Reset call tracking
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
     
     try:
         messages = []
@@ -326,7 +326,7 @@ def test_conversation_history():
         ], "Fifth call should include full conversation history"
         
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()
 
 
 def test_websocket_with_ui_tools():
@@ -358,7 +358,7 @@ def test_websocket_with_ui_tools():
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=fake_llm_responses)
     fake_llm.all_calls = []
-    LLMManager._instance = fake_llm
+    LLMManager._instances["default"] = fake_llm
 
     try:
         agent_config = AgentConfig(
@@ -434,4 +434,4 @@ def test_websocket_with_ui_tools():
                     
                     mock_load_configmap.assert_called(), "UI tools config should be loaded from ConfigMap"
     finally:
-        LLMManager._instance = None
+        LLMManager.reset()

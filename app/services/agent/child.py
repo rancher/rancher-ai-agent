@@ -40,6 +40,8 @@ def create_child_agent(
     system_prompt: str,
     checkpointer: Checkpointer,
     agent_config: AgentConfig,
+    summary_llm: BaseChatModel | None = None,
+    uitools_llm: BaseChatModel | None = None,
 ) -> CompiledStateGraph:
     """Create and compile a child agent graph using langchain create_agent with middleware.
 
@@ -57,8 +59,8 @@ def create_child_agent(
         identity_preamble_middleware(),
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
-        ui_tools_middleware(llm, only_when_direct=True),
-        SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+        ui_tools_middleware(uitools_llm or llm, only_when_direct=True),
+        SummarizationMiddleware(model=summary_llm or llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
     ]
 
     return create_agent(

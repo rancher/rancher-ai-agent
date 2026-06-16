@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from langchain_core.language_models.llms import BaseLanguageModel
 
 from ..services.auth import get_user_id_from_request
-from ..dependencies import get_llm
+from ..dependencies import get_uitools_llm
 from ..services.ui_tools.selector import create_ui_tools_selector
 
 router = APIRouter(prefix="/v1/api/complete", tags=["llm"])
@@ -31,7 +31,7 @@ class UIToolsRequest(LLMRequest):
 async def complete_ui_tools(
     request: Request,
     ui_tools_request: UIToolsRequest,
-    llm: BaseLanguageModel = Depends(get_llm)
+    llm: BaseLanguageModel = Depends(get_uitools_llm)
 ) -> JSONResponse:
     """
     Select appropriate UI tools based on the provided context using the LLM.

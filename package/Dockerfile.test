@@ -1,0 +1,19 @@
+  ARG PYTHON_VERSION=3.14
+
+  FROM registry.suse.com/bci/python:${PYTHON_VERSION}
+  ARG PYTHON_VERSION
+
+  RUN pip install --no-cache-dir uv
+  COPY pyproject.toml .
+  RUN uv pip install --no-cache --system \
+      --python /usr/bin/python${PYTHON_VERSION} \
+      -r pyproject.toml \
+      --group test
+
+  WORKDIR /app
+  COPY . .
+
+  ENV PYTHONUNBUFFERED=1 \
+      PYTHONDONTWRITEBYTECODE=1
+
+  CMD ["python3", "-m", "pytest", "tests/unit", "-v"]

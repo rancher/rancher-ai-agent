@@ -16,6 +16,23 @@ VERSION ?= 0.0.0-$(COMMIT)$(DIRTY)
 TAG ?= $(VERSION)
 IMAGE = $(REPO)/rancher-ai-agent:$(TAG)
 
+help:
+	@echo "Usage: make <target>"
+	@echo ""
+	@echo "Targets:"
+	@echo "  build-image   Build production image locally"
+	@echo "  push-image    Build and push multi-arch production image"
+	@echo "  test          Run unit tests in container"
+	@echo "  help          Show this help"
+
+build-image:
+	docker buildx build \
+		--file package/Dockerfile \
+		--platform=${TARGET_PLATFORMS} \
+		-t ${IMAGE} \
+		--load \
+		.
+
 push-image:
 	docker buildx build \
 		${IID_FILE_FLAG} \
@@ -27,4 +44,14 @@ push-image:
 		--attest type=provenance,mode=max \
 		-t ${IMAGE} \
 		--push \
-		. 
+		.
+
+test:
+	docker buildx build \
+		--file package/Dockerfile.test \
+		--platform=${TARGET_PLATFORMS} \
+		-t $(IMAGE)-test \
+		--load \
+		. && docker run --rm $(IMAGE)-test
+
+.PHONY: help build-image push-image test

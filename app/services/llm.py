@@ -24,7 +24,6 @@ class LLMManager:
     def get_instance(cls, key: str = "default") -> BaseLanguageModel:
         if key not in cls._instances:
             cls._instances[key] = get_llm()
-            logging.info(f"Created default LLM instance for key '{key}': {cls._instances[key]}")
         return cls._instances[key]
 
     @classmethod
@@ -33,7 +32,6 @@ class LLMManager:
             return cls._instances[role]
         llm = get_llm_for_role(role)
         cls._instances[role] = llm
-        logging.info(f"Created LLM instance for role '{role}': {llm}")
         return llm
 
     @classmethod
@@ -43,7 +41,6 @@ class LLMManager:
             return cls._instances[key]
         llm = get_llm_for_agent(llm_provider, llm_model)
         cls._instances[key] = llm
-        logging.info(f"Created LLM instance for agent '{agent_name}': {llm}")
         return llm
 
     @classmethod

@@ -26,6 +26,7 @@ awsBedrock:
   bearerToken:
   region:
 activeLlm: # ollama, gemini, openai, bedrock
+disableStreaming: false  # Set to true to disable streaming mode for LLM responses
 # Enable RAG with embedded rancher documentation
 rag:
     enabled: false

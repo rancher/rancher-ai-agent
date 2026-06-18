@@ -9,3 +9,4 @@ data:
   OPENAI_MODEL: "{{ .Values.openaiLlmModel }}"
   BEDROCK_MODEL: "{{ .Values.bedrockLlmModel }}"
   ACTIVE_LLM: "{{ .Values.activeLlm }}"
+  DISABLE_STREAMING: "{{ .Values.disableStreaming }}"

@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
 
       - name : "Read vault secrets"
-        uses : rancher-eio/read-vault-secrets@0da85151ad1f19ed7986c41587e45aac1ace74b6 # main
+        uses : rancher-eio/read-vault-secrets@7282bf97898cd1c16c89f837e0bb442e6d384c89 # main
         with:
           secrets: |
             secret/data/github/repo/${{ github.repository }}/rancher-prime-stg-registry/credentials registry | STAGING_PRIME_REGISTRY ;
@@ -28,7 +28,7 @@ jobs:
 
         # This encapsulates: login, qemu, build/push
       - name: Build and push image
-        uses: rancher/ecm-distro-tools/actions/publish-image@575bb831c67edd950bfedb59d41dd127bd0005d6 # master
+        uses: rancher/ecm-distro-tools/actions/publish-image@ba6da4535406f3fd814a169a325b8100cd4dbf44 # master
         with:
           image: rancher-ai-agent
           tag: ${{ github.ref_name }}

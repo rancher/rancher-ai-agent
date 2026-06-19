@@ -142,52 +142,40 @@ async def _call_agent(
     websocket: WebSocket,
 ) -> None:
     """
-    Invokes the agent and sends the response to a WebSocket connection, handling interruptions.
-    Supports both streaming and non-streaming modes based on DISABLE_STREAMING env var.
+    Streams the agent's response to a WebSocket connection, handling interruptions.
 
     Args:
         agent: The compiled LangGraph agent.
         input_data: The input data for the agent's run.
         config: The run configuration.
         websocket: The WebSocket connection.
+        stream_mode: The types of events to stream from the agent.
     """
-    disable_streaming = os.environ.get("DISABLE_STREAMING", "false").lower() == "true"
 
     await websocket.send_text("<message>")
 
-    if disable_streaming:
-        # Non-streaming mode: invoke and send complete response
-        result = await agent.ainvoke(input_data, config=config)
+    async for stream in agent.astream_events(
+        input_data,
+        config=config,
+        stream_mode=["updates", "messages", "custom", "events"],
+    ):
+        if stream["event"] == "on_chat_model_stream":
+            if not _should_stream_text(stream):
+                continue
+            if text := _extract_streaming_text(stream):
+                await websocket.send_text(text)
 
-        # Extract and send the final message content
-        if "messages" in result and len(result["messages"]) > 0:
-            last_message = result["messages"][-1]
-            if hasattr(last_message, "content") and last_message.content:
-                await websocket.send_text(last_message.content)
-    else:
-        # Streaming mode: stream events as they arrive
-        async for stream in agent.astream_events(
-            input_data,
-            config=config,
-            stream_mode=["updates", "messages", "custom", "events"],
-        ):
-            if stream["event"] == "on_chat_model_stream":
-                if not _should_stream_text(stream):
-                    continue
-                if text := _extract_streaming_text(stream):
-                    await websocket.send_text(text)
+        if stream["event"] == "on_custom_event":
+            event_data = stream.get("data", "")
+            # Send custom events as-is (they should already be formatted)
+            if isinstance(event_data, str):
+                await websocket.send_text(event_data)
+            else:
+                await websocket.send_text(json.dumps(event_data))
 
-            if stream["event"] == "on_custom_event":
-                event_data = stream.get("data", "")
-                # Send custom events as-is (they should already be formatted)
-                if isinstance(event_data, str):
-                    await websocket.send_text(event_data)
-                else:
-                    await websocket.send_text(json.dumps(event_data))
-
-            if stream["event"] == "on_chain_stream":
-                if interrupt_value := _extract_interrupt_value(stream):
-                    await websocket.send_text(interrupt_value)
+        if stream["event"] == "on_chain_stream":
+            if interrupt_value := _extract_interrupt_value(stream):
+                await websocket.send_text(interrupt_value)
 
 def _should_stream_text(stream: dict) -> bool:
     """

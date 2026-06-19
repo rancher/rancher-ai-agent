@@ -13,21 +13,21 @@ from app.services.llm import (
 def test_get_llm_ollama(mock_chat_ollama):
     with patch.dict(os.environ, {"OLLAMA_MODEL": "test-model", "ACTIVE_LLM": "ollama", "OLLAMA_URL": "http://localhost:11434"}, clear=True):
         llm = get_llm()
-        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434", disable_streaming=False)
+        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434", disable_streaming=None)
         assert llm == mock_chat_ollama.return_value
 
 @patch('app.services.llm.ChatGoogleGenerativeAI')
 def test_get_llm_gemini(mock_chat_gemini):
     with patch.dict(os.environ, {"GEMINI_MODEL": "gemini-pro", "ACTIVE_LLM": "gemini", "GOOGLE_API_KEY": "fake-key"}, clear=True):
         llm = get_llm()
-        mock_chat_gemini.assert_called_once_with(model="gemini-pro", disable_streaming=False)
+        mock_chat_gemini.assert_called_once_with(model="gemini-pro", disable_streaming=None)
         assert llm == mock_chat_gemini.return_value
 
 @patch('app.services.llm.ChatOpenAI')
 def test_get_llm_openai(mock_openai):
     with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_API_KEY": "fake-key"}, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", disable_streaming=False)
+        mock_openai.assert_called_once_with(model="gpt-4", disable_streaming=None)
         assert llm == mock_openai.return_value
 
 def test_get_active_llm_not_configured():
@@ -57,7 +57,7 @@ def test_get_llm_with_mock(mock_chat_ollama):
         "LLM_MOCK_URL": "http://mock-server:8000"
     }, clear=True):
         llm = get_llm()
-        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://mock-server:8000", disable_streaming=False)
+        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://mock-server:8000", disable_streaming=None)
         assert llm == mock_chat_ollama.return_value
 
 @patch('app.services.llm.ChatOllama')
@@ -71,7 +71,7 @@ def test_get_llm_without_mock(mock_chat_ollama):
         "LLM_MOCK_URL": "http://mock-server:8000"
     }, clear=True):
         llm = get_llm()
-        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434", disable_streaming=False)
+        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434", disable_streaming=None)
         assert llm == mock_chat_ollama.return_value
 
 @patch('app.services.llm.ChatGoogleGenerativeAI')
@@ -85,7 +85,7 @@ def test_get_llm_gemini_with_mock(mock_chat_gemini):
         "LLM_MOCK_URL": "http://mock-server:8000"
     }, clear=True):
         llm = get_llm()
-        mock_chat_gemini.assert_called_once_with(model="gemini-pro", base_url="http://mock-server:8000", transport="rest", disable_streaming=False)
+        mock_chat_gemini.assert_called_once_with(model="gemini-pro", base_url="http://mock-server:8000", transport="rest", disable_streaming=None)
         assert llm == mock_chat_gemini.return_value
 
 @patch('app.services.llm.ChatOpenAI')
@@ -99,7 +99,7 @@ def test_get_llm_openai_with_mock(mock_openai):
         "LLM_MOCK_URL": "http://mock-server:8000"
     }, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://mock-server:8000", disable_streaming=False)
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://mock-server:8000", disable_streaming=None)
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.ChatOpenAI')
@@ -112,12 +112,12 @@ def test_get_llm_openai_with_custom_url(mock_openai):
         "OPENAI_URL": "http://custom-openai:8000"
     }, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000", disable_streaming=False)
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000", disable_streaming=None)
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.ChatOllama')
 def test_get_llm_with_streaming_disabled(mock_chat_ollama):
-    """Test that disable_streaming=True is passed when DISABLE_STREAMING=true"""
+    """Test that disable_streaming='tool_calling' is passed when DISABLE_STREAMING=true"""
     with patch.dict(os.environ, {
         "OLLAMA_MODEL": "test-model",
         "ACTIVE_LLM": "ollama",
@@ -125,12 +125,12 @@ def test_get_llm_with_streaming_disabled(mock_chat_ollama):
         "DISABLE_STREAMING": "true"
     }, clear=True):
         llm = get_llm()
-        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434", disable_streaming=True)
+        mock_chat_ollama.assert_called_once_with(model="test-model", base_url="http://localhost:11434", disable_streaming="tool_calling")
         assert llm == mock_chat_ollama.return_value
 
 @patch('app.services.llm.ChatGoogleGenerativeAI')
 def test_get_llm_gemini_with_streaming_disabled(mock_chat_gemini):
-    """Test that disable_streaming=True is passed for Gemini when DISABLE_STREAMING=true"""
+    """Test that disable_streaming='tool_calling' is passed for Gemini when DISABLE_STREAMING=true"""
     with patch.dict(os.environ, {
         "GEMINI_MODEL": "gemini-pro",
         "ACTIVE_LLM": "gemini",
@@ -138,12 +138,12 @@ def test_get_llm_gemini_with_streaming_disabled(mock_chat_gemini):
         "DISABLE_STREAMING": "true"
     }, clear=True):
         llm = get_llm()
-        mock_chat_gemini.assert_called_once_with(model="gemini-pro", disable_streaming=True)
+        mock_chat_gemini.assert_called_once_with(model="gemini-pro", disable_streaming="tool_calling")
         assert llm == mock_chat_gemini.return_value
 
 @patch('app.services.llm.ChatOpenAI')
 def test_get_llm_openai_with_streaming_disabled(mock_openai):
-    """Test that disable_streaming=True is passed for OpenAI when DISABLE_STREAMING=true"""
+    """Test that disable_streaming='tool_calling' is passed for OpenAI when DISABLE_STREAMING=true"""
     with patch.dict(os.environ, {
         "OPENAI_MODEL": "gpt-4",
         "ACTIVE_LLM": "openai",
@@ -151,12 +151,12 @@ def test_get_llm_openai_with_streaming_disabled(mock_openai):
         "DISABLE_STREAMING": "true"
     }, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", disable_streaming=True)
+        mock_openai.assert_called_once_with(model="gpt-4", disable_streaming="tool_calling")
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.ChatBedrockConverse')
 def test_get_llm_bedrock_with_streaming_disabled(mock_bedrock):
-    """Test that disable_streaming=True is passed for Bedrock when DISABLE_STREAMING=true"""
+    """Test that disable_streaming='tool_calling' is passed for Bedrock when DISABLE_STREAMING=true"""
     with patch.dict(os.environ, {
         "BEDROCK_MODEL": "anthropic.claude-3-sonnet-20240229-v1:0",
         "ACTIVE_LLM": "bedrock",
@@ -164,6 +164,6 @@ def test_get_llm_bedrock_with_streaming_disabled(mock_bedrock):
         "DISABLE_STREAMING": "true"
     }, clear=True):
         llm = get_llm()
-        mock_bedrock.assert_called_once_with(model="anthropic.claude-3-sonnet-20240229-v1:0", disable_streaming=True)
+        mock_bedrock.assert_called_once_with(model="anthropic.claude-3-sonnet-20240229-v1:0", disable_streaming="tool_calling")
         assert llm == mock_bedrock.return_value
 

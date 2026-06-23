@@ -102,7 +102,7 @@ async def _build_child_agents(
                 agent=create_child_agent(llm, [], agent_cfg.system_prompt, checkpointer, agent_cfg),
                 needs_oauth2=True
             ))
-            agents_metadata.append({"name": agent_cfg.name, "status": "needs_oauth2", "description": str(e)})
+            agents_metadata.append({"name": agent_cfg.name, "status": "active", "description": "needs_oauth2"})
         except (NoAgentAvailableError, Exception) as e:
             logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {e}")
             agents_metadata.append({"name": agent_cfg.name, "status": "error", "description": str(e)})

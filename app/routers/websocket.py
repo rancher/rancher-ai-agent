@@ -90,10 +90,10 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     # In single-agent mode (no supervisor), store the agent name so that
     # the ui_tools middleware knows the child is the direct target.
     single_agent_name = ""
-    active_agents = [m for m in agents_metadata if m.get("status") != "error"]
+    active_agents = [m for m in agents_metadata if m.get("status") == "active"]
     if not isinstance(agent, SupervisorGraph) and len(active_agents) == 1:
         single_agent_name = active_agents[0].get("name", "")
-        if active_agents[0].get("status") == "needs_oauth2":
+        if active_agents[0].get("description") == "needs_oauth2":
             agent = await _handle_single_agent_oauth(llm, single_agent_name, agent, websocket)
 
     await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
@@ -119,7 +119,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             if not ws_request.agent and single_agent_name:
                 ws_request.agent = single_agent_name
             config = _build_config(base_config, request_id, ws_request)
-            target_agent, target_config = _resolve_target_agent(agent, config, ws_request)
+            target_agent, target_config = await _resolve_target_agent(agent, config, ws_request, websocket, llm)
             input_data = await _build_input_data(target_agent, target_config, ws_request)
 
             try:
@@ -431,10 +431,12 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
 
     return config
 
-def _resolve_target_agent(
+async def _resolve_target_agent(
     agent: CompiledStateGraph | SupervisorGraph,
     config: dict,
     ws_request: WebSocketRequest,
+    websocket: WebSocket,
+    llm: BaseLanguageModel
 ) -> tuple[CompiledStateGraph, dict]:
     """
     Resolve which agent to call based on the request.
@@ -460,6 +462,10 @@ def _resolve_target_agent(
         return agent, config
 
     child_agent = agent.child_agents[requested_agent]
+    if child_agent and child_agent.needs_oauth2:
+        await handle_oauth_authentication(child_agent.config.name, websocket)
+        child_agent.agent = await reload_agent_tools(llm, child_agent.config, websocket)
+
 
     return child_agent.agent, config
 

@@ -1,9 +1,9 @@
 import logging
+import httpx
+import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-import httpx
-
 from ..services.oauth2.client import OAuthClientManager, _get_tls_verify
 from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
@@ -27,7 +27,7 @@ async def get(request: Request):
     state = request.query_params.get("state")
 
     # Verify state to prevent CSRF attacks and retrieve stored data
-    session_token = request.cookies.get("R_SESS", "")
+    session_token = os.environ.get("RANCHER_API_TOKEN", request.cookies.get("R_SESS", ""))
     oauth_data = oauth_store.pop_state(state, session_token)
     if not oauth_data:
         return HTMLResponse(content="""

@@ -86,6 +86,23 @@ class SupervisorGraph:
 
     def __getattr__(self, name):
         return getattr(self._graph, name)
+    
+    def get_child_agent(self, name: str) -> "ChildAgent":
+        """
+        Retrieve a specific child agent by name.
+
+        Args:
+            name: The unique string identifier of the child agent.
+
+        Returns:
+            The corresponding ChildAgent object.
+
+        Raises:
+            KeyError: If no child agent exists with the given name.
+        """
+        if name not in self.child_agents:
+            raise KeyError(f"Child agent '{name}' not found in this supervisor graph.")
+        return self.child_agents[name]
 
 
 # Config keys forwarded from supervisor to child so the child can access request context.

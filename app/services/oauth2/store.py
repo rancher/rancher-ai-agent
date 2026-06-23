@@ -89,10 +89,8 @@ class OAuthTokenStore:
         now = time.monotonic()
         for k in [k for k, e in self._state_store.items() if now - e.created_at > _TTL_SECONDS]:
             del self._state_store[k]
-            logger.debug(f"Evicted expired OAuth state: {k}")
         for k in [k for k, e in self._token_store.items() if now - e.created_at > _TTL_SECONDS]:
             del self._token_store[k]
-            logger.debug(f"Evicted expired OAuth token: {k}")
 
     def set_state(self, state: str, data: dict[str, Any], session_token: str) -> None:
         """Store ``data`` under ``state``, overwriting any previous entry."""

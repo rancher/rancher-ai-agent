@@ -460,21 +460,26 @@ class TestBuildConfig:
 # --- Tests for _resolve_target_agent ---
 
 class TestResolveTargetAgent:
-    def test_no_agent_requested_returns_supervisor(self):
+    @pytest.mark.asyncio
+    async def test_no_agent_requested_returns_supervisor(self):
         agent = MagicMock()
         config = {"configurable": {"thread_id": "t1"}}
         ws_request = WebSocketRequest(
             prompt="hi", user_input="hi", context={},
             tags=[], labels={}, agent="", ui_tools={}
         )
-        result_agent, result_config = _resolve_target_agent(agent, config, ws_request)
+        websocket = MagicMock()
+        llm = MagicMock()
+        result_agent, result_config = await _resolve_target_agent(agent, config, ws_request, websocket, llm)
         assert result_agent is agent
         assert result_config is config
 
-    def test_supervisor_routes_to_known_child(self):
+    @pytest.mark.asyncio
+    async def test_supervisor_routes_to_known_child(self):
         child_graph = MagicMock()
         child_agent = MagicMock()
         child_agent.agent = child_graph
+        child_agent.needs_oauth2 = False
         supervisor = SupervisorGraph(
             graph=MagicMock(),
             child_agents={"fleet": child_agent},
@@ -484,11 +489,14 @@ class TestResolveTargetAgent:
             prompt="deploy", user_input="deploy", context={},
             tags=[], labels={}, agent="fleet", ui_tools={}
         )
-        result_agent, result_config = _resolve_target_agent(supervisor, config, ws_request)
+        websocket = MagicMock()
+        llm = MagicMock()
+        result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
         assert result_agent is child_graph
         assert result_config is config
 
-    def test_supervisor_falls_back_for_unknown_child(self):
+    @pytest.mark.asyncio
+    async def test_supervisor_falls_back_for_unknown_child(self):
         supervisor = SupervisorGraph(
             graph=MagicMock(),
             child_agents={"rancher": MagicMock()},
@@ -498,7 +506,9 @@ class TestResolveTargetAgent:
             prompt="hi", user_input="hi", context={},
             tags=[], labels={}, agent="unknown_agent", ui_tools={}
         )
-        result_agent, result_config = _resolve_target_agent(supervisor, config, ws_request)
+        websocket = MagicMock()
+        llm = MagicMock()
+        result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
         # Should fall back to supervisor
         assert result_config is config
         assert result_agent is supervisor

@@ -4,6 +4,7 @@ import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, HttpUrl
 from ..services.oauth2.client import OAuthClientManager, _get_tls_verify
 from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
@@ -14,13 +15,12 @@ from ..services.oauth2 import (
     oauth_store,
 )
 
-logger = logging.getLogger(__name__)
-
-router = APIRouter()
-
 _COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # one week in seconds
 
-@router.get("/oauth/callback")
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/v1/api/oauth2", tags=["oauth"])
+
+@router.get("/callback")
 async def get(request: Request):
     """OAuth callback that returns HTML to communicate token back to parent window and stores tokens as httponly cookies."""
     code = request.query_params.get("code")
@@ -132,7 +132,7 @@ async def get(request: Request):
         """, status_code=500)
 
 
-@router.post("/oauth/refresh")
+@router.post("/refresh")
 async def refresh_token_endpoint(request: Request):
     """
     Refresh the OAuth2 access token using the refresh token stored in cookies.
@@ -205,7 +205,7 @@ async def refresh_token_endpoint(request: Request):
     return response
 
 
-@router.get("/oauth/metadata")
+@router.get("/metadata")
 async def get_metadata(mcp_url: str):
     """
     Discover OAuth metadata for an MCP server URL.
@@ -222,19 +222,22 @@ async def get_metadata(mcp_url: str):
         return JSONResponse(content=None, status_code=200)
 
 
-@router.get("/oauth/dynamic-registration")
-async def dynamic_registration(request: Request, metadata_endpoint: str):
+class RegistrationPayload(BaseModel):
+    metadata_endpoint: HttpUrl
+    
+@router.post("/dynamic-registration")
+async def dynamic_registration(payload: RegistrationPayload, request: Request):
     """
     Perform OAuth2 dynamic client registration (RFC 7591).
     """
 
+    metadata_endpoint = payload.metadata_endpoint
     if not metadata_endpoint:
         return JSONResponse({"error": "Missing metadata_endpoint"}, status_code=400)
     
-    redirect_uri = get_redirect_uri(request.url.hostname)
 
     async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:
-        metadata = await http_client.get(metadata_endpoint)
+        metadata = await http_client.get(str(metadata_endpoint))
         metadata.raise_for_status()
         data = metadata.json()
         registration_endpoint = data.get("registration_endpoint")
@@ -243,7 +246,7 @@ async def dynamic_registration(request: Request, metadata_endpoint: str):
         
         registration_data = {
             "client_name": "Rancher AI Agent",
-            "redirect_uris": [redirect_uri],
+            "redirect_uris": [get_redirect_uri(request.url.hostname)],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"]
         }
@@ -259,8 +262,8 @@ async def dynamic_registration(request: Request, metadata_endpoint: str):
             return JSONResponse({"error": "Registration response did not include client_secret"}, status_code=502)
         
         return JSONResponse({
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "clientId": client_id,
+            "clientSecret": client_secret,
         })
 
 

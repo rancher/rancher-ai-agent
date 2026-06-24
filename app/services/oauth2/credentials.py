@@ -62,7 +62,7 @@ def get_oauth_secret_data(secret_name: str) -> OAuthClientCredentials:
         client_id=_decode_key(secret.data, "clientID"),
         client_secret=_decode_key(secret.data, "clientSecret"),
         scope=_decode_key(secret.data, "scope"),
-        metadata_endpoint=_decode_key(secret.data, "metadata_endpoint"),
+        metadata_endpoint=_decode_key(secret.data, "metadataEndpoint"),
     )
 
 

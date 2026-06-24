@@ -9,11 +9,29 @@ import asyncio
 import logging
 import threading
 import kopf
+import httpx
 
 from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
 from ..services.agent.loader import AgentConfig, CABundleRef
 from ..services.agent.factory import create_mcp_client
+
+# Transient exception types that indicate the MCP server may not be ready yet.
+# These warrant a retry with backoff rather than a permanent failure.
+_TRANSIENT_EXCEPTIONS = (
+    ConnectionError,        # ConnectionRefusedError, ConnectionResetError, etc.
+    TimeoutError,
+    OSError,                # Low-level socket errors (e.g. "Network unreachable")
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+)
+
+_INITIAL_RETRY_DELAY = 1
+_MAX_RETRY_DELAY = 300
+_MAX_RETRIES = 50
 
 
 class KopfManager:
@@ -158,7 +176,7 @@ async def _validate(agent_config: AgentConfig) -> None:
 @kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
 @kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
 @kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
-async def create_fn(spec, name, namespace, logger, patch, **kwargs):
+async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
     """
     Handle AIAgentConfig resource lifecycle events.
     
@@ -205,6 +223,18 @@ async def create_fn(spec, name, namespace, logger, patch, **kwargs):
         # Update status to reflect the failure
         _set_status(patch, False, 'ConfigurationFailed', error_msg)
         logger.warning(error_msg)
+
+        # If any exception in the group is transient, retry with exponential backoff
+        if any(isinstance(e, _TRANSIENT_EXCEPTIONS) for e in eg.exceptions):
+            if retry >= _MAX_RETRIES:
+                raise kopf.PermanentError(
+                    f"Failed to load MCP tools after {retry} retries: {error_message}"
+                )
+            delay = min(_INITIAL_RETRY_DELAY * (2 ** retry), _MAX_RETRY_DELAY)
+            raise kopf.TemporaryError(
+                f"Failed to load MCP tools (retry {retry + 1}/{_MAX_RETRIES}): {error_message}",
+                delay=delay,
+            )
 
         raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}") 
         

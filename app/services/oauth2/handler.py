@@ -60,10 +60,9 @@ async def _try_refresh_oauth_token(agent_name: str, websocket: WebSocket) -> boo
         refresh_data = json.dumps({"agent": agent_name})
         await websocket.send_text(f'<token-refresh>{refresh_data}</token-refresh>')
         # Wait for the refresh token response
-        #TODO check response!
         response = await websocket.receive_text()
 
-        if response == "ok":
+        if response == "token_refresh_confirmed":
             # The client has refreshed the token and set it as a cookie, so we can now inject it into the WebSocket's cookie dict for the agent to use.
             await _inject_oauth_cookie(agent_name, websocket)
         else:

@@ -69,7 +69,7 @@
                         }).then(resp => {
                             if (resp.ok) {
                                 console.log("OAuth token cookies refreshed successfully.");
-                                ws.send("ok");
+                                ws.send("token_refresh_confirmed");
                             } else {
                                 console.warn("Failed to refresh OAuth token cookies:", resp.status);
                             }

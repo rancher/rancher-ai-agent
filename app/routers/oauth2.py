@@ -225,7 +225,7 @@ async def get_metadata(mcp_url: str):
 @router.get("/oauth/dynamic-registration")
 async def dynamic_registration(request: Request, metadata_endpoint: str):
     """
-    Perform OAuth2 dynamic client registration (RFC 7591) and store credentials in a Kubernetes secret.
+    Perform OAuth2 dynamic client registration (RFC 7591).
     """
 
     if not metadata_endpoint:
@@ -239,7 +239,7 @@ async def dynamic_registration(request: Request, metadata_endpoint: str):
         data = metadata.json()
         registration_endpoint = data.get("registration_endpoint")
         if not registration_endpoint:
-            return JSONResponse({"error": "Authorization server metadata does not include registration_endpoint"}, status_code=400)
+            return JSONResponse({"error": "Dynamic Client Registration not supported"}, status_code=400)
         
         registration_data = {
             "client_name": "Rancher AI Agent",

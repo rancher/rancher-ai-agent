@@ -11,7 +11,7 @@ from .cookies import get_oauth_cookie_names
 from .credentials import AGENT_NAMESPACE
 from .store import oauth_store
 
-async def handle_oauth_authentication(agent_name: str, websocket: WebSocket) -> None:
+async def handle_oauth_authentication(agent_name: str, websocket: WebSocket, add_message_tag: bool) -> None:
     """
     Handle OAuth2 authentication for an agent that requires it.
 
@@ -23,8 +23,9 @@ async def handle_oauth_authentication(agent_name: str, websocket: WebSocket) -> 
     Args:
         agent_name: The name of the agent requiring OAuth2 authentication.
         websocket: The WebSocket connection.
+        add_message_tag: Whether to add a message tag.
     """
-    token_refreshed = await _initiate_oauth_flow(agent_name, websocket)
+    token_refreshed = await _initiate_oauth_flow(agent_name, websocket, add_message_tag)
     if not token_refreshed:
         response = await websocket.receive_text()
         if response != "authentication_confirmed":
@@ -76,7 +77,7 @@ async def _try_refresh_oauth_token(agent_name: str, websocket: WebSocket) -> boo
         return False
 
 
-async def _initiate_oauth_flow(agent_name: str, websocket: WebSocket) -> bool:
+async def _initiate_oauth_flow(agent_name: str, websocket: WebSocket, add_message_tag: bool) -> bool:
     """
     Initiate the OAuth2 authentication flow for an agent that requires it.
 
@@ -89,6 +90,7 @@ async def _initiate_oauth_flow(agent_name: str, websocket: WebSocket) -> bool:
     Args:
         agent_name: The name of the agent requiring OAuth2 authentication.
         websocket: The WebSocket connection to send the auth URL to.
+        add_message_tag: Whether to add a message tag.
 
     Returns:
         True if the token was silently refreshed (no user interaction needed),
@@ -118,9 +120,13 @@ async def _initiate_oauth_flow(agent_name: str, websocket: WebSocket) -> bool:
         "redirect_uri": redirect_uri,
     }, session_token)
 
-    await websocket.send_text(
-        f'<authentication>{json.dumps({"type": "oauth2", "url": rv["url"], "agent": agent_name})}</authentication>'
-    )
+    authentication_message = f'<authentication>{json.dumps({"type": "oauth2", "url": rv["url"], "agent": agent_name})}</authentication>'
+
+    if add_message_tag:
+        authentication_message = f'<message>{authentication_message}</message>'
+
+    await websocket.send_text(authentication_message)
+
     return False
 
 

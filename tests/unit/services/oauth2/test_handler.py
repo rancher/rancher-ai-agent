@@ -96,7 +96,7 @@ class TestInitiateOauthFlow:
         cfg = _make_agent_cfg()
 
         with patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=True):
-            result = await _initiate_oauth_flow(cfg, ws)
+            result = await _initiate_oauth_flow(cfg.name, ws, False)
 
         assert result is True
 
@@ -119,12 +119,14 @@ class TestInitiateOauthFlow:
             patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
             patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
         ):
-            result = await _initiate_oauth_flow(cfg.name, ws)
+            result = await _initiate_oauth_flow(cfg.name, ws, False)
 
         assert result is False
         mock_manager.get_client.assert_called_once_with("test-agent")
         ws.send_text.assert_called_once()
-        assert "<authentication>" in ws.send_text.call_args[0][0]
+        sent = ws.send_text.call_args[0][0]
+        assert "<authentication>" in sent
+        assert "<message>" not in sent
         assert "https://auth-url" in ws.send_text.call_args[0][0]
 
     @pytest.mark.asyncio
@@ -140,7 +142,7 @@ class TestInitiateOauthFlow:
             patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
         ):
             with pytest.raises(NoAgentAvailableError, match="no OAuth client is registered"):
-                await _initiate_oauth_flow(cfg, ws)
+                await _initiate_oauth_flow(cfg.name, ws, False)
 
     @pytest.mark.asyncio
     async def test_stores_oauth_state(self):
@@ -162,7 +164,7 @@ class TestInitiateOauthFlow:
             patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
             patch("app.services.oauth2.handler.oauth_store") as mock_store,
         ):
-            await _initiate_oauth_flow(cfg.name, ws)
+            await _initiate_oauth_flow(cfg.name, ws, False)
 
         mock_store.set_state.assert_called_once_with(
             "state-xyz",
@@ -173,6 +175,58 @@ class TestInitiateOauthFlow:
             },
             "sess-abc",
         )
+
+    @pytest.mark.asyncio
+    async def test_wraps_message_in_message_tag_when_add_message_tag_true(self):
+        ws = _make_websocket(cookies={"R_SESS": "sess"})
+        cfg = _make_agent_cfg(authentication_secret="my-secret")
+
+        mock_client = MagicMock()
+        mock_client.create_authorization_url = AsyncMock(return_value={
+            "url": "https://auth-url",
+            "state": "state123",
+            "code_verifier": "verifier123",
+        })
+
+        mock_manager = MagicMock()
+        mock_manager.get_client.return_value = mock_client
+
+        with (
+            patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
+            patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
+            patch("app.services.oauth2.handler.oauth_store"),
+        ):
+            await _initiate_oauth_flow(cfg.name, ws, True)
+
+        sent = ws.send_text.call_args[0][0]
+        assert sent.startswith("<message>") and sent.endswith("</message>")
+        assert "<authentication>" in sent
+
+    @pytest.mark.asyncio
+    async def test_no_message_tag_when_add_message_tag_false(self):
+        ws = _make_websocket(cookies={"R_SESS": "sess"})
+        cfg = _make_agent_cfg(authentication_secret="my-secret")
+
+        mock_client = MagicMock()
+        mock_client.create_authorization_url = AsyncMock(return_value={
+            "url": "https://auth-url",
+            "state": "state456",
+            "code_verifier": "verifier456",
+        })
+
+        mock_manager = MagicMock()
+        mock_manager.get_client.return_value = mock_client
+
+        with (
+            patch("app.services.oauth2.handler._try_refresh_oauth_token", new_callable=AsyncMock, return_value=False),
+            patch("app.services.oauth2.handler.OAuthClientManager.get_instance", return_value=mock_manager),
+            patch("app.services.oauth2.handler.oauth_store"),
+        ):
+            await _initiate_oauth_flow(cfg.name, ws, False)
+
+        sent = ws.send_text.call_args[0][0]
+        assert "<message>" not in sent
+        assert sent.startswith("<authentication>") and sent.endswith("</authentication>")
 
 
 class TestInjectOauthCookie:
@@ -207,9 +261,9 @@ class TestHandleOauthAuthentication:
         cfg = _make_agent_cfg()
 
         with patch("app.services.oauth2.handler._initiate_oauth_flow", new_callable=AsyncMock, return_value=True) as mock_flow:
-            await handle_oauth_authentication(cfg, ws)
+            await handle_oauth_authentication(cfg.name, ws, False)
 
-        mock_flow.assert_awaited_once_with(cfg, ws)
+        mock_flow.assert_awaited_once_with(cfg.name, ws, False)
         ws.receive_text.assert_not_called()
 
     @pytest.mark.asyncio
@@ -222,10 +276,10 @@ class TestHandleOauthAuthentication:
             patch("app.services.oauth2.handler._initiate_oauth_flow", new_callable=AsyncMock, return_value=False),
             patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject,
         ):
-            await handle_oauth_authentication(cfg, ws)
+            await handle_oauth_authentication(cfg.name, ws, False)
 
         ws.receive_text.assert_awaited_once()
-        mock_inject.assert_awaited_once_with(cfg, ws)
+        mock_inject.assert_awaited_once_with(cfg.name, ws)
 
     @pytest.mark.asyncio
     async def test_raises_when_authentication_not_confirmed(self):
@@ -238,7 +292,7 @@ class TestHandleOauthAuthentication:
             patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject,
         ):
             with pytest.raises(Exception, match="OAuth2 authentication failed"):
-                await handle_oauth_authentication(cfg, ws)
+                await handle_oauth_authentication(cfg.name, ws, False)
 
         ws.receive_text.assert_awaited_once()
         mock_inject.assert_not_awaited()

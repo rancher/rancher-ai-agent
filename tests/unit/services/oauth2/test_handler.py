@@ -62,7 +62,7 @@ class TestTryRefreshOauthToken:
     @pytest.mark.asyncio
     async def test_returns_true_and_injects_when_refresh_token_exists(self):
         ws = _make_websocket(cookies={"mcp_oauth_rt_test-agent": "refresh-tok", "R_SESS": "sess"})
-        ws.receive_text.return_value = "ok"
+        ws.receive_text.return_value = "token_refresh_confirmed"
         cfg = _make_agent_cfg()
 
         with patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject:

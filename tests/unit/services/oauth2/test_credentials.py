@@ -69,7 +69,7 @@ class TestGetOAuthSecretData:
                 "clientID": _b64("cid"),
                 "clientSecret": _b64("csecret"),
                 "scope": _b64("openid"),
-                "metadata_endpoint": _b64("https://auth.example.com/.well-known/openid-configuration"),
+                "metadataEndpoint": _b64("https://auth.example.com/.well-known/openid-configuration"),
             }
         )
 

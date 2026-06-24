@@ -26,7 +26,10 @@ async def handle_oauth_authentication(agent_name: str, websocket: WebSocket) -> 
     """
     token_refreshed = await _initiate_oauth_flow(agent_name, websocket)
     if not token_refreshed:
-        await websocket.receive_text()
+        response = await websocket.receive_text()
+        if response != "authentication_confirmed":
+            raise Exception(f"OAuth2 authentication failed")
+        
         await _inject_oauth_cookie(agent_name, websocket)
 
 

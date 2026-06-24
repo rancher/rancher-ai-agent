@@ -215,6 +215,7 @@ class TestHandleOauthAuthentication:
     @pytest.mark.asyncio
     async def test_waits_and_injects_when_not_refreshed(self):
         ws = _make_websocket()
+        ws.receive_text.return_value = "authentication_confirmed"
         cfg = _make_agent_cfg()
 
         with (
@@ -225,3 +226,19 @@ class TestHandleOauthAuthentication:
 
         ws.receive_text.assert_awaited_once()
         mock_inject.assert_awaited_once_with(cfg, ws)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_authentication_not_confirmed(self):
+        ws = _make_websocket()
+        ws.receive_text.return_value = "unexpected_response"
+        cfg = _make_agent_cfg()
+
+        with (
+            patch("app.services.oauth2.handler._initiate_oauth_flow", new_callable=AsyncMock, return_value=False),
+            patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject,
+        ):
+            with pytest.raises(Exception, match="OAuth2 authentication failed"):
+                await handle_oauth_authentication(cfg, ws)
+
+        ws.receive_text.assert_awaited_once()
+        mock_inject.assert_not_awaited()

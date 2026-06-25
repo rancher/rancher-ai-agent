@@ -87,6 +87,8 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         await websocket.close()
         return
 
+    await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
+
     # In single-agent mode (no supervisor), store the agent name so that
     # the ui_tools middleware knows the child is the direct target.
     single_agent_name = ""
@@ -94,9 +96,9 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     if not isinstance(agent, SupervisorGraph) and len(active_agents) == 1:
         single_agent_name = active_agents[0].get("name", "")
         if active_agents[0].get("description") == "needs_oauth2":
+            await websocket.send_text("<message>")
             agent = await _handle_single_agent_oauth(llm, single_agent_name, agent, websocket)
-
-    await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
+            await websocket.send_text("</message>")
 
     base_config = {
         "configurable": {
@@ -130,7 +132,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                     websocket=websocket)
             except NeedsOauth2 as e:
                 try:
-                    await handle_oauth_authentication(e.agent_cfg.name, websocket, False)
+                    await handle_oauth_authentication(e.agent_cfg.name, websocket)
                 except OAuthSecretError as secret_err:
                     logging.error(f"OAuth secret not found for agent '{e.agent_cfg.name}': {secret_err}")
                     await websocket.send_text(f'<error>{json.dumps({"message": str(secret_err)})}</error>')
@@ -185,11 +187,11 @@ async def _handle_single_agent_oauth(
     agent_configs = load_agent_configs()
     agent_cfg = next((cfg for cfg in agent_configs if cfg.name == agent_name), None)
     try:
-        await handle_oauth_authentication(agent_name, websocket, True)
+        await handle_oauth_authentication(agent_name, websocket)
         return await reload_agent_tools(llm, agent_cfg, websocket)
     except OAuthSecretError as secret_err:
         logging.error(f"OAuth secret not found for agent '{agent_name}': {secret_err}")
-        await websocket.send_text(f'<chat-error>{json.dumps({"message": str(secret_err)})}</chat-error>')
+        await websocket.send_text(f'<error>{json.dumps({"message": str(secret_err)})}</error>')
         return agent
 
 
@@ -463,7 +465,13 @@ async def _resolve_target_agent(
 
     child_agent = agent.child_agents[requested_agent]
     if child_agent and child_agent.needs_oauth2:
-        await handle_oauth_authentication(child_agent.config.name, websocket, True)
+        await websocket.send_text("<message>")
+        try:
+            await handle_oauth_authentication(child_agent.config.name, websocket)
+        except OAuthSecretError as secret_err:
+            logging.error(f"OAuth secret not found for agent '{child_agent.config.name}': {secret_err}")
+            await websocket.send_text(f'<error>{json.dumps({"message": str(secret_err)})}</error>')
+        await websocket.send_text("</message>")
         child_agent.agent = await reload_agent_tools(llm, child_agent.config, websocket)
 
 

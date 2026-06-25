@@ -229,8 +229,8 @@ class TestDiscoverMetadataEndpoint:
                 result = await discover_metadata_endpoint("https://mcp.example.com/sse")
 
                 assert isinstance(result, DiscoveredMetadata)
-                assert result.metadata_endpoint == auth_server_url
-                assert result.scopes_supported == ["openid", "profile"]
+                assert result.metadataEndpoint == auth_server_url
+                assert result.scopesSupported == ["openid", "profile"]
 
     @pytest.mark.asyncio
     @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)

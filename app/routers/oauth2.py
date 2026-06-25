@@ -206,24 +206,24 @@ async def refresh_token_endpoint(request: Request):
 
 
 @router.get("/metadata")
-async def get_metadata(mcp_url: str):
+async def get_metadata(mcpUrl: str):
     """
     Discover OAuth metadata for an MCP server URL.
 
     Returns discovered metadata (or `null` if discovery fails).
     """
-    if not mcp_url:
-        return JSONResponse({"error": "Missing mcp_url"}, status_code=400)
+    if not mcpUrl:
+        return JSONResponse({"error": "Missing mcpUrl"}, status_code=400)
 
     try:
-        return await discover_metadata_endpoint(mcp_url)
+        return await discover_metadata_endpoint(mcpUrl)
     except OAuthDiscoveryError as e:
-        logger.info(f"OAuth metadata discovery failed for {mcp_url}: {e}")
+        logger.info(f"OAuth metadata discovery failed for {mcpUrl}: {e}")
         return JSONResponse(content=None, status_code=200)
 
 
 class RegistrationPayload(BaseModel):
-    metadata_endpoint: HttpUrl
+    metadataEndpoint: HttpUrl
     
 @router.post("/dynamic-registration")
 async def dynamic_registration(payload: RegistrationPayload, request: Request):
@@ -231,9 +231,9 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
     Perform OAuth2 dynamic client registration (RFC 7591).
     """
 
-    metadata_endpoint = payload.metadata_endpoint
+    metadata_endpoint = payload.metadataEndpoint
     if not metadata_endpoint:
-        return JSONResponse({"error": "Missing metadata_endpoint"}, status_code=400)
+        return JSONResponse({"error": "Missing metadataEndpoint"}, status_code=400)
     
 
     async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:

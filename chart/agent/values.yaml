@@ -26,11 +26,6 @@ awsBedrock:
   bearerToken:
   region:
 activeLlm: # ollama, gemini, openai, bedrock
-# Enable RAG with embedded rancher documentation
-rag:
-    enabled: false
-    embeddings_model:
-    pvc:
 langfuseSecretKey:
 langfusePublicKey:
 langfuseHost:

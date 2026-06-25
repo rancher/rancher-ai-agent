@@ -658,12 +658,6 @@ components:
           type: string
           enum: [openai, gemini, bedrock, ollama]
           description: Currently active LLM provider
-        ENABLE_RAG:
-          type: string
-          description: Enable RAG (true/false)
-        EMBEDDINGS_MODEL:
-          type: string
-          description: Model to use for embeddings
         LANGFUSE_HOST:
           type: string
           description: Langfuse server host

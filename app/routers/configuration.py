@@ -64,8 +64,6 @@ class SettingsUpdate(BaseModel):
     OLLAMA_URL: str = None
     GOOGLE_API_KEY: str = None
     ACTIVE_LLM: str = None
-    ENABLE_RAG: str = None
-    EMBEDDINGS_MODEL: str = None
     LANGFUSE_HOST: str = None
     LANGFUSE_PUBLIC_KEY: str = None
     LANGFUSE_SECRET_KEY: str = None

@@ -27,7 +27,7 @@ async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     Retrieves the user ID from the Rancher API using the session token from the WebSocket cookies.
     """
     cookies = websocket.cookies
-    rancher_url = os.environ.get("RANCHER_URL","https://rancher.cattle-system.svc")
+    rancher_url = os.environ.get("RANCHER_URL","https://rancher.cattle-system")
     token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
 
     return await get_user_id(rancher_url, token)

@@ -160,10 +160,8 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
     if agent_config.authentication == AuthenticationType.RANCHER:
         if websocket:
             cookies = websocket.cookies
-            rancher_url = os.environ.get("RANCHER_URL", "https://" + websocket.url.hostname)
             token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
         else:
-            rancher_url = os.environ.get("RANCHER_URL", "")
             token = os.environ.get("RANCHER_API_TOKEN", "")
         
         mcp_url = os.environ.get("MCP_URL", agent_config.mcp_url)
@@ -174,7 +172,6 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
                 mcp_url = "https://" + mcp_url
         headers = {
             "R_token": token,
-            "R_url": rancher_url
         }
     elif agent_config.authentication == AuthenticationType.BASIC:
         mcp_url = agent_config.mcp_url

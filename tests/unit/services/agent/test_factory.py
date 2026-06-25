@@ -406,7 +406,6 @@ def test_create_mcp_client_rancher_auth_with_websocket(mock_mcp_client):
     call_args = mock_mcp_client.call_args[0][0]
     assert call_args["TestAgent"]["url"] == "https://mcp-service:8080"
     assert call_args["TestAgent"]["headers"]['R_token'] == 'test-token'
-    assert call_args["TestAgent"]["headers"]['R_url'] == 'https://rancher.example.com'
 
 
 @patch('app.services.agent.factory.MultiServerMCPClient')

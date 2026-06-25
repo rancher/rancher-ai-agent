@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DiscoveredMetadata:
     """Data class to hold discovered OAuth metadata."""
-    metadata_endpoint: str
-    scopes_supported: list = field(default_factory=list)
+    metadataEndpoint: str
+    scopesSupported: list = field(default_factory=list)
 
 
 async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
@@ -54,8 +54,8 @@ async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
             auth_server_metadata_endpoint = await _discover_auth_server_metadata_endpoint(client, issuer_url)
 
             return DiscoveredMetadata(
-                metadata_endpoint=auth_server_metadata_endpoint,
-                scopes_supported=protected_resource_metadata.get("scopes_supported", []),
+                metadataEndpoint=auth_server_metadata_endpoint,
+                scopesSupported=protected_resource_metadata.get("scopes_supported", []),
             )
 
         else:

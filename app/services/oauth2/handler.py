@@ -149,4 +149,4 @@ def get_redirect_uri(url: str | None = None) -> str:
     if configured:
         return configured
 
-    return f"https://{url}/api/v1/namespaces/{AGENT_NAMESPACE}/services/http:rancher-ai-agent:80/proxy/oauth/callback"
+    return f"https://{url}/api/v1/namespaces/{AGENT_NAMESPACE}/services/http:rancher-ai-agent:80/proxy/v1/api/oauth2/callback"

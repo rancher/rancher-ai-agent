@@ -30,7 +30,7 @@ class TestGetRedirectUri:
             result = get_redirect_uri("mcp.example.com")
             assert result == (
                 "https://mcp.example.com/api/v1/namespaces/cattle-ai-agent-system"
-                "/services/http:rancher-ai-agent:80/proxy/oauth/callback"
+                "/services/http:rancher-ai-agent:80/proxy/v1/api/oauth2/callback"
             )
 
     def test_none_url_without_env(self):
@@ -38,7 +38,7 @@ class TestGetRedirectUri:
             result = get_redirect_uri()
             assert result == (
                 "https://None/api/v1/namespaces/cattle-ai-agent-system"
-                "/services/http:rancher-ai-agent:80/proxy/oauth/callback"
+                "/services/http:rancher-ai-agent:80/proxy/v1/api/oauth2/callback"
             )
 
 

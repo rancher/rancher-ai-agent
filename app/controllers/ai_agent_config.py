@@ -216,17 +216,22 @@ async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
         await _validate(agent_config)
         _set_status(patch, True, 'ConfigurationSucceeded', 'AI Agent configuration successful')
 
-    except* Exception as eg:
+    except ExceptionGroup as eg:
         # Collect all exception messages from the exception group
-        error_message = ""
-        for e in eg.exceptions:
-            error_message += f"{str(e)} "
+        error_message = " ".join(str(e) for e in eg.exceptions)
         error_msg = f"Failed to load MCP tools: {error_message}"
 
+        _error_lower = error_message.lower()
         if agent_config.authentication == AuthenticationType.OAUTH2 and (
-            "401" in error_message or "Unauthorized" in error_message
+            "401" in error_message
+            or "unauthorized" in _error_lower
+            or "not authorized" in _error_lower
+            or "access denied" in _error_lower
         ):
             _set_status(patch, True, 'ConfigurationSucceeded', 'Needs OAuth2 authentication')
+            _register_oauth_client(agent_config, logger)
+
+            return
         else:
             # Update status to reflect the failure
             _set_status(patch, False, 'ConfigurationFailed', error_msg)
@@ -245,9 +250,6 @@ async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
             )
 
         raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}")
-
-    # Register/update the OAuth client if this agent uses OAuth2 authentication
-    _register_oauth_client(agent_config, logger)
 
 
 def _register_oauth_client(agent_config: AgentConfig, logger) -> None:
@@ -277,7 +279,7 @@ def _register_oauth_client(agent_config: AgentConfig, logger) -> None:
 
     if not credentials.client_id or not credentials.metadata_endpoint:
         logger.warning(
-            f"Agent '{agent_config.name}' OAuth secret missing clientID or metadata_endpoint, "
+            f"Agent '{agent_config.name}' OAuth secret missing clientID or metadataEndpoint, "
             "skipping OAuth client registration"
         )
         return

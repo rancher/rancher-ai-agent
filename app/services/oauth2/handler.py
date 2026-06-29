@@ -5,7 +5,7 @@ import os
 from fastapi import WebSocket
 
 from ..agent._constants import NoAgentAvailableError
-from ..agent.loader import AgentConfig
+from .models import OAuth2Cancelled
 from .client import OAuthClientManager
 from .cookies import get_oauth_cookie_names
 from .credentials import AGENT_NAMESPACE
@@ -27,8 +27,11 @@ async def handle_oauth_authentication(agent_name: str, websocket: WebSocket) -> 
     token_refreshed = await _initiate_oauth_flow(agent_name, websocket)
     if not token_refreshed:
         response = await websocket.receive_text()
-        if response != "authentication_confirmed":
+        if response == "authentication_cancelled":
+            raise OAuth2Cancelled(f"OAuth2 authentication cancelled by user")
+        elif response != "authentication_confirmed":
             raise Exception(f"OAuth2 authentication failed")
+        
         
         await _inject_oauth_cookie(agent_name, websocket)
 

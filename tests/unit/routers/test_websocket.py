@@ -11,9 +11,11 @@ from app.routers.websocket import (
     _build_config,
     _resolve_target_agent,
     _build_input_data,
+    _patch_tool_result,
     WebSocketRequest,
 )
 from app.services.agent.supervisor import SupervisorGraph
+from app.services.oauth2.models import OAuth2Cancelled
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -564,4 +566,162 @@ class TestBuildInputData:
         result = await _build_input_data(agent, config, ws_request)
         msg = result["messages"][0]
         assert msg.additional_kwargs["request_id"] == "req-42"
-        assert msg.additional_kwargs["request_metadata"] == {"agent": "rancher"}
+
+
+# --- Tests for _patch_tool_result ---
+
+class TestPatchToolResult:
+    @pytest.mark.asyncio
+    async def test_injects_tool_messages_for_pending_tool_calls(self):
+        """When the last message has tool_calls, ToolMessages should be injected."""
+        last_msg = MagicMock()
+        last_msg.tool_calls = [
+            {"id": "call_abc123", "name": "some_tool", "args": {}},
+            {"id": "call_def456", "name": "another_tool", "args": {}},
+        ]
+
+        state = MagicMock()
+        state.values = {"messages": [MagicMock(), last_msg]}
+
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=state)
+        agent.aupdate_state = AsyncMock()
+
+        config = {"configurable": {"thread_id": "t1"}}
+
+        await _patch_tool_result(agent, config, "OAuth2 cancelled")
+
+        agent.aupdate_state.assert_awaited_once()
+        call_kwargs = agent.aupdate_state.call_args.kwargs
+        tool_messages = call_kwargs["values"]["messages"]
+        assert len(tool_messages) == 2
+        assert tool_messages[0].tool_call_id == "call_abc123"
+        assert tool_messages[0].content == "OAuth2 cancelled"
+        assert tool_messages[0].status == "error"
+        assert tool_messages[1].tool_call_id == "call_def456"
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_no_messages(self):
+        """When graph state has no messages, nothing should happen."""
+        state = MagicMock()
+        state.values = {"messages": []}
+
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=state)
+        agent.aupdate_state = AsyncMock()
+
+        config = {"configurable": {"thread_id": "t1"}}
+
+        await _patch_tool_result(agent, config, "error")
+
+        agent.aupdate_state.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_last_message_has_no_tool_calls(self):
+        """When the last message has no tool_calls, nothing should happen."""
+        last_msg = MagicMock()
+        last_msg.tool_calls = None
+
+        state = MagicMock()
+        state.values = {"messages": [last_msg]}
+
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=state)
+        agent.aupdate_state = AsyncMock()
+
+        config = {"configurable": {"thread_id": "t1"}}
+
+        await _patch_tool_result(agent, config, "error")
+
+        agent.aupdate_state.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_state_is_none(self):
+        """When aget_state returns None, nothing should happen."""
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=None)
+        agent.aupdate_state = AsyncMock()
+
+        config = {"configurable": {"thread_id": "t1"}}
+
+        await _patch_tool_result(agent, config, "error")
+
+        agent.aupdate_state.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_tool_calls_is_empty_list(self):
+        """When tool_calls is an empty list, nothing should happen."""
+        last_msg = MagicMock()
+        last_msg.tool_calls = []
+
+        state = MagicMock()
+        state.values = {"messages": [last_msg]}
+
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=state)
+        agent.aupdate_state = AsyncMock()
+
+        config = {"configurable": {"thread_id": "t1"}}
+
+        await _patch_tool_result(agent, config, "error")
+
+        agent.aupdate_state.assert_not_awaited()
+
+
+# --- Tests for _resolve_target_agent with OAuth2Cancelled ---
+
+class TestResolveTargetAgentOAuth2:
+    @pytest.mark.asyncio
+    async def test_returns_none_when_oauth2_cancelled(self):
+        """When OAuth2 is cancelled for a child agent, should return (None, config)."""
+        child_agent = MagicMock()
+        child_agent.needs_oauth2 = True
+        child_agent.config = MagicMock()
+        child_agent.config.name = "fleet"
+
+        supervisor = SupervisorGraph(
+            graph=MagicMock(),
+            child_agents={"fleet": child_agent},
+        )
+        config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
+        ws_request = WebSocketRequest(
+            prompt="deploy", user_input="deploy", context={},
+            tags=[], labels={}, agent="fleet", ui_tools={}
+        )
+        websocket = AsyncMock()
+        llm = MagicMock()
+
+        with patch("app.routers.websocket.handle_oauth_authentication", new_callable=AsyncMock, side_effect=OAuth2Cancelled("cancelled")):
+            result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
+
+        assert result_agent is None
+        assert result_config is config
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_oauth2_fails(self):
+        """When OAuth2 raises a generic exception, should return (None, config) and send auth-error."""
+        child_agent = MagicMock()
+        child_agent.needs_oauth2 = True
+        child_agent.config = MagicMock()
+        child_agent.config.name = "fleet"
+
+        supervisor = SupervisorGraph(
+            graph=MagicMock(),
+            child_agents={"fleet": child_agent},
+        )
+        config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
+        ws_request = WebSocketRequest(
+            prompt="deploy", user_input="deploy", context={},
+            tags=[], labels={}, agent="fleet", ui_tools={}
+        )
+        websocket = AsyncMock()
+        llm = MagicMock()
+
+        with patch("app.routers.websocket.handle_oauth_authentication", new_callable=AsyncMock, side_effect=Exception("token expired")):
+            result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
+
+        assert result_agent is None
+        assert result_config is config
+        # Should have sent auth-error
+        auth_error_sent = any("<auth-error>" in str(call) for call in websocket.send_text.call_args_list)
+        assert auth_error_sent

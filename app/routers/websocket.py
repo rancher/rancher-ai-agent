@@ -9,7 +9,8 @@ from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.loader import load_agent_configs
 from ..services.agent.supervisor import SupervisorGraph
-from ..services.oauth2 import OAuthSecretError, handle_oauth_authentication
+from ..services.oauth2 import handle_oauth_authentication
+from ..services.oauth2.models import OAuth2Cancelled
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -17,7 +18,7 @@ from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id
@@ -135,10 +136,16 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             except NeedsOauth2 as e:
                 try:
                     await handle_oauth_authentication(e.agent_cfg.name, websocket)
-                except Exception as e:
-                    logging.error(f"OAuth2 authentication failed")
-                    await websocket.send_text(f'<auth-error>{json.dumps({"message": str(e)})}</auth-error>')
+                except OAuth2Cancelled as oauth_err:
+                    logging.debug(f"OAuth2 authentication cancelled: {oauth_err}")
+                    await _patch_tool_result(target_agent, target_config, "OAuth2 authentication was cancelled by the user.")
                     continue
+                except Exception as oauth_err:
+                    logging.error(f"OAuth2 authentication failed")
+                    await websocket.send_text(f'<auth-error>{json.dumps({"message": str(oauth_err)})}</auth-error>')
+                    await _patch_tool_result(target_agent, target_config, f"OAuth2 authentication failed: {oauth_err}")
+                    continue
+
                 child_graph = await reload_agent_tools(llm, e.agent_cfg, websocket)
                 if isinstance(agent, SupervisorGraph):
                     child_agent_obj = agent.child_agents.get(e.agent_cfg.name)
@@ -191,10 +198,34 @@ async def _handle_single_agent_oauth(
     try:
         await handle_oauth_authentication(agent_name, websocket)
         return await reload_agent_tools(llm, agent_cfg, websocket)
+    except OAuth2Cancelled as e:
+        logging.debug(f"OAuth2 authentication cancelled: {e}")
+        return agent
     except Exception as e:
         logging.error(f"OAuth2 authentication failed")
         await websocket.send_text(f'<auth-error>{json.dumps({"message": str(e)})}</auth-error>')
         return agent
+
+
+async def _patch_tool_result(agent: CompiledStateGraph, config: dict, error_message: str) -> None:
+    """
+    Inject a ToolMessage into the graph state so that a pending tool_use has a
+    matching tool_result. This prevents validation errors from the LLM on the
+    next invocation when a tool call was interrupted (e.g. by an OAuth2 failure).
+    """
+    state = await agent.aget_state(config=config)
+    if not state or not state.values.get("messages"):
+        return
+    last_msg = state.values["messages"][-1]
+    tool_calls = getattr(last_msg, "tool_calls", None)
+    if not tool_calls:
+        return
+    # Add a ToolMessage for each pending tool call
+    tool_messages = [
+        ToolMessage(content=error_message, tool_call_id=tc["id"], status="error")
+        for tc in tool_calls
+    ]
+    await agent.aupdate_state(config=config, values={"messages": tool_messages})
 
 
 async def _call_agent(
@@ -470,6 +501,9 @@ async def _resolve_target_agent(
         await websocket.send_text("<message>")
         try:
             await handle_oauth_authentication(child_agent.config.name, websocket)
+        except OAuth2Cancelled as e:
+            logging.debug(f"OAuth2 authentication cancelled: {e}")
+            return None, config
         except Exception as e:
             logging.error(f"OAuth2 authentication failed")
             await websocket.send_text(f'<auth-error>{json.dumps({"message": str(e)})}</auth-error>')

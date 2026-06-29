@@ -3,6 +3,11 @@
 from dataclasses import dataclass
 
 
+class OAuth2Cancelled(Exception):
+    """Raised when the OAuth2 flow is cancelled by the user."""
+    pass
+
+
 class OAuthDiscoveryError(Exception):
     """Raised when OAuth discovery fails."""
     pass

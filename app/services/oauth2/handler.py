@@ -27,7 +27,7 @@ async def handle_oauth_authentication(agent_name: str, websocket: WebSocket) -> 
     token_refreshed = await _initiate_oauth_flow(agent_name, websocket)
     if not token_refreshed:
         response = await websocket.receive_text()
-        if response == "authentication_cancelled":
+        if response == "authentication_canceled":
             raise OAuth2Cancelled(f"OAuth2 authentication cancelled by user")
         elif response != "authentication_confirmed":
             raise Exception(f"OAuth2 authentication failed")

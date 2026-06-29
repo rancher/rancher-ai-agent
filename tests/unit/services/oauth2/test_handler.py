@@ -301,7 +301,7 @@ class TestHandleOauthAuthentication:
     @pytest.mark.asyncio
     async def test_raises_oauth2_cancelled_when_user_cancels(self):
         ws = _make_websocket()
-        ws.receive_text.return_value = "authentication_cancelled"
+        ws.receive_text.return_value = "authentication_canceled"
         cfg = _make_agent_cfg()
 
         with (

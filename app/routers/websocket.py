@@ -23,6 +23,7 @@ from langgraph.types import Command
 
 from ..services.auth import get_user_id
 from ..constants import CONTEXT_PARAMETERS_SUFFIX
+from ..constants import BEDROCK_TOOL_ERROR_MESSAGE
 
 router = APIRouter()
 
@@ -114,6 +115,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
     while True:
         ws_request = None
+        is_bedrock_tool_error = False
         try:
             request = await websocket.receive_text()
             request_id = str(uuid.uuid4())
@@ -173,13 +175,16 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
         except Exception as e:
             logging.error(f"An error occurred: {e}", exc_info=True)
+            is_bedrock_tool_error = BEDROCK_TOOL_ERROR_MESSAGE in str(e)
             if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.send_text(f'<error>{json.dumps({"message": str(e)})}</error>')
+                if not is_bedrock_tool_error:
+                    await websocket.send_text(f'<error>{json.dumps({"message": str(e)})}</error>')
             else:
                 break
         finally:
             if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.send_text("</message>")
+                if not is_bedrock_tool_error:
+                    await websocket.send_text("</message>")
 
 async def _handle_single_agent_oauth(
     llm: BaseLanguageModel,

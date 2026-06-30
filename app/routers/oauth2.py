@@ -4,7 +4,10 @@ import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import HTTPException, status
 from pydantic import BaseModel, HttpUrl
+from urllib.parse import urlparse
+from ..services.auth import get_user_id_from_request
 from ..services.oauth2.client import OAuthClientManager, _get_tls_verify
 from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
@@ -119,14 +122,14 @@ async def get(request: Request):
         return response
 
     except Exception as e:
-        return HTMLResponse(content=f"""
+        logger.error(f"Token exchange failed for agent '{agent_name}': {e}")
+        return HTMLResponse(content="""
             <!DOCTYPE html>
             <html>
             <head><title>Authentication Error</title></head>
             <body>
                 <h2>Authentication Error</h2>
-                <p>Failed to exchange token: {str(e)}</p>
-                <p>Please close this window and try again.</p>
+                <p>Authentication failed. Please close this window and try again.</p>
             </body>
             </html>
         """, status_code=500)
@@ -206,12 +209,16 @@ async def refresh_token_endpoint(request: Request):
 
 
 @router.get("/metadata")
-async def get_metadata(mcpUrl: str):
+async def get_metadata(mcpUrl: str, request: Request):
     """
     Discover OAuth metadata for an MCP server URL.
 
     Returns discovered metadata (or `null` if discovery fails).
     """
+    user_id = await get_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
     if not mcpUrl:
         return JSONResponse({"error": "Missing mcpUrl"}, status_code=400)
 
@@ -230,11 +237,17 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
     """
     Perform OAuth2 dynamic client registration (RFC 7591).
     """
+    # Without authentication this endpoint would let any network-reachable caller
+    # use the agent pod as an SSRF proxy to probe internal services.
+    user_id = await get_user_id_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     metadata_endpoint = payload.metadataEndpoint
     if not metadata_endpoint:
         return JSONResponse({"error": "Missing metadataEndpoint"}, status_code=400)
-    
+
+    metadata_origin = f"{urlparse(str(metadata_endpoint)).scheme}://{urlparse(str(metadata_endpoint)).netloc}"
 
     async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:
         metadata = await http_client.get(str(metadata_endpoint))
@@ -243,7 +256,17 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
         registration_endpoint = data.get("registration_endpoint")
         if not registration_endpoint:
             return JSONResponse({"error": "Dynamic Client Registration not supported"}, status_code=400)
-        
+
+        # Enforce same-origin on the registration_endpoint returned by the metadata server.
+        # Without this check an attacker-controlled metadata server could redirect the
+        # second POST to an arbitrary internal URL (two-hop SSRF).
+        reg_origin = f"{urlparse(registration_endpoint).scheme}://{urlparse(registration_endpoint).netloc}"
+        if reg_origin != metadata_origin:
+            logger.warning(
+                f"Dynamic registration endpoint origin does not match metadata endpoint"
+            )
+            return JSONResponse({"error": "Registration endpoint must share the same origin as the metadata endpoint"}, status_code=400)
+
         registration_data = {
             "client_name": "Rancher AI Agent",
             "redirect_uris": [get_redirect_uri(request.url.hostname)],
@@ -260,7 +283,7 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
             return JSONResponse({"error": "Registration response did not include client_id"}, status_code=502)
         if not client_secret:
             return JSONResponse({"error": "Registration response did not include client_secret"}, status_code=502)
-        
+
         return JSONResponse({
             "clientId": client_id,
             "clientSecret": client_secret,

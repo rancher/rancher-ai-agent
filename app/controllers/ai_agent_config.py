@@ -33,8 +33,8 @@ _TRANSIENT_EXCEPTIONS = (
 )
 
 _INITIAL_RETRY_DELAY = 1
-_MAX_RETRY_DELAY = 300
-_MAX_RETRIES = 50
+_MAX_RETRY_DELAY = 30
+_MAX_RETRIES = 200
 
 
 class KopfManager:
@@ -176,9 +176,9 @@ async def _validate(agent_config: AgentConfig) -> None:
     await client.get_tools()
 
 
-@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec',  backoff=5.0, timeout=3600.0)
-@kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
-@kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
+@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs',  backoff=5.0, timeout=3600.0)
+@kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
+@kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
 async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
     """
     Handle AIAgentConfig resource lifecycle events.
@@ -241,16 +241,15 @@ async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
         if any(isinstance(e, _TRANSIENT_EXCEPTIONS) for e in eg.exceptions):
             if retry >= _MAX_RETRIES:
                 raise kopf.PermanentError(
-                    f"Failed to load MCP tools after {retry} retries: {error_message}"
+                    f"Failed to load MCP tools for agent {name} after {retry} retries: {error_message}"
                 )
             delay = min(_INITIAL_RETRY_DELAY * (2 ** retry), _MAX_RETRY_DELAY)
             raise kopf.TemporaryError(
-                f"Failed to load MCP tools (retry {retry + 1}/{_MAX_RETRIES}): {error_message}",
+                f"Failed to load MCP tools for agent {name} (retry {retry + 1}/{_MAX_RETRIES}): {error_message}",
                 delay=delay,
             )
 
-        raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}")
-
+        raise kopf.PermanentError(f"Failed to load MCP tools for agent {name}: {error_message}")
 
 def _register_oauth_client(agent_config: AgentConfig, logger) -> None:
     """

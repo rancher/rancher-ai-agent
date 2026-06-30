@@ -103,8 +103,8 @@ async def test_transient_error_raises_temporary(mock_validate, exc_class):
         (1, _INITIAL_RETRY_DELAY * 2),    # 2s
         (2, _INITIAL_RETRY_DELAY * 4),    # 4s
         (4, _INITIAL_RETRY_DELAY * 16),   # 16s
-        (8, _INITIAL_RETRY_DELAY * 256),  # 256s
-        (9, _MAX_RETRY_DELAY),            # capped at 300s
+        (8, _MAX_RETRY_DELAY),            # capped at 30s
+        (9, _MAX_RETRY_DELAY),            # capped at 30s
         (49, _MAX_RETRY_DELAY),           # still capped
     ],
 )

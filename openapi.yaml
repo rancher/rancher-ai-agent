@@ -467,6 +467,265 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /v1/api/oauth2/callback:
+    get:
+      summary: OAuth2 callback endpoint
+      description: Handles OAuth2 authorization code callback. Returns HTML page that communicates token back to parent window and stores tokens as httponly cookies.
+      operationId: oauth2_callback
+      tags:
+        - OAuth2
+      parameters:
+        - name: code
+          in: query
+          description: Authorization code from OAuth provider
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          description: State parameter for CSRF protection
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authentication successful. Returns HTML page with success message.
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!DOCTYPE html>
+                <html>
+                <head><title>Authentication Successful</title></head>
+                <body>
+                    <h2>Authentication Successful!</h2>
+                    ...
+                </body>
+                </html>
+        '400':
+          description: Invalid state, session expired, or OAuth client not found
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!DOCTYPE html>
+                <html>
+                <head><title>Authentication Error</title></head>
+                <body>
+                    <h2>Authentication Error</h2>
+                    ...
+                </body>
+                </html>
+        '500':
+          description: Token exchange failed
+          content:
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!DOCTYPE html>
+                <html>
+                <head><title>Authentication Error</title></head>
+                <body>
+                    <h2>Authentication Error</h2>
+                    ...
+                </body>
+                </html>
+
+  /v1/api/oauth2/refresh:
+    post:
+      summary: Refresh OAuth2 access token
+      description: Refreshes the OAuth2 access token using the refresh token stored in cookies.
+      operationId: refresh_oauth2_token
+      tags:
+        - OAuth2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent:
+                  type: string
+                  description: The agent configuration name
+              required:
+                - agent
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+              example:
+                status: ok
+        '400':
+          description: Bad request - missing agent name or invalid request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "Missing agent name"
+        '401':
+          description: Unauthorized - no refresh token available or token refresh failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "Token refresh failed: invalid_grant"
+        '404':
+          description: Agent not found or not using OAuth2
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "Agent 'my-agent' not found or not OAuth2"
+        '502':
+          description: Bad gateway - no access token in response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "No access token in response"
+
+  /v1/api/oauth2/metadata:
+    get:
+      summary: Discover OAuth2 metadata for an MCP server
+      description: Discovers OAuth metadata for an MCP server URL. Returns discovered metadata or null if discovery fails.
+      operationId: get_oauth2_metadata
+      tags:
+        - OAuth2
+      parameters:
+        - name: mcpUrl
+          in: query
+          description: The MCP server URL to discover OAuth metadata for
+          required: true
+          schema:
+            type: string
+            format: url
+      responses:
+        '200':
+          description: Metadata discovered successfully (or null if discovery failed)
+          content:
+            application/json:
+              schema:
+                type: object
+                nullable: true
+                description: OAuth metadata object or null
+              example:
+                issuer: "https://oauth.example.com"
+                authorization_endpoint: "https://oauth.example.com/authorize"
+                token_endpoint: "https://oauth.example.com/token"
+                registration_endpoint: "https://oauth.example.com/register"
+                scopes_supported:
+                  - openid
+                  - profile
+        '400':
+          description: Bad request - missing mcpUrl parameter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "Missing mcpUrl"
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/api/oauth2/dynamic-registration:
+    post:
+      summary: Perform OAuth2 dynamic client registration
+      description: Performs OAuth2 dynamic client registration (RFC 7591) for an MCP server's OAuth metadata endpoint.
+      operationId: oauth2_dynamic_registration
+      tags:
+        - OAuth2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                metadataEndpoint:
+                  type: string
+                  format: url
+                  description: The OAuth2 metadata endpoint URL
+              required:
+                - metadataEndpoint
+      responses:
+        '200':
+          description: Dynamic registration successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clientId:
+                    type: string
+                    description: The registered client ID
+                  clientSecret:
+                    type: string
+                    description: The registered client secret
+              example:
+                clientId: "abc123def456"
+                clientSecret: "secret_xyz789abc"
+        '400':
+          description: Bad request - missing metadataEndpoint or dynamic registration not supported
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "Dynamic Client Registration not supported"
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Bad gateway - registration response missing required fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+              example:
+                error: "Registration response did not include client_id"
+
 components:
   schemas:
     Chat:
@@ -705,3 +964,5 @@ tags:
     description: UI tools selection and management
   - name: Configuration
     description: LLM and agent configuration management
+  - name: OAuth2
+    description: OAuth2 authentication and token management

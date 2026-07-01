@@ -42,7 +42,7 @@ async def get(request: Request):
                 <p>Invalid state or session expired. Please close this window and try again.</p>
             </body>
             </html>
-        """, status_code=400)
+        """, status_code=status.HTTP_400_BAD_REQUEST)
 
     code_verifier = oauth_data["code_verifier"]
     agent_name = oauth_data["agent_name"]
@@ -61,7 +61,7 @@ async def get(request: Request):
                 <p>OAuth client not found for this agent. Please close this window and try again.</p>
             </body>
             </html>
-        """, status_code=400)
+        """, status_code=status.HTTP_400_BAD_REQUEST)
 
     try:
         token = await client.fetch_access_token(

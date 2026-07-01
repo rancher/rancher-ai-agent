@@ -44,7 +44,12 @@ async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
         if resource_metadata_url:
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
-            protected_resource_metadata = response.json()
+            try:
+                protected_resource_metadata = response.json()
+            except ValueError as e:
+                raise OAuthDiscoveryError(
+                    f"Invalid JSON in resource metadata response from {resource_metadata_url}: {e}"
+                )
             authorization_servers = protected_resource_metadata.get("authorization_servers") or []
             issuer_url = authorization_servers[0] if authorization_servers else None
             if not issuer_url:

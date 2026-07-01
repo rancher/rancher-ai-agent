@@ -1,3 +1,4 @@
+import json
 import logging
 import httpx
 import os
@@ -217,7 +218,7 @@ async def get_metadata(mcpUrl: str, request: Request):
     """
     user_id = await get_user_id_from_request(request)
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     if not mcpUrl:
         return JSONResponse({"error": "Missing mcpUrl"}, status_code=400)
@@ -226,7 +227,7 @@ async def get_metadata(mcpUrl: str, request: Request):
         return await discover_metadata_endpoint(mcpUrl)
     except OAuthDiscoveryError as e:
         logger.info(f"OAuth metadata discovery failed for {mcpUrl}: {e}")
-        return JSONResponse(content=None, status_code=200)
+        return JSONResponse(content=json.dumps({"error": str(e)}), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class RegistrationPayload(BaseModel):

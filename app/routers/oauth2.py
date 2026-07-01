@@ -96,7 +96,7 @@ async def get(request: Request):
 
         # Store tokens as httponly cookies for subsequent connections
         cookie_names = get_oauth_cookie_names(agent_name)
-        is_secure = request.url.scheme == "https"
+        is_secure = _is_secure(request)
 
         if access_token:
             response.set_cookie(
@@ -185,7 +185,7 @@ async def refresh_token_endpoint(request: Request):
         return JSONResponse({"error": "No access token in response"}, status_code=502)
 
     response = JSONResponse({"status": "ok"})
-    is_secure = request.url.scheme == "https"
+    is_secure = _is_secure(request)
 
     response.set_cookie(
         cookie_names["access_token"], access_token,
@@ -296,3 +296,7 @@ def _find_oauth_agent_config(agent_name: str) -> AgentConfig | None:
         if cfg.name == agent_name and cfg.authentication == AuthenticationType.OAUTH2:
             return cfg
     return None
+
+
+def _is_secure(request: Request) -> bool:
+    return request.url.scheme == "https"

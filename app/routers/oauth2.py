@@ -193,7 +193,7 @@ async def refresh_token_endpoint(request: Request):
         max_age=_COOKIE_MAX_AGE,
     )
     # Also store in the token store so the WebSocket can pick it up
-    session_token = request.cookies.get("R_SESS", "")
+    session_token = os.environ.get("RANCHER_API_TOKEN", request.cookies.get("R_SESS", ""))
     oauth_store.set_token(cookie_names["access_token"], access_token, session_token)
 
     if new_refresh_token:

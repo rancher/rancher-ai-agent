@@ -8,7 +8,7 @@ from .cookies import (
     get_oauth_cookie_names,
 )
 from .credentials import AGENT_NAMESPACE, get_oauth_secret_data
-from .client import _get_tls_verify, OAuthClientManager
+from .client import get_tls_verify, OAuthClientManager
 from .handler import get_redirect_uri
 from .discovery import (
     _parse_www_authenticate,
@@ -25,7 +25,7 @@ __all__ = [
     "OAUTH_COOKIE_PREFIX",
     "get_oauth_cookie_names",
     "AGENT_NAMESPACE",
-    "_get_tls_verify",
+    "get_tls_verify",
     "get_redirect_uri",
     "_parse_www_authenticate",
     "_discover_from_www_authenticate",

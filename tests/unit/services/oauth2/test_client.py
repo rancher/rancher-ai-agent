@@ -5,29 +5,29 @@ import os
 import pytest
 from unittest.mock import patch
 
-from app.services.oauth2.client import OAuthClientManager, _get_tls_verify
+from app.services.oauth2.client import OAuthClientManager, get_tls_verify
 
 
 class TestGetTlsVerify:
     def test_defaults_to_true(self):
         with patch.dict(os.environ, {}, clear=True):
-            assert _get_tls_verify() is True
+            assert get_tls_verify() is True
 
     def test_insecure_skip_tls_true(self):
         with patch.dict(os.environ, {"INSECURE_SKIP_TLS": "true"}, clear=True):
-            assert _get_tls_verify() is False
+            assert get_tls_verify() is False
 
     def test_insecure_skip_tls_true_uppercase(self):
         with patch.dict(os.environ, {"INSECURE_SKIP_TLS": "TRUE"}, clear=True):
-            assert _get_tls_verify() is False
+            assert get_tls_verify() is False
 
     def test_insecure_skip_tls_false(self):
         with patch.dict(os.environ, {"INSECURE_SKIP_TLS": "false"}, clear=True):
-            assert _get_tls_verify() is True
+            assert get_tls_verify() is True
 
     def test_insecure_skip_tls_other_value(self):
         with patch.dict(os.environ, {"INSECURE_SKIP_TLS": "yes"}, clear=True):
-            assert _get_tls_verify() is True
+            assert get_tls_verify() is True
 
 
 class TestOAuthClientManager:

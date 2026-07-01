@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, HttpUrl
 from urllib.parse import urlparse
 from ..services.auth import get_user_id_from_request
-from ..services.oauth2.client import OAuthClientManager, _get_tls_verify
+from ..services.oauth2.client import OAuthClientManager, get_tls_verify
 from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
 from ..services.oauth2 import (
@@ -249,7 +249,7 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
 
     metadata_origin = f"{urlparse(str(metadata_endpoint)).scheme}://{urlparse(str(metadata_endpoint)).netloc}"
 
-    async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as http_client:
+    async with httpx.AsyncClient(follow_redirects=True, verify=get_tls_verify()) as http_client:
         metadata = await http_client.get(str(metadata_endpoint))
         metadata.raise_for_status()
         data = metadata.json()

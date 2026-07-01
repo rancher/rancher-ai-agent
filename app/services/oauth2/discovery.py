@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 from .models import (
     OAuthDiscoveryError,
 )
-from .client import _get_tls_verify
+from .client import get_tls_verify
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
     Raises:
         OAuthDiscoveryError: If all discovery strategies fail.
     """
-    async with httpx.AsyncClient(follow_redirects=True, verify=_get_tls_verify()) as client:
+    async with httpx.AsyncClient(follow_redirects=True, verify=get_tls_verify()) as client:
         resource_metadata_url = await _discover_from_www_authenticate(client, mcp_url)
         if resource_metadata_url:
             response = await client.get(resource_metadata_url)

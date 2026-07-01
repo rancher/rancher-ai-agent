@@ -81,6 +81,6 @@ class OAuthClientManager:
         return name in self._oauth._registry
 
 
-def _get_tls_verify() -> bool:
+def get_tls_verify() -> bool:
     """Get TLS verification setting from environment."""
     return os.environ.get('INSECURE_SKIP_TLS', 'false').lower() != 'true'

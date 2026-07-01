@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 class _NoisyEndpointFilter(logging.Filter):
     """Suppress uvicorn access log entries for noisy endpoints (probes, polling, etc.)."""
-    _NOISY_PATHS = ("/v1/api/health", "/v1/api/readiness", "/v1/api/llm/bedrock/models", "/oauth")
+    _NOISY_PATHS = ("/v1/api/health", "/v1/api/readiness", "/v1/api/llm/bedrock/models", "/v1/api/oauth2")
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()

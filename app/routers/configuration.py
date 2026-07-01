@@ -17,9 +17,9 @@ AGENT_NAMESPACE = "cattle-ai-agent-system"
 SETTINGS_SECRET_NAME = "llm-secret"
 SETTINGS_CONFIGMAP_NAME = "llm-config"
 # Fields stored in the ConfigMap (plain text) rather than the Secret
-CONFIGMAP_FIELDS = {"OLLAMA_MODEL", "BEDROCK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "ACTIVE_LLM"}
+CONFIGMAP_FIELDS = {"OLLAMA_MODEL", "BEDROCK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "GENERIC_OPENAI_MODEL", "ACTIVE_LLM"}
 
-AVAILABLE_LLM_PROVIDERS = {"ollama", "openai", "gemini", "bedrock"}
+AVAILABLE_LLM_PROVIDERS = {"ollama", "openai", "gemini", "bedrock", "generic-openai"}
 
 # Hardcoded models
 AVAILABLE_MODELS = {
@@ -50,7 +50,8 @@ AVAILABLE_MODELS = {
         "gemini-2.0-flash-lite",
     ],
     "bedrock": [],
-    "ollama": []
+    "ollama": [],
+    "generic-openai": []
 }
 
 class SettingsUpdate(BaseModel):
@@ -61,6 +62,7 @@ class SettingsUpdate(BaseModel):
     GEMINI_MODEL: str = None
     OPENAI_MODEL: str = None
     BEDROCK_MODEL: str = None
+    GENERIC_OPENAI_MODEL: str = None
     OLLAMA_URL: str = None
     GOOGLE_API_KEY: str = None
     ACTIVE_LLM: str = None
@@ -69,7 +71,8 @@ class SettingsUpdate(BaseModel):
     LANGFUSE_SECRET_KEY: str = None
     AWS_REGION: str = None
     AWS_BEARER_TOKEN_BEDROCK: str = None
-
+    GENERIC_OPENAI_URL: str = None
+    GENERIC_OPENAI_API_KEY: str = None
 async def check_k8s_permission(
     user_id: str,
     verb: str,
@@ -344,6 +347,13 @@ async def update_settings(settings: SettingsUpdate, request: Request):
                     return JSONResponse(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         content={"detail": "OPENAI_API_KEY and OPENAI_MODEL are required when ACTIVE_LLM is 'openai'"}
+                    )
+                    
+            elif active_chatbot.lower() == "generic-openai":
+                if not updated_fields.get("GENERIC_OPENAI_API_KEY") or not updated_fields.get("GENERIC_OPENAI_URL") or not updated_fields.get("GENERIC_OPENAI_MODEL"):
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "GENERIC_OPENAI_API_KEY, GENERIC_OPENAI_URL, and GENERIC_OPENAI_MODEL are required when ACTIVE_LLM is 'generic-openai'"}
                     )
             
             elif active_chatbot.lower() == "gemini":

@@ -84,6 +84,11 @@ def get_llm() -> BaseLanguageModel:
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
         return ChatBedrockConverse(model=model)
+    if activeLlm == "generic-openai":        
+        generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")
+
+        return ChatOpenAI(model=model, base_url=generic_openai_url)
+
 
 def get_active_llm() -> str:
     """
@@ -94,7 +99,7 @@ def get_active_llm() -> str:
     """
     llm = os.environ.get("ACTIVE_LLM", "")
     
-    if llm not in ["ollama", "gemini", "openai", "bedrock"]:
+    if llm not in ["ollama", "gemini", "openai", "bedrock", "generic-openai"]:
         raise ValueError("LLM not configured.")
 
     return llm
@@ -104,7 +109,7 @@ def get_llm_model(llm: str) -> str:
     Retrieves the model name from environment variables.
     
     Args:
-        llm: The LLM identifier, one of 'ollama', 'gemini', 'openai', 'bedrock'.
+        llm: The LLM identifier, one of 'ollama', 'gemini', 'openai', 'bedrock', 'generic-openai'.
 
     Returns:
         The model name as a string.
@@ -113,7 +118,7 @@ def get_llm_model(llm: str) -> str:
     model = None
 
     if llm:
-        model = os.environ.get(f"{llm.upper()}_MODEL")
+        model = os.environ.get(f"{llm.upper().replace('-', '_')}_MODEL")
 
     if not model:
         raise ValueError("LLM Model not configured.")

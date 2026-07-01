@@ -8,4 +8,5 @@ data:
   GEMINI_MODEL: "{{ .Values.geminiLlmModel }}"
   OPENAI_MODEL: "{{ .Values.openaiLlmModel }}"
   BEDROCK_MODEL: "{{ .Values.bedrockLlmModel }}"
+  GENERIC_OPENAI_MODEL: "{{ .Values.genericOpenaiLlmModel }}"
   ACTIVE_LLM: "{{ .Values.activeLlm }}"

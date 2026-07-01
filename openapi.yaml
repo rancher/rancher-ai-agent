@@ -648,6 +648,9 @@ components:
         BEDROCK_MODEL:
           type: string
           description: Model to use with Bedrock
+        GENERIC_OPENAI_MODEL:
+          type: string
+          description: Model to use with a generic OpenAI-compatible API
         OLLAMA_URL:
           type: string
           description: URL to Ollama server
@@ -673,6 +676,12 @@ components:
         AWS_BEARER_TOKEN_BEDROCK:
           type: string
           description: AWS bearer token for Bedrock
+        GENERIC_OPENAI_URL:
+          type: string
+          description: Base URL for a generic OpenAI-compatible provider
+        GENERIC_OPENAI_API_KEY:
+          type: string
+          description: API key for a generic OpenAI-compatible provider
       example:
         ACTIVE_LLM: openai
         OPENAI_API_KEY: sk-...

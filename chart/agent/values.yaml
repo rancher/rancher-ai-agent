@@ -18,6 +18,7 @@ ollamaLlmModel: ""
 geminiLlmModel: ""
 openaiLlmModel: ""
 bedrockLlmModel: ""
+genericOpenaiLlmModel: ""
 ollamaUrl: ""
 googleApiKey:
 openaiApiKey:
@@ -25,7 +26,9 @@ openaiUrl:
 awsBedrock:
   bearerToken:
   region:
-activeLlm: # ollama, gemini, openai, bedrock
+genericOpenaiUrl:
+genericOpenaiApiKey:
+activeLlm: # ollama, gemini, openai, bedrock, generic-openai
 langfuseSecretKey:
 langfusePublicKey:
 langfuseHost:

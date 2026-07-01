@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 
-class OAuth2Cancelled(Exception):
+class OAuth2Canceled(Exception):
     """Raised when the OAuth2 flow is cancelled by the user."""
     pass
 

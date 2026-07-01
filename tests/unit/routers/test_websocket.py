@@ -15,7 +15,7 @@ from app.routers.websocket import (
     WebSocketRequest,
 )
 from app.services.agent.supervisor import SupervisorGraph
-from app.services.oauth2.models import OAuth2Cancelled
+from app.services.oauth2.models import OAuth2Canceled
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -691,7 +691,7 @@ class TestResolveTargetAgentOAuth2:
         websocket = AsyncMock()
         llm = MagicMock()
 
-        with patch("app.routers.websocket.handle_oauth_authentication", new_callable=AsyncMock, side_effect=OAuth2Cancelled("cancelled")):
+        with patch("app.routers.websocket.handle_oauth_authentication", new_callable=AsyncMock, side_effect=OAuth2Canceled("cancelled")):
             result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
 
         assert result_agent is None

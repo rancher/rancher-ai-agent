@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.agent._constants import NoAgentAvailableError
-from app.services.oauth2.models import OAuth2Cancelled
+from app.services.oauth2.models import OAuth2Canceled
 from app.services.oauth2.handler import (
     _inject_oauth_cookie,
     _initiate_oauth_flow,
@@ -308,7 +308,7 @@ class TestHandleOauthAuthentication:
             patch("app.services.oauth2.handler._initiate_oauth_flow", new_callable=AsyncMock, return_value=False),
             patch("app.services.oauth2.handler._inject_oauth_cookie", new_callable=AsyncMock) as mock_inject,
         ):
-            with pytest.raises(OAuth2Cancelled):
+            with pytest.raises(OAuth2Canceled):
                 await handle_oauth_authentication(cfg.name, ws)
 
         ws.receive_text.assert_awaited_once()

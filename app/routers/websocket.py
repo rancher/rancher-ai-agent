@@ -10,7 +10,7 @@ from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.loader import load_agent_configs
 from ..services.agent.supervisor import SupervisorGraph
 from ..services.oauth2 import handle_oauth_authentication
-from ..services.oauth2.models import OAuth2Cancelled
+from ..services.oauth2.models import OAuth2Canceled
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -136,7 +136,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             except NeedsOauth2 as e:
                 try:
                     await handle_oauth_authentication(e.agent_cfg.name, websocket)
-                except OAuth2Cancelled as oauth_err:
+                except OAuth2Canceled as oauth_err:
                     logging.debug(f"OAuth2 authentication cancelled: {oauth_err}")
                     await _patch_tool_result(target_agent, target_config, "OAuth2 authentication was cancelled by the user.")
                     continue
@@ -198,7 +198,7 @@ async def _handle_single_agent_oauth(
     try:
         await handle_oauth_authentication(agent_name, websocket)
         return await reload_agent_tools(llm, agent_cfg, websocket)
-    except OAuth2Cancelled as e:
+    except OAuth2Canceled as e:
         logging.debug(f"OAuth2 authentication cancelled: {e}")
         return agent
     except Exception as e:
@@ -501,7 +501,7 @@ async def _resolve_target_agent(
         await websocket.send_text("<message>")
         try:
             await handle_oauth_authentication(child_agent.config.name, websocket)
-        except OAuth2Cancelled as e:
+        except OAuth2Canceled as e:
             logging.debug(f"OAuth2 authentication cancelled: {e}")
             return None, config
         except Exception as e:

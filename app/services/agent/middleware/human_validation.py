@@ -1,6 +1,5 @@
 import json
 import logging
-import traceback
 from collections.abc import Callable
 from datetime import datetime
 import langgraph.types

@@ -199,7 +199,7 @@ class TestDiscoverAuthServerMetadataEndpoint:
 
 class TestDiscoverMetadataEndpoint:
     @pytest.mark.asyncio
-    @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
+    @patch("app.services.oauth2.discovery.get_tls_verify", return_value=True)
     async def test_discovers_metadata_successfully(self, mock_tls):
         resource_metadata_url = "https://mcp.example.com/.well-known/oauth-protected-resource"
         auth_server_url = "https://auth.example.com/.well-known/oauth-authorization-server"
@@ -233,7 +233,7 @@ class TestDiscoverMetadataEndpoint:
                 assert result.scopesSupported == ["openid", "profile"]
 
     @pytest.mark.asyncio
-    @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
+    @patch("app.services.oauth2.discovery.get_tls_verify", return_value=True)
     async def test_raises_when_www_authenticate_fails(self, mock_tls):
         with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www_auth:
             mock_www_auth.return_value = None
@@ -248,7 +248,7 @@ class TestDiscoverMetadataEndpoint:
                     await discover_metadata_endpoint("https://mcp.example.com/sse")
 
     @pytest.mark.asyncio
-    @patch("app.services.oauth2.discovery._get_tls_verify", return_value=True)
+    @patch("app.services.oauth2.discovery.get_tls_verify", return_value=True)
     async def test_raises_when_no_authorization_servers(self, mock_tls):
         resource_metadata_url = "https://mcp.example.com/.well-known/oauth-protected-resource"
 

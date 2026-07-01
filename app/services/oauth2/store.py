@@ -88,9 +88,9 @@ class OAuthTokenStore:
         """Remove all state and token entries that have exceeded the TTL."""
         now = time.monotonic()
         for k in [k for k, e in self._state_store.items() if now - e.created_at > _TTL_SECONDS]:
-            del self._state_store[k]
+            self._state_store.pop(k, None)
         for k in [k for k, e in self._token_store.items() if now - e.created_at > _TTL_SECONDS]:
-            del self._token_store[k]
+            self._token_store.pop(k, None)
 
     def set_state(self, state: str, data: dict[str, Any], session_token: str) -> None:
         """Store ``data`` under ``state``, overwriting any previous entry."""

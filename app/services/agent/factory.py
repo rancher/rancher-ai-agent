@@ -153,8 +153,12 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     except* Exception as eg:
         error_message = " ".join(str(e) for e in eg.exceptions)
 
+        _error_lower = error_message.lower()
         if agent_cfg.authentication == AuthenticationType.OAUTH2 and (
-            "401" in error_message or "Unauthorized" in error_message
+            "401" in error_message
+            or "unauthorized" in _error_lower
+            or "not authorized" in _error_lower
+            or "access denied" in _error_lower
         ):
             raise NeedsOauth2(agent_cfg)
         else:

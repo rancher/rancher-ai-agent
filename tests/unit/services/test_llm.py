@@ -34,7 +34,7 @@ def test_get_llm_openai(mock_openai):
 def test_get_llm_generic_openai(mock_openai):
     with patch.dict(os.environ, {"GENERIC_OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "generic-openai", "GENERIC_OPENAI_URL": "https://api.example.com", "GENERIC_OPENAI_API_KEY": "fake-key"}, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com")
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key")
         assert llm == mock_openai.return_value
 
 def test_get_active_llm_not_configured():

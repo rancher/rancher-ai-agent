@@ -86,8 +86,9 @@ def get_llm() -> BaseLanguageModel:
         return ChatBedrockConverse(model=model)
     if activeLlm == "generic-openai":        
         generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")
+        generic_openai_api_key = os.environ.get("GENERIC_OPENAI_API_KEY")
 
-        return ChatOpenAI(model=model, base_url=generic_openai_url)
+        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key)
 
 
 def get_active_llm() -> str:

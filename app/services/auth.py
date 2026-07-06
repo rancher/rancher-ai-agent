@@ -108,7 +108,7 @@ def _get_tls_verify():
     return True
 
 
-async def get_user_id(host: str, token: str) -> str:
+async def get_user_id(host: str, token: str) -> str | None:
     """
     Retrieves the user ID from the Rancher API using the session token.
     """

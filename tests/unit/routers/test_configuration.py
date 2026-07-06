@@ -500,7 +500,8 @@ async def test_update_settings_validate_invalid_llm(mock_request):
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
             content = json.loads(resp.body)
             assert "ACTIVE_LLM must be one of" in content["detail"]
-            assert "ollama, bedrock, gemini, openai" in content["detail"] or "bedrock, gemini, ollama, openai" in content["detail"]
+            error_msg = content["detail"]
+            assert all(provider in error_msg for provider in ["ollama", "bedrock", "gemini", "openai", "generic-openai"])
 
 
 @pytest.mark.asyncio
@@ -625,3 +626,15 @@ async def test_update_settings_validate_gemini(mock_request):
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
             content = json.loads(resp.body)
             assert "GOOGLE_API_KEY and GEMINI_MODEL are required" in content["detail"]
+            
+@pytest.mark.asyncio
+async def test_update_settings_validate_generic_openai(mock_request):
+    """Test validation when ACTIVE_LLM is generic-openai."""
+    settings = SettingsUpdate(ACTIVE_LLM="generic-openai", GENERIC_OPENAI_MODEL="gpt-4")
+    
+    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+        with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
+            resp = await config_router.update_settings(settings, mock_request)
+            assert resp.status_code == status.HTTP_400_BAD_REQUEST
+            content = json.loads(resp.body)
+            assert "GENERIC_OPENAI_API_KEY, GENERIC_OPENAI_URL, and GENERIC_OPENAI_MODEL are required" in content["detail"]

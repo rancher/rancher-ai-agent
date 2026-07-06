@@ -5,8 +5,12 @@ import json
 from datetime import datetime
 
 from ..dependencies import get_llm
-from ..services.agent.factory import NoAgentAvailableError, build_agent
+from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
+from ..services.agent.factory import build_agent, reload_agent_tools
+from ..services.agent.loader import load_agent_configs
 from ..services.agent.supervisor import SupervisorGraph
+from ..services.oauth2 import handle_oauth_authentication
+from ..services.oauth2.models import OAuth2Canceled
 from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi import  WebSocket, WebSocketDisconnect, Depends
@@ -14,7 +18,7 @@ from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id
@@ -27,7 +31,7 @@ async def get_user_id_from_websocket(websocket: WebSocket) -> str:
     Retrieves the user ID from the Rancher API using the session token from the WebSocket cookies.
     """
     cookies = websocket.cookies
-    rancher_url = os.environ.get("RANCHER_URL","https://rancher.cattle-system.svc")
+    rancher_url = os.environ.get("RANCHER_URL","https://rancher.cattle-system")
     token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
 
     return await get_user_id(rancher_url, token)
@@ -84,13 +88,18 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         await websocket.close()
         return
 
+    await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
+
     # In single-agent mode (no supervisor), store the agent name so that
     # the ui_tools middleware knows the child is the direct target.
     single_agent_name = ""
-    if not isinstance(agent, SupervisorGraph) and len(agents_metadata) == 1:
-        single_agent_name = agents_metadata[0].get("name", "")
-
-    await websocket.send_text(build_chat_metadata(thread_id, agents_metadata, websocket))
+    active_agents = [m for m in agents_metadata if m.get("status") == "active"]
+    if not isinstance(agent, SupervisorGraph) and len(active_agents) == 1:
+        single_agent_name = active_agents[0].get("name", "")
+        if active_agents[0].get("description") == "needs_oauth2":
+            await websocket.send_text("<message>")
+            agent = await _handle_single_agent_oauth(llm, single_agent_name, agent, websocket)
+            await websocket.send_text("</message>")
 
     base_config = {
         "configurable": {
@@ -104,6 +113,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         base_config["callbacks"] = [langfuse_handler]
 
     while True:
+        ws_request = None
         try:
             request = await websocket.receive_text()
             request_id = str(uuid.uuid4())
@@ -112,19 +122,55 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             if not ws_request.agent and single_agent_name:
                 ws_request.agent = single_agent_name
             config = _build_config(base_config, request_id, ws_request)
-            target_agent, target_config = _resolve_target_agent(agent, config, ws_request)
+            target_agent, target_config = await _resolve_target_agent(agent, config, ws_request, websocket, llm)
+            if not target_agent:
+                continue
             input_data = await _build_input_data(target_agent, target_config, ws_request)
 
-            await _call_agent(
-                agent=target_agent,
-                input_data=input_data,
-                config=target_config,
-                websocket=websocket)
+            try:
+                await _call_agent(
+                    agent=target_agent,
+                    input_data=input_data,
+                    config=target_config,
+                    websocket=websocket)
+            except NeedsOauth2 as e:
+                try:
+                    await handle_oauth_authentication(e.agent_cfg.name, websocket)
+                except OAuth2Canceled as oauth_err:
+                    logging.debug(f"OAuth2 authentication cancelled: {oauth_err}")
+                    await _patch_tool_result(target_agent, target_config, "OAuth2 authentication was cancelled by the user.")
+                    continue
+                except Exception as oauth_err:
+                    logging.error(f"OAuth2 authentication failed")
+                    await websocket.send_text(f'<auth-error>{json.dumps({"message": str(oauth_err)})}</auth-error>')
+                    await _patch_tool_result(target_agent, target_config, f"OAuth2 authentication failed: {oauth_err}")
+                    continue
+
+                child_graph = await reload_agent_tools(llm, e.agent_cfg, websocket)
+                if isinstance(agent, SupervisorGraph):
+                    child_agent_obj = agent.child_agents.get(e.agent_cfg.name)
+                    if child_agent_obj:
+                        child_agent_obj.needs_oauth2 = False
+                        child_agent_obj.agent = child_graph
+                else:
+                    agent = child_graph
+                logging.debug(f"Successfully authenticated and reloaded agent '{e.agent_cfg.name}'")
+
+                # Resume the agent from its last checkpoint (the tool call that
+                # triggered OAuth). Passing None lets LangGraph retry from the
+                # saved state rather than starting a new turn.
+                await _call_agent(
+                    agent=target_agent,
+                    input_data=None,
+                    config=target_config,
+                    websocket=websocket)
+
             
         except WebSocketDisconnect:
-            logging.info(f"Client {websocket.client.host} disconnected.")
+            logging.debug(f"Client disconnected.")
 
             break
+
         except Exception as e:
             logging.error(f"An error occurred: {e}", exc_info=True)
             if websocket.client_state == WebSocketState.CONNECTED:
@@ -134,6 +180,53 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         finally:
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_text("</message>")
+
+async def _handle_single_agent_oauth(
+    llm: BaseLanguageModel,
+    agent_name: str,
+    agent: CompiledStateGraph,
+    websocket: WebSocket,
+) -> CompiledStateGraph:
+    """
+    Handles OAuth2 authentication and tool reload for a single agent that requires it.
+
+    Loads the agent config, authenticates, and rebuilds the agent graph with fresh tools.
+    Returns the original agent unchanged if authentication fails.
+    """
+    agent_configs = load_agent_configs()
+    agent_cfg = next((cfg for cfg in agent_configs if cfg.name == agent_name), None)
+    try:
+        await handle_oauth_authentication(agent_name, websocket)
+        return await reload_agent_tools(llm, agent_cfg, websocket)
+    except OAuth2Canceled as e:
+        logging.debug(f"OAuth2 authentication cancelled: {e}")
+        return agent
+    except Exception as e:
+        logging.error(f"OAuth2 authentication failed")
+        await websocket.send_text(f'<auth-error>{json.dumps({"message": str(e)})}</auth-error>')
+        return agent
+
+
+async def _patch_tool_result(agent: CompiledStateGraph, config: dict, error_message: str) -> None:
+    """
+    Inject a ToolMessage into the graph state so that a pending tool_use has a
+    matching tool_result. This prevents validation errors from the LLM on the
+    next invocation when a tool call was interrupted (e.g. by an OAuth2 failure).
+    """
+    state = await agent.aget_state(config=config)
+    if not state or not state.values.get("messages"):
+        return
+    last_msg = state.values["messages"][-1]
+    tool_calls = getattr(last_msg, "tool_calls", None)
+    if not tool_calls:
+        return
+    # Add a ToolMessage for each pending tool call
+    tool_messages = [
+        ToolMessage(content=error_message, tool_call_id=tc["id"], status="error")
+        for tc in tool_calls
+    ]
+    await agent.aupdate_state(config=config, values={"messages": tool_messages})
+
 
 async def _call_agent(
     agent: CompiledStateGraph,
@@ -176,6 +269,7 @@ async def _call_agent(
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
+
 
 def _should_stream_text(stream: dict) -> bool:
     """
@@ -372,11 +466,13 @@ def _build_config(base_config: dict, request_id: str, ws_request: WebSocketReque
 
     return config
 
-def _resolve_target_agent(
+async def _resolve_target_agent(
     agent: CompiledStateGraph | SupervisorGraph,
     config: dict,
     ws_request: WebSocketRequest,
-) -> tuple[CompiledStateGraph, dict]:
+    websocket: WebSocket,
+    llm: BaseLanguageModel
+) -> tuple[CompiledStateGraph | None, dict]:
     """
     Resolve which agent to call based on the request.
 
@@ -400,9 +496,25 @@ def _resolve_target_agent(
         logging.debug(f"Requested agent '{requested_agent}' not found in child_agents, falling back to supervisor")
         return agent, config
 
-    child_graph = agent.child_agents[requested_agent]
+    child_agent = agent.child_agents[requested_agent]
+    if child_agent and child_agent.needs_oauth2:
+        await websocket.send_text("<message>")
+        try:
+            await handle_oauth_authentication(child_agent.config.name, websocket)
+        except OAuth2Canceled as e:
+            logging.debug(f"OAuth2 authentication cancelled: {e}")
+            return None, config
+        except Exception as e:
+            logging.error(f"OAuth2 authentication failed")
+            await websocket.send_text(f'<auth-error>{json.dumps({"message": str(e)})}</auth-error>')
 
-    return child_graph, config
+            return None, config
+        
+        await websocket.send_text("</message>")
+        child_agent.agent = await reload_agent_tools(llm, child_agent.config, websocket)
+
+
+    return child_agent.agent, config
 
 
 async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:

@@ -30,6 +30,13 @@ def test_get_llm_openai(mock_openai):
         mock_openai.assert_called_once_with(model="gpt-4", disable_streaming=None)
         assert llm == mock_openai.return_value
 
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_generic_openai(mock_openai):
+    with patch.dict(os.environ, {"GENERIC_OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "generic-openai", "GENERIC_OPENAI_URL": "https://api.example.com", "GENERIC_OPENAI_API_KEY": "fake-key"}, clear=True):
+        llm = get_llm()
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key")
+        assert llm == mock_openai.return_value
+
 def test_get_active_llm_not_configured():
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError, match="LLM not configured."):
@@ -166,4 +173,41 @@ def test_get_llm_bedrock_with_streaming_disabled(mock_bedrock):
         llm = get_llm()
         mock_bedrock.assert_called_once_with(model="anthropic.claude-3-sonnet-20240229-v1:0", disable_streaming="tool_calling")
         assert llm == mock_bedrock.return_value
+
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_generic_openai(mock_openai):
+    """Test that generic-openai provider uses custom URL and API key"""
+    with patch.dict(os.environ, {
+        "GENERIC_OPENAI_MODEL": "custom-model",
+        "ACTIVE_LLM": "generic-openai",
+        "GENERIC_OPENAI_URL": "http://custom-endpoint:8000",
+        "GENERIC_OPENAI_API_KEY": "custom-key"
+    }, clear=True):
+        llm = get_llm()
+        mock_openai.assert_called_once_with(
+            model="custom-model",
+            base_url="http://custom-endpoint:8000",
+            api_key="custom-key",
+            disable_streaming=None
+        )
+        assert llm == mock_openai.return_value
+
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_generic_openai_with_streaming_disabled(mock_openai):
+    """Test that disable_streaming='tool_calling' is passed for generic-openai when DISABLE_STREAMING=true"""
+    with patch.dict(os.environ, {
+        "GENERIC_OPENAI_MODEL": "custom-model",
+        "ACTIVE_LLM": "generic-openai",
+        "GENERIC_OPENAI_URL": "http://custom-endpoint:8000",
+        "GENERIC_OPENAI_API_KEY": "custom-key",
+        "DISABLE_STREAMING": "true"
+    }, clear=True):
+        llm = get_llm()
+        mock_openai.assert_called_once_with(
+            model="custom-model",
+            base_url="http://custom-endpoint:8000",
+            api_key="custom-key",
+            disable_streaming="tool_calling"
+        )
+        assert llm == mock_openai.return_value
 

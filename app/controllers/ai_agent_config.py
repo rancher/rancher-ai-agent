@@ -9,11 +9,32 @@ import asyncio
 import logging
 import threading
 import kopf
+import httpx
 
 from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
-from ..services.agent.loader import AgentConfig, CABundleRef
+from ..services.agent.loader import AgentConfig, AuthenticationType, CABundleRef
 from ..services.agent.factory import create_mcp_client
+from ..services.oauth2.client import OAuthClientManager
+from ..services.oauth2.credentials import get_oauth_secret_data
+from ..services.oauth2.models import OAuthSecretError
+
+# Transient exception types that indicate the MCP server may not be ready yet.
+# These warrant a retry with backoff rather than a permanent failure.
+_TRANSIENT_EXCEPTIONS = (
+    ConnectionError,        # ConnectionRefusedError, ConnectionResetError, etc.
+    TimeoutError,
+    OSError,                # Low-level socket errors (e.g. "Network unreachable")
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+)
+
+_INITIAL_RETRY_DELAY = 1
+_MAX_RETRY_DELAY = 30
+_MAX_RETRIES = 200
 
 
 class KopfManager:
@@ -149,16 +170,16 @@ async def _validate(agent_config: AgentConfig) -> None:
     Raises:
         Exception: If the MCP server connection fails or tools cannot be retrieved
     """
-    client = create_mcp_client(agent_config)
+    client = await create_mcp_client(agent_config)
 
     # Test the connection by fetching available tools
     await client.get_tools()
 
 
-@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
-@kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
-@kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs', field='spec')
-async def create_fn(spec, name, namespace, logger, patch, **kwargs):
+@kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs',  backoff=5.0, timeout=3600.0)
+@kopf.on.create('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
+@kopf.on.update('ai.cattle.io', 'v1alpha1', 'aiagentconfigs')
+async def create_fn(spec, name, namespace, logger, patch, retry, **kwargs):
     """
     Handle AIAgentConfig resource lifecycle events.
     
@@ -195,17 +216,80 @@ async def create_fn(spec, name, namespace, logger, patch, **kwargs):
         await _validate(agent_config)
         _set_status(patch, True, 'ConfigurationSucceeded', 'AI Agent configuration successful')
 
-    except* Exception as eg:
+    except ExceptionGroup as eg:
         # Collect all exception messages from the exception group
-        error_message = ""
-        for e in eg.exceptions:
-            error_message += f"{str(e)} "
+        error_message = " ".join(str(e) for e in eg.exceptions)
         error_msg = f"Failed to load MCP tools: {error_message}"
-        
-        # Update status to reflect the failure
-        _set_status(patch, False, 'ConfigurationFailed', error_msg)
-        logger.warning(error_msg)
 
-        raise kopf.PermanentError(f"Failed to load MCP tools: {error_message}") 
-        
+        _error_lower = error_message.lower()
+        if agent_config.authentication == AuthenticationType.OAUTH2 and (
+            "401" in error_message
+            or "unauthorized" in _error_lower
+            or "not authorized" in _error_lower
+            or "access denied" in _error_lower
+        ):
+            _set_status(patch, True, 'ConfigurationSucceeded', 'Needs OAuth2 authentication')
+            _register_oauth_client(agent_config, logger)
+
+            return
+        else:
+            # Update status to reflect the failure
+            _set_status(patch, False, 'ConfigurationFailed', error_msg)
+            logger.warning(error_msg)
+
+        # If any exception in the group is transient, retry with exponential backoff
+        if any(isinstance(e, _TRANSIENT_EXCEPTIONS) for e in eg.exceptions):
+            if retry >= _MAX_RETRIES:
+                raise kopf.PermanentError(
+                    f"Failed to load MCP tools for agent {name} after {retry} retries: {error_message}"
+                )
+            delay = min(_INITIAL_RETRY_DELAY * (2 ** retry), _MAX_RETRY_DELAY)
+            raise kopf.TemporaryError(
+                f"Failed to load MCP tools for agent {name} (retry {retry + 1}/{_MAX_RETRIES}): {error_message}",
+                delay=delay,
+            )
+
+        raise kopf.PermanentError(f"Failed to load MCP tools for agent {name}: {error_message}")
+
+def _register_oauth_client(agent_config: AgentConfig, logger) -> None:
+    """
+    Register or update the OAuth client for an agent with OAuth2 authentication.
+
+    Reads the client credentials and metadata endpoint from the agent's
+    authentication secret and registers the client in the singleton
+    OAuthClientManager.
+
+    Args:
+        agent_config: The agent configuration to register.
+        logger: Logger instance for diagnostic output.
+    """
+    if agent_config.authentication != AuthenticationType.OAUTH2:
+        return
+
+    if not agent_config.authentication_secret:
+        logger.error(f"Agent '{agent_config.name}' uses OAuth2 but has no authentication secret")
+        return
+
+    try:
+        credentials = get_oauth_secret_data(agent_config.authentication_secret)
+    except OAuthSecretError as e:
+        logger.warning(f"Cannot register OAuth client for '{agent_config.name}': {e}")
+        raise kopf.TemporaryError("OAuth2 authentication requires an authentication secret, retrying...")
+
+    if not credentials.client_id or not credentials.metadata_endpoint:
+        logger.warning(
+            f"Agent '{agent_config.name}' OAuth secret missing clientID or metadataEndpoint, "
+            "skipping OAuth client registration"
+        )
+        return
+
+    manager = OAuthClientManager.get_instance()
+    manager.register_client(
+        name=agent_config.name,
+        client_id=credentials.client_id,
+        client_secret=credentials.client_secret,
+        scope=credentials.scope,
+        server_metadata_url=credentials.metadata_endpoint,
+    )
+    logger.info(f"Registered OAuth client for agent '{agent_config.name}'")
     

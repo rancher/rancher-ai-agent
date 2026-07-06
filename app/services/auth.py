@@ -40,11 +40,11 @@ def _load_cacerts_ssl_context():
             ctx = ssl.create_default_context()
             ctx.load_verify_locations(cadata=ca_pem)
             _ssl_context = ctx
-            logging.info("Loaded CA certificate from cacerts setting")
+            logging.info("Loaded CA certificate from internal-cacerts setting")
         else:
-            logging.warning("cacerts setting is empty, using default system CAs")
+            logging.warning("internal-cacerts setting is empty, using default system CAs")
     except Exception as e:
-        logging.error("Failed to load cacerts from cluster: %s", e)
+        logging.error("Failed to load internal-cacerts from cluster: %s", e)
 
     _ssl_context_loaded = True
     return _ssl_context

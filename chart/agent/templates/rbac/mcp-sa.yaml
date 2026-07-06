@@ -1,10 +1,33 @@
-{{- if not .Values.insecureSkipTls }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: mcp-cert-rotator-sa
   namespace: cattle-ai-agent-system
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-rancher-settings-role
+rules:
+- apiGroups: ["management.cattle.io"]
+  resources: ["settings"]
+  verbs: ["get"]
+  resourceNames: ["internal-server-url", "internal-cacerts"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-rancher-settings-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mcp-rancher-settings-role
+subjects:
+- kind: ServiceAccount
+  name: mcp-cert-rotator-sa
+  namespace: cattle-ai-agent-system
+---
+{{- if not .Values.insecureSkipTls }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -18,7 +41,6 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["create"]
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

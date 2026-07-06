@@ -14,6 +14,29 @@ rules:
   verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agent-rancher-settings-role
+rules:
+- apiGroups: ["management.cattle.io"]
+  resources: ["settings"]
+  verbs: ["get"]
+  resourceNames: ["internal-server-url", "internal-cacerts"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-rancher-settings-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agent-rancher-settings-role
+subjects:
+- kind: ServiceAccount
+  name: agent-sa
+  namespace: cattle-ai-agent-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: agent-subjectaccessreview-binding

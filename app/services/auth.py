@@ -146,7 +146,7 @@ async def get_user_id(host: str, token: str) -> str | None:
 
     return None
 
-async def get_user_id_from_request(request: Request) -> str:
+async def get_user_id_from_request(request: Request) -> str | None:
     """
     Retrieves the user ID from the Rancher API using the session token from the request cookies.
     """

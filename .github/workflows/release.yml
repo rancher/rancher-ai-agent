@@ -2,6 +2,8 @@ name: Publish Docker Image
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -31,7 +33,7 @@ jobs:
         uses: rancher/ecm-distro-tools/actions/publish-image@e72982e61644408c47b5c181e7ea331532d180d1 # master
         with:
           image: rancher-ai-agent
-          tag: ${{ github.ref_name }}
+          tag: ${{ github.ref_name == 'main' && 'head' || github.ref_name }}
           push-to-prime: true
           push-to-public: false
           prime-registry: ${{ env.STAGING_PRIME_REGISTRY }}

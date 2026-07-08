@@ -311,7 +311,7 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
                 # swallow it and break LangGraph's interrupt / control-flow mechanism.
                 raise
             except Exception as e:
-                logging.error(f"Child agent '{agent_name}' failed during resume: {e}")
+                logging.exception(f"Child agent '{agent_name}' failed during resume: {e}")
                 return _build_error_result(agent_name, e, interrupt_ui_tools)
             # If the user declined, return the cancel message so the supervisor's
             # cancel_check_middleware ends the graph.
@@ -336,7 +336,7 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
                 # supervisor runtime can handle any interrupt raised by the child.
                 raise
             except Exception as e:
-                logging.error(f"Child agent '{agent_name}' failed: {e}")
+                logging.exception(f"Child agent '{agent_name}' failed: {e}")
                 _dispatch_subagent_event("processing-subagent-end", agent_name, query)
                 return _build_error_result(agent_name, e, interrupt_ui_tools)
             _dispatch_subagent_event("processing-subagent-end", agent_name, query)

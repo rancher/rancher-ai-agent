@@ -58,7 +58,7 @@ def human_validation_middleware(
             # Return a ToolMessage (not raise) so the tool_use block keeps its matching
             # tool_result. Otherwise the checkpointed history has a dangling tool_use and
             # the next model call fails (e.g. Bedrock ValidationException).
-            logging.error(f"Failed to build confirmation plan for tool '{tool_call['name']}': {e}")
+            logging.exception(f"Failed to build confirmation plan for tool '{tool_call['name']}': {e}")
             return ToolMessage(
                 content=f"Could not prepare confirmation for tool '{tool_call['name']}': {e}",
                 name=tool_call["name"],

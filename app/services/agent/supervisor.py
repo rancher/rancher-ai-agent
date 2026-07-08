@@ -20,6 +20,7 @@ from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain.messages import  HumanMessage, ToolMessage
 import langgraph.types
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
@@ -181,6 +182,24 @@ def _extract_last_message(result: dict) -> str:
     return "No response from agent."
 
 
+def _build_error_result(agent_name: str, exc: Exception, ui_tools: list[dict]) -> tuple[str, dict]:
+    """Build the ``(content, metadata)`` tuple returned when a child agent invocation fails.
+
+    Surfaces the failure reason to the supervisor LLM as tool content instead of
+    letting the exception crash the supervisor run.
+    """
+    return (
+        f"The '{agent_name}' agent failed: {exc}",
+        {
+            "mcp_response": None,
+            "mcp_data": None,
+            "interrupt_info": None,
+            "created_at": None,
+            "ui_tools": ui_tools,
+        },
+    )
+
+
 def _extract_tool_metadata(result: dict) -> dict:
     """Extract mcp_response, mcp_data, interrupt_info, and created_at from result messages.
 
@@ -283,7 +302,17 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
                 interrupt_ui_tools = interrupt_value.get("ui_tools", [])
 
             resume_value = langgraph.types.interrupt(interrupt_value)
-            result = await child_agent.agent.ainvoke(Command(resume=resume_value), config=child_config)
+            try:
+                result = await child_agent.agent.ainvoke(Command(resume=resume_value), config=child_config)
+            except GraphBubbleUp:
+                # GraphBubbleUp is a LangGraph internal signal (e.g. a new interrupt) that
+                # must propagate up through the call stack to be handled by the supervisor
+                # graph runtime.  Catching it in the broad `except Exception` below would
+                # swallow it and break LangGraph's interrupt / control-flow mechanism.
+                raise
+            except Exception as e:
+                logging.error(f"Child agent '{agent_name}' failed during resume: {e}")
+                return _build_error_result(agent_name, e, interrupt_ui_tools)
             # If the user declined, return the cancel message so the supervisor's
             # cancel_check_middleware ends the graph.
             for msg in reversed(result.get("messages", [])):
@@ -297,10 +326,19 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
             child_config["tags"] = ["no-stream"]
             
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
-            result = await child_agent.agent.ainvoke(
-                {"messages": [HumanMessage(content=query)]},
-                config=child_config,
-            )
+            try:
+                result = await child_agent.agent.ainvoke(
+                    {"messages": [HumanMessage(content=query)]},
+                    config=child_config,
+                )
+            except GraphBubbleUp:
+                # Same as above: let LangGraph's internal signal propagate so the
+                # supervisor runtime can handle any interrupt raised by the child.
+                raise
+            except Exception as e:
+                logging.error(f"Child agent '{agent_name}' failed: {e}")
+                _dispatch_subagent_event("processing-subagent-end", agent_name, query)
+                return _build_error_result(agent_name, e, interrupt_ui_tools)
             _dispatch_subagent_event("processing-subagent-end", agent_name, query)
 
         metadata = _extract_tool_metadata(result)

@@ -30,13 +30,27 @@ jobs:
 
         # This encapsulates: login, qemu, build/push
       - name: Build and push image
+        if: ${{ github.ref_type == 'tag' }}
         uses: rancher/ecm-distro-tools/actions/publish-image@e72982e61644408c47b5c181e7ea331532d180d1 # master
         with:
           image: rancher-ai-agent
-          tag: ${{ github.ref_name == 'main' && 'head' || github.ref_name }}
+          tag: ${{ github.ref_name }}
           push-to-prime: true
           push-to-public: false
           prime-registry: ${{ env.STAGING_PRIME_REGISTRY }}
           prime-repo: rancher
           prime-username: ${{ env.STAGING_PRIME_REGISTRY_USERNAME }}
           prime-password: ${{ env.STAGING_PRIME_REGISTRY_PASSWORD }}
+
+      - name: Build and push head image
+        if: ${{ github.ref_name == 'main' }}
+        uses: rancher/ecm-distro-tools/actions/publish-image@e72982e61644408c47b5c181e7ea331532d180d1 # master
+        with:
+          image: rancher-ai-agent
+          tag: head
+          push-to-prime: false
+          push-to-public: true
+          public-registry: ${{ env.STAGING_PRIME_REGISTRY }}
+          public-repo: rancher
+          public-username: ${{ env.STAGING_PRIME_REGISTRY_USERNAME }}
+          public-password: ${{ env.STAGING_PRIME_REGISTRY_PASSWORD }}

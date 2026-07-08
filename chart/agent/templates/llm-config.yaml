@@ -10,3 +10,4 @@ data:
   BEDROCK_MODEL: "{{ .Values.bedrockLlmModel }}"
   GENERIC_OPENAI_MODEL: "{{ .Values.genericOpenaiLlmModel }}"
   ACTIVE_LLM: "{{ .Values.activeLlm }}"
+  DISABLE_STREAMING: "{{ .Values.disableStreaming }}"

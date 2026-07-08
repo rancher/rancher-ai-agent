@@ -29,6 +29,12 @@ awsBedrock:
 genericOpenaiUrl:
 genericOpenaiApiKey:
 activeLlm: # ollama, gemini, openai, bedrock, generic-openai
+disableStreaming: false  # Set to true to disable streaming for tool calls (keeps text streaming enabled)
+# Enable RAG with embedded rancher documentation
+rag:
+    enabled: false
+    embeddings_model:
+    pvc:
 langfuseSecretKey:
 langfusePublicKey:
 langfuseHost:

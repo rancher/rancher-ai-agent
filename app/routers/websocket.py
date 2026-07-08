@@ -230,13 +230,13 @@ async def _patch_tool_result(agent: CompiledStateGraph, config: dict, error_mess
 
 async def _call_agent(
     agent: CompiledStateGraph,
-    input_data: any, 
+    input_data: any,
     config: dict,
     websocket: WebSocket,
 ) -> None:
     """
     Streams the agent's response to a WebSocket connection, handling interruptions.
-    
+
     Args:
         agent: The compiled LangGraph agent.
         input_data: The input data for the agent's run.
@@ -246,7 +246,7 @@ async def _call_agent(
     """
 
     await websocket.send_text("<message>")
-    
+
     async for stream in agent.astream_events(
         input_data,
         config=config,
@@ -257,7 +257,7 @@ async def _call_agent(
                 continue
             if text := _extract_streaming_text(stream):
                 await websocket.send_text(text)
-        
+
         if stream["event"] == "on_custom_event":
             event_data = stream.get("data", "")
             # Send custom events as-is (they should already be formatted)
@@ -265,7 +265,7 @@ async def _call_agent(
                 await websocket.send_text(event_data)
             else:
                 await websocket.send_text(json.dumps(event_data))
-    
+
         if stream["event"] == "on_chain_stream":
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)

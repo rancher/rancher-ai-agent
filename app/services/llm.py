@@ -38,17 +38,25 @@ def get_llm() -> BaseLanguageModel:
     Selects and returns a language model instance based on environment variables.
     - If the active LLM or the model is not configured, it raises a ValueError.
     - If LLM mocking is enabled, it configures the connections to the mock server.
-    
+    - If streaming is disabled, sets disable_streaming="tool_calling" to disable streaming
+      only for tool calls while keeping it enabled for regular text generation.
+
     Returns:
         An instance of a language model.
-        
+
     Raises:
         ValueError: If the active LLM or the model is not configured.
     """
 
     activeLlm = get_active_llm()
     model = get_llm_model(activeLlm)
-    
+
+    # Use "tool_calling" to disable streaming only for tool calls, not regular text
+    disable_streaming_value = None
+    if os.environ.get("DISABLE_STREAMING", "false").lower() == "true":
+        disable_streaming_value = "tool_calling"
+        logging.info("Streaming disabled for tool calls via DISABLE_STREAMING environment variable")
+
     llm_mock_enabled = os.environ.get("LLM_MOCK_ENABLED", "false").lower() == "true"
     llm_mock_url = os.environ.get("LLM_MOCK_URL", "")
     if llm_mock_enabled:
@@ -56,40 +64,40 @@ def get_llm() -> BaseLanguageModel:
 
     if activeLlm == "ollama":
         if llm_mock_enabled:
-            return ChatOllama(model=model, base_url=llm_mock_url)
+            return ChatOllama(model=model, base_url=llm_mock_url, disable_streaming=disable_streaming_value)
 
         ollama_url = os.environ.get("OLLAMA_URL")
-        return ChatOllama(model=model, base_url=ollama_url)
+        return ChatOllama(model=model, base_url=ollama_url, disable_streaming=disable_streaming_value)
     if activeLlm == "gemini":
         if llm_mock_enabled:
             return ChatGoogleGenerativeAI(
                 model=model,
                 base_url=llm_mock_url,
-                transport="rest"
+                transport="rest",
+                disable_streaming=disable_streaming_value
             )
         if model == "gemini-2.5-flash":
              # Disable thinking budget for gemini-2.5-flash to avoid empty responses due to all tokens being used for thinking budget
-             return ChatGoogleGenerativeAI(model=model, thinking_budget=0)
-        
-        return ChatGoogleGenerativeAI(model=model)
+             return ChatGoogleGenerativeAI(model=model, thinking_budget=0, disable_streaming=disable_streaming_value)
+
+        return ChatGoogleGenerativeAI(model=model, disable_streaming=disable_streaming_value)
     if activeLlm == "openai":
         if llm_mock_enabled:
-            return ChatOpenAI(model=model, base_url=llm_mock_url)
-        
+            return ChatOpenAI(model=model, base_url=llm_mock_url, disable_streaming=disable_streaming_value)
+
         openai_url = os.environ.get("OPENAI_URL")
         if openai_url:
-            return ChatOpenAI(model=model, base_url=openai_url)
-        return ChatOpenAI(model=model)
+            return ChatOpenAI(model=model, base_url=openai_url, disable_streaming=disable_streaming_value)
+        return ChatOpenAI(model=model, disable_streaming=disable_streaming_value)
     if activeLlm == "bedrock":
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
-        return ChatBedrockConverse(model=model)
-    if activeLlm == "generic-openai":        
+        return ChatBedrockConverse(model=model, disable_streaming=disable_streaming_value)
+    if activeLlm == "generic-openai":
         generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")
         generic_openai_api_key = os.environ.get("GENERIC_OPENAI_API_KEY")
 
-        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key)
-
+        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key, disable_streaming=disable_streaming_value)
 
 def get_active_llm() -> str:
     """

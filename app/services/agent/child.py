@@ -22,6 +22,7 @@ from .middleware import (
     human_validation_middleware,
     cancel_human_validation_middleware,
 )
+from ..llm import get_llm_with_model
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
 
@@ -37,7 +38,6 @@ CHILD_TOOL_USE_INSTRUCTIONS = """
 def create_child_agent(
     llm: BaseChatModel,
     tools: list[BaseTool],
-    system_prompt: str,
     checkpointer: Checkpointer,
     agent_config: AgentConfig,
 ) -> CompiledStateGraph:
@@ -61,10 +61,13 @@ def create_child_agent(
         SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
     ]
 
+    if agent_config.llm_model_enabled and agent_config.llm_model:
+        llm = get_llm_with_model(agent_config.llm_model)
+
     return create_agent(
         llm,
         tools=execution_tools,
-        system_prompt=system_prompt + CHILD_TOOL_USE_INSTRUCTIONS,
+        system_prompt=agent_config.system_prompt + CHILD_TOOL_USE_INSTRUCTIONS,
         checkpointer=checkpointer,
         middleware=middleware,
     )

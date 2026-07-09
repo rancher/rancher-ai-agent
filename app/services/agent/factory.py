@@ -47,7 +47,7 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
     if len(agent_configs) == 1:
         agent_cfg = agent_configs[0]
         tools = await _load_mcp_tools(agent_cfg, websocket)
-        graph = create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+        graph = create_child_agent(llm, tools, checkpointer, agent_cfg)
         return graph, [{"name": agent_cfg.name, "status": "active"}]
 
     # Multi-agent setup
@@ -92,14 +92,14 @@ async def _build_child_agents(
             tools = await _load_mcp_tools(agent_cfg, websocket)
             child_agents.append(ChildAgent(
                 config=agent_cfg,
-                agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg),
+                agent=create_child_agent(llm, tools, checkpointer, agent_cfg),
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active"})
         except NeedsOauth2 as e:
             logging.debug(f"OAuth2 authentication required for agent '{agent_cfg.name}': {e}")
             child_agents.append(ChildAgent(
                 config=agent_cfg,
-                agent=create_child_agent(llm, [], agent_cfg.system_prompt, checkpointer, agent_cfg),
+                agent=create_child_agent(llm, [], checkpointer, agent_cfg),
                 needs_oauth2=True
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active", "description": "needs_oauth2"})
@@ -134,7 +134,7 @@ async def reload_agent_tools(
     """
     checkpointer = websocket.app.memory_manager.get_checkpointer()
     tools = await _load_mcp_tools(agent_cfg, websocket)
-    return create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+    return create_child_agent(llm, tools, checkpointer, agent_cfg)
 
 
 async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:

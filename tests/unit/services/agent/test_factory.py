@@ -54,7 +54,7 @@ async def test_create_agent_single_agent(mock_create_child, mock_load_tools, moc
     assert result[1] == [{"name": "RancherAgent", "status": "active"}]
     mock_load_tools.assert_called_once_with(mock_agent_config, mock_websocket)
     mock_create_child.assert_called_once_with(
-        mock_llm, mock_tools, "Test prompt", mock_checkpointer, mock_agent_config
+        mock_llm, mock_tools, mock_checkpointer, mock_agent_config
     )
 
 

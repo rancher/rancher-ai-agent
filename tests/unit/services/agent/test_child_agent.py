@@ -38,6 +38,8 @@ def agent_config():
     """Minimal AgentConfig mock."""
     config = MagicMock()
     config.human_validation_tools = []
+    config.llm_model_enabled = False
+    config.llm_model = None
     return config
 
 
@@ -60,7 +62,6 @@ def test_create_child_agent_excludes_plan_tools_from_execution(mock_create_agent
     create_child_agent(
         llm=mock_llm,
         tools=tools,
-        system_prompt="test",
         checkpointer=mock_checkpointer,
         agent_config=agent_config,
     )
@@ -87,7 +88,6 @@ def test_create_child_agent_registers_expected_middleware(mock_create_agent, moc
     create_child_agent(
         llm=mock_llm,
         tools=tools,
-        system_prompt="test",
         checkpointer=mock_checkpointer,
         agent_config=agent_config,
     )
@@ -113,10 +113,11 @@ def test_create_child_agent_appends_tool_use_instructions_to_prompt(mock_create_
 
     tools = [_make_langchain_tool("testTool")]
 
+    agent_config.system_prompt = "Base prompt."
+
     create_child_agent(
         llm=mock_llm,
         tools=tools,
-        system_prompt="Base prompt.",
         checkpointer=mock_checkpointer,
         agent_config=agent_config,
     )
@@ -126,3 +127,74 @@ def test_create_child_agent_appends_tool_use_instructions_to_prompt(mock_create_
 
     assert system_prompt.startswith("Base prompt.")
     assert CHILD_TOOL_USE_INSTRUCTIONS in system_prompt
+
+
+@patch("app.services.agent.child.get_llm_with_model")
+@patch("app.services.agent.child.create_agent")
+def test_create_child_agent_uses_custom_llm_when_enabled(mock_create_agent, mock_get_llm_with_model, mock_llm, mock_checkpointer, agent_config):
+    """Verify create_child_agent uses per-agent LLM when llm_model_enabled is True."""
+    mock_create_agent.return_value = MagicMock()
+    custom_llm = MagicMock()
+    mock_get_llm_with_model.return_value = custom_llm
+
+    agent_config.llm_model_enabled = True
+    agent_config.llm_model = "gemini-2.0-flash"
+
+    tools = [_make_langchain_tool("testTool")]
+
+    create_child_agent(
+        llm=mock_llm,
+        tools=tools,
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+    )
+
+    mock_get_llm_with_model.assert_called_once_with("gemini-2.0-flash")
+    call_args = mock_create_agent.call_args
+    assert call_args[0][0] == custom_llm
+
+
+@patch("app.services.agent.child.get_llm_with_model")
+@patch("app.services.agent.child.create_agent")
+def test_create_child_agent_uses_default_llm_when_override_disabled(mock_create_agent, mock_get_llm_with_model, mock_llm, mock_checkpointer, agent_config):
+    """Verify create_child_agent uses the default LLM when llm_model_enabled is False."""
+    mock_create_agent.return_value = MagicMock()
+
+    agent_config.llm_model_enabled = False
+    agent_config.llm_model = "gemini-2.0-flash"
+
+    tools = [_make_langchain_tool("testTool")]
+
+    create_child_agent(
+        llm=mock_llm,
+        tools=tools,
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+    )
+
+    mock_get_llm_with_model.assert_not_called()
+    call_args = mock_create_agent.call_args
+    assert call_args[0][0] == mock_llm
+
+
+@patch("app.services.agent.child.get_llm_with_model")
+@patch("app.services.agent.child.create_agent")
+def test_create_child_agent_uses_default_llm_when_model_not_set(mock_create_agent, mock_get_llm_with_model, mock_llm, mock_checkpointer, agent_config):
+    """Verify create_child_agent uses the default LLM when llm_model is None."""
+    mock_create_agent.return_value = MagicMock()
+
+    agent_config.llm_model_enabled = True
+    agent_config.llm_model = None
+
+    tools = [_make_langchain_tool("testTool")]
+
+    create_child_agent(
+        llm=mock_llm,
+        tools=tools,
+        checkpointer=mock_checkpointer,
+        agent_config=agent_config,
+    )
+
+    mock_get_llm_with_model.assert_not_called()
+    call_args = mock_create_agent.call_args
+    assert call_args[0][0] == mock_llm

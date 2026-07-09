@@ -53,6 +53,14 @@ type AIAgentConfigSpec struct {
 	// The CA is scoped to this agent's connection only.
 	// +optional
 	CABundleRef *SecretKeyRef `json:"caBundleRef,omitempty"`
+
+	// LLMModel specifies the large language model to use for this agent
+	// +optional
+	LLMModel string `json:"llmModel,omitempty"`
+
+	// LLMModelEnabled indicates if a custom LLM model is enabled for this agent
+	// +optional
+	LLMModelEnabled bool `json:"llmModelEnabled,omitempty"`
 }
 
 // SecretKeyRef identifies a key within a Kubernetes secret.

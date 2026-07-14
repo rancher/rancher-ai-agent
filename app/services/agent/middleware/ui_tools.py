@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from typing import Any
 
 from langchain.agents.middleware import AgentState, after_agent
@@ -13,12 +12,6 @@ from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
 from ...ui_tools.selector import create_ui_tools_selector
-from ...llm import (
-    get_llm,
-    get_active_llm,
-    get_llm_model,
-)
-
 
 def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
     """After-agent middleware: dispatch UI tools when agent produces a final answer (no tool calls).
@@ -87,12 +80,6 @@ async def _dispatch_ui_tools_event(
         List of selected UI tools, or empty list if dispatch was skipped.
     """
     try:
-        activeLlm = get_active_llm()
-
-        if activeLlm.lower() == "bedrock":
-            logging.debug("Skipping UI tools dispatch for Bedrock to avoid toolConfig errors")
-            return []
-        
         request_metadata = config.get("configurable", {}).get("request_metadata", {})
         ui_tools_config = request_metadata.get("ui_tools", {})
 

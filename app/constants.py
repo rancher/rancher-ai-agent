@@ -3,5 +3,3 @@ CONTEXT_PARAMETERS_SUFFIX = (
 )
 
 INTERRUPT_CANCEL_REPLY = "Previous tool canceled by the user."
-
-BEDROCK_TOOL_ERROR_MESSAGE = "toolConfig field must be defined"

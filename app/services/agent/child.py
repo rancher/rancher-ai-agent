@@ -58,7 +58,7 @@ def create_child_agent(
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm, only_when_direct=True),
-        SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+        SummarizationMiddleware(model=llm.bind_tools(tools), trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
     ]
 
     if agent_config.llm_model_enabled and agent_config.llm_model:

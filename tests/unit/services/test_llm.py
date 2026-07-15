@@ -30,6 +30,13 @@ def test_get_llm_openai(mock_openai):
         mock_openai.assert_called_once_with(model="gpt-4")
         assert llm == mock_openai.return_value
 
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_generic_openai(mock_openai):
+    with patch.dict(os.environ, {"GENERIC_OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "generic-openai", "GENERIC_OPENAI_URL": "https://api.example.com", "GENERIC_OPENAI_API_KEY": "fake-key"}, clear=True):
+        llm = get_llm()
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key")
+        assert llm == mock_openai.return_value
+
 def test_get_active_llm_not_configured():
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError, match="LLM not configured."):
@@ -113,5 +120,45 @@ def test_get_llm_openai_with_custom_url(mock_openai):
     }, clear=True):
         llm = get_llm()
         mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000")
+        assert llm == mock_openai.return_value
+
+
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_with_model_override(mock_openai):
+    """Test that model_override overrides the env-configured model."""
+    with patch.dict(os.environ, {
+        "OPENAI_MODEL": "gpt-4",
+        "ACTIVE_LLM": "openai",
+        "OPENAI_API_KEY": "fake-key",
+    }, clear=True):
+        llm = get_llm(model_override="gpt-4o")
+        mock_openai.assert_called_once_with(model="gpt-4o")
+        assert llm == mock_openai.return_value
+
+
+@patch('app.services.llm.ChatGoogleGenerativeAI')
+def test_get_llm_with_model_override_gemini(mock_chat_gemini):
+    """Test that model_override works with Gemini provider."""
+    with patch.dict(os.environ, {
+        "GEMINI_MODEL": "gemini-pro",
+        "ACTIVE_LLM": "gemini",
+        "GOOGLE_API_KEY": "fake-key",
+    }, clear=True):
+        llm = get_llm(model_override="gemini-2.0-flash")
+        mock_chat_gemini.assert_called_once_with(model="gemini-2.0-flash")
+        assert llm == mock_chat_gemini.return_value
+
+
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_with_model_uses_get_llm(mock_openai):
+    """Test that get_llm_with_model delegates to get_llm with the model override."""
+    from app.services.llm import get_llm_with_model
+    with patch.dict(os.environ, {
+        "OPENAI_MODEL": "gpt-4",
+        "ACTIVE_LLM": "openai",
+        "OPENAI_API_KEY": "fake-key",
+    }, clear=True):
+        llm = get_llm_with_model("gpt-4o-mini")
+        mock_openai.assert_called_once_with(model="gpt-4o-mini")
         assert llm == mock_openai.return_value
 

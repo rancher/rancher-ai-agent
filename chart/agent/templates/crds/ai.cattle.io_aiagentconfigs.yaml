@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.1
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: aiagentconfigs.ai.cattle.io
 spec:
   group: ai.cattle.io
@@ -61,22 +61,25 @@ spec:
                 - NONE
                 - BASIC
                 - HEADER
+                - OAUTH2
                 type: string
               builtIn:
                 description: BuiltIn indicates if this is a built-in agent configuration
                 type: boolean
               caBundleRef:
-                description: CABundleRef references a secret key containing a
-                  PEM-encoded CA certificate bundle to trust when connecting to
-                  this agent's MCP server
+                description: |-
+                  CABundleRef references a secret key containing a PEM-encoded CA
+                  certificate bundle to trust when connecting to this agent's MCP server.
+                  The CA is scoped to this agent's connection only.
                 properties:
-                  name:
-                    description: Name is the name of the secret in the agent namespace.
-                    type: string
                   key:
                     default: ca.crt
-                    description: Key is the key inside the secret that holds the
-                      data. Defaults to "ca.crt".
+                    description: |-
+                      Key is the key inside the secret that holds the data.
+                      Defaults to "ca.crt".
+                    type: string
+                  name:
+                    description: Name is the name of the secret in the agent namespace.
                     type: string
                 required:
                 - name
@@ -95,6 +98,14 @@ spec:
                 items:
                   type: string
                 type: array
+              llmModel:
+                description: LLMModel specifies the large language model to use for
+                  this agent
+                type: string
+              llmModelEnabled:
+                description: LLMModelEnabled indicates if a custom LLM model is enabled
+                  for this agent
+                type: boolean
               mcpURL:
                 description: MCPURL is the Model Context Protocol server URL
                 type: string

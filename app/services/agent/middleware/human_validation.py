@@ -2,7 +2,6 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
-
 import langgraph.types
 from langchain.agents.middleware import wrap_tool_call
 from langchain.messages import ToolMessage
@@ -12,7 +11,7 @@ from langchain_core.tools import BaseTool
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from ._constants import INTERRUPT_CANCEL_MESSAGE
+from .._constants import INTERRUPT_CANCEL_MESSAGE
 from ..loader import AgentConfig
 from .ui_tools import _dispatch_ui_tools
 
@@ -53,7 +52,19 @@ def human_validation_middleware(
         }
 
         human_validation_tools = getattr(agent_config, "human_validation_tools", [])
-        interrupt_message = await _should_interrupt(human_validation_tools, tool_call, planning_tools_by_name)
+        try:
+            interrupt_message = await _should_interrupt(human_validation_tools, tool_call, planning_tools_by_name)
+        except Exception as e:
+            # Return a ToolMessage (not raise) so the tool_use block keeps its matching
+            # tool_result. Otherwise the checkpointed history has a dangling tool_use and
+            # the next model call fails (e.g. Bedrock ValidationException).
+            logging.exception(f"Failed to build confirmation plan for tool '{tool_call['name']}': {e}")
+            return ToolMessage(
+                content=f"Could not prepare confirmation for tool '{tool_call['name']}': {e}",
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+                additional_kwargs=additional_kwargs,
+            )
 
         if interrupt_message:
             logging.debug(f"Confirmation interrupt triggered for tool '{tool_call['name']}'")
@@ -100,6 +111,16 @@ def human_validation_middleware(
                 result.additional_kwargs = {**result.additional_kwargs, **additional_kwargs}
 
             return result
+        except ExceptionGroup as eg:
+            err  = f"Unexpected error during tool call errors: {[str(err) for err in eg.exceptions]}"
+            logging.error(f"Unexpected error during tool call: {err}")
+            
+            return ToolMessage(
+                content=err,
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+                additional_kwargs=additional_kwargs,
+            )
         except Exception as e:
             logging.error(f"unexpected error during tool call: {e}")
             return ToolMessage(
@@ -135,7 +156,9 @@ async def _should_interrupt(
             try:
                 safe_response = json.dumps(json.loads(plan_response))
             except (json.JSONDecodeError, TypeError):
-                safe_response = json.dumps(plan_response)
+                raise Exception(
+                    f"Invalid plan response for tool '{tool_call['name']}': {plan_response}"
+                )
             return f"<confirmation-response>{safe_response}</confirmation-response>"
     return ""
 

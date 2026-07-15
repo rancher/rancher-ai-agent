@@ -175,7 +175,83 @@ namespacedRules:
         - get
 ```
 
+## MCP Authentication Types
 
+The AI Agent supports multiple authentication methods for connecting to MCP servers. The authentication type is configured per agent via the `AIAgentConfig` CRD's `authenticationType` field.
+
+### NONE
+
+No authentication is applied. The agent connects to the MCP server without any credentials. Suitable for MCP servers running locally or behind a network-level security boundary.
+
+```yaml
+authenticationType: NONE
+```
+
+### RANCHER
+
+Uses the current user's Rancher session token to authenticate with the MCP server. The token is passed in the request headers, allowing the MCP server to enforce Rancher RBAC on behalf of the user.
+
+```yaml
+authenticationType: RANCHER
+```
+
+### BASIC
+
+HTTP Basic authentication using credentials stored in a Kubernetes secret. The secret must contain `username` and `password` keys.
+
+```yaml
+authenticationType: BASIC
+authenticationSecret: my-basic-auth-secret
+```
+
+### HEADER
+
+Custom header-based authentication. The agent sends a static token (e.g., API key) stored in a Kubernetes secret as a request header to the MCP server.
+
+```yaml
+authenticationType: HEADER
+authenticationSecret: my-header-auth-secret
+```
+
+### OAUTH2
+
+OAuth 2.0 with PKCE (Proof Key for Code Exchange) for MCP servers that implement the OAuth 2.0 authorization framework. It supports:
+
+- **OAuth Discovery**: Automatically discovers authorization and token endpoints from the MCP server's `/.well-known/oauth-authorization-server` metadata.
+- **Dynamic Client Registration** (RFC 7591): If no client credentials are provided and the server supports it, the agent registers itself dynamically.
+- **Token Refresh**: Before initiating a new authorization flow, the agent attempts to use a stored refresh token to silently obtain a new access token.
+- **PKCE Flow**: Uses `S256` code challenge for secure authorization code exchange.
+
+```yaml
+authenticationType: OAUTH2
+authenticationSecret: my-oauth-secret 
+
+```
+
+**OAuth Secret Format** (when using static credentials):
+
+The Kubernetes secret referenced by `authenticationSecret` should contain:
+
+| Key                | Required | Description                                            |
+
+|--------------------|----------|--------------------------------------------------------|
+
+| `clientID`         | Yes      | The OAuth2 client identifier                           |
+
+| `clientSecret`     | No       | The OAuth2 client secret (for confidential clients)    |
+
+| `scope`            | No       | Space-separated list of OAuth scopes                   |
+
+| `metadata_endpoint`| Yes      | Authorization server metadata endpoint (RFC 8414/OIDC) |
+
+
+**Flow:**
+1. The agent detects a `401 Unauthorized` response from the MCP server.
+2. It checks for an existing refresh token and attempts a silent token refresh.
+3. If no refresh token is available (or the refresh fails), it initiates the full OAuth flow by sending an authorization URL to the client.
+4. The user authenticates in a browser popup.
+5. The callback exchanges the authorization code for access and refresh tokens.
+6. The agent resumes the original request with the new access token.
 
 
 

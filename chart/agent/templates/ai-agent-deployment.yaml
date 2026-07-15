@@ -38,11 +38,6 @@ spec:
         emptyDir: {}
       - name: cert-dir
         emptyDir: {}
-      {{- if .Values.rag.pvc }}
-      - name: rag-storage
-        persistentVolumeClaim:
-          claimName: "{{ .Values.rag.pvc }}"
-      {{- end }}
       containers:
       - image: "{{ template "system_default_registry" . }}{{ .Values.aiAgent.image.repository }}:{{ .Values.aiAgent.image.tag }}"
         imagePullPolicy: "{{ .Values.aiAgent.image.pullPolicy }}"
@@ -90,6 +85,12 @@ spec:
               configMapKeyRef:
                 name: llm-config
                 key: BEDROCK_MODEL
+                optional: true
+          - name: GENERIC_OPENAI_MODEL
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: GENERIC_OPENAI_MODEL
                 optional: true
           - name: OLLAMA_URL
             valueFrom:
@@ -139,6 +140,18 @@ spec:
                 name: llm-secret
                 key: AWS_REGION
                 optional: true
+          - name: GENERIC_OPENAI_URL
+            valueFrom:
+              secretKeyRef:
+                name: llm-secret
+                key: GENERIC_OPENAI_URL
+                optional: true
+          - name: GENERIC_OPENAI_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: llm-secret
+                key: GENERIC_OPENAI_API_KEY
+                optional: true
           - name: DB_ENABLED
             value: "{{ .Values.storage.enabled }}"
           - name: DB_CONNECTION_STRING
@@ -173,7 +186,4 @@ spec:
           mountPath: /tmp
         - name: cert-dir
           mountPath: /cert
-        {{- if .Values.rag.pvc }}
-        - name: rag-storage
-          mountPath: /app/rag
-        {{- end }}
+

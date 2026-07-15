@@ -15,9 +15,7 @@ spec:
       labels:
         app: rancher-mcp-server
     spec:
-      {{- if not .Values.insecureSkipTls }}
       serviceAccountName: mcp-cert-rotator-sa
-      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

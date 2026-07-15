@@ -5,6 +5,7 @@ from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models.llms import BaseLanguageModel
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_aws import ChatBedrockConverse
 
 class LLMManager:
@@ -33,12 +34,15 @@ class LLMManager:
             logging.info(f"Using model: {cls._instance}")
         return cls._instance
 
-def get_llm() -> BaseLanguageModel:
+def get_llm(model_override: str | None = None) -> BaseChatModel:
     """
     Selects and returns a language model instance based on environment variables.
     - If the active LLM or the model is not configured, it raises a ValueError.
     - If LLM mocking is enabled, it configures the connections to the mock server.
     
+    Args:
+        model_override: If provided, use this model name instead of the one from environment variables.
+
     Returns:
         An instance of a language model.
         
@@ -47,7 +51,7 @@ def get_llm() -> BaseLanguageModel:
     """
 
     activeLlm = get_active_llm()
-    model = get_llm_model(activeLlm)
+    model = model_override if model_override else get_llm_model(activeLlm)
     
     llm_mock_enabled = os.environ.get("LLM_MOCK_ENABLED", "false").lower() == "true"
     llm_mock_url = os.environ.get("LLM_MOCK_URL", "")
@@ -84,6 +88,19 @@ def get_llm() -> BaseLanguageModel:
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
         return ChatBedrockConverse(model=model)
+    if activeLlm == "generic-openai":        
+        generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")
+        generic_openai_api_key = os.environ.get("GENERIC_OPENAI_API_KEY")
+
+        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key)
+
+    raise ValueError(f"Unsupported LLM provider: {activeLlm}")
+
+
+def get_llm_with_model(model: str) -> BaseChatModel:
+    """Create an LLM instance using the active provider but with a specific model override."""
+    return get_llm(model_override=model)
+
 
 def get_active_llm() -> str:
     """
@@ -94,7 +111,7 @@ def get_active_llm() -> str:
     """
     llm = os.environ.get("ACTIVE_LLM", "")
     
-    if llm not in ["ollama", "gemini", "openai", "bedrock"]:
+    if llm not in ["ollama", "gemini", "openai", "bedrock", "generic-openai"]:
         raise ValueError("LLM not configured.")
 
     return llm
@@ -104,7 +121,7 @@ def get_llm_model(llm: str) -> str:
     Retrieves the model name from environment variables.
     
     Args:
-        llm: The LLM identifier, one of 'ollama', 'gemini', 'openai', 'bedrock'.
+        llm: The LLM identifier, one of 'ollama', 'gemini', 'openai', 'bedrock', 'generic-openai'.
 
     Returns:
         The model name as a string.
@@ -113,7 +130,7 @@ def get_llm_model(llm: str) -> str:
     model = None
 
     if llm:
-        model = os.environ.get(f"{llm.upper()}_MODEL")
+        model = os.environ.get(f"{llm.upper().replace('-', '_')}_MODEL")
 
     if not model:
         raise ValueError("LLM Model not configured.")

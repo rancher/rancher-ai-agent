@@ -5,19 +5,20 @@ global:
 aiAgent:
   image:
     repository: rancher/rancher-ai-agent
-    tag: v1.1.0-alpha.4
+    tag: v1.1.0-alpha.8
     pullPolicy: IfNotPresent
 mcp:
   readOnly: false
   image:
     repository: rancher/rancher-ai-mcp
-    tag: v1.0.2
+    tag: v1.1.0-alpha.7
     pullPolicy: IfNotPresent
 
 ollamaLlmModel: ""
 geminiLlmModel: ""
 openaiLlmModel: ""
 bedrockLlmModel: ""
+genericOpenaiLlmModel: ""
 ollamaUrl: ""
 googleApiKey:
 openaiApiKey:
@@ -25,12 +26,9 @@ openaiUrl:
 awsBedrock:
   bearerToken:
   region:
-activeLlm: # ollama, gemini, openai, bedrock
-# Enable RAG with embedded rancher documentation
-rag:
-    enabled: false
-    embeddings_model:
-    pvc:
+genericOpenaiUrl:
+genericOpenaiApiKey:
+activeLlm: # ollama, gemini, openai, bedrock, generic-openai
 langfuseSecretKey:
 langfusePublicKey:
 langfuseHost:

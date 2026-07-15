@@ -86,14 +86,12 @@ async def test_should_interrupt_handles_non_json_response():
     plan_tool = AsyncMock()
     plan_tool.ainvoke.return_value = "plain text plan"
 
-    result = await _should_interrupt(
-        human_validation_tools=["applyResource"],
-        tool_call={"name": "applyResource", "args": {}},
-        planning_tools_by_name={"applyResourcePlan": plan_tool},
-    )
-
-    inner = result.removeprefix("<confirmation-response>").removesuffix("</confirmation-response>")
-    assert json.loads(inner) == "plain text plan"
+    with pytest.raises(Exception, match="Invalid plan response for tool 'applyResource'"):
+        await _should_interrupt(
+            human_validation_tools=["applyResource"],
+            tool_call={"name": "applyResource", "args": {}},
+            planning_tools_by_name={"applyResourcePlan": plan_tool},
+        )
 
 
 # ---------------------------------------------------------------------------

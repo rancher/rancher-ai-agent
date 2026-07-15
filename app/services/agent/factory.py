@@ -6,19 +6,16 @@ from datetime import datetime, timezone
 import httpx
 from kubernetes import client
 from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
+from ..oauth2 import get_oauth_cookie_names
 from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
+from ._constants import NoAgentAvailableError, NeedsOauth2
 from fastapi import  WebSocket
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph.state import Checkpointer, CompiledStateGraph
 
 NAMESPACE = "cattle-ai-agent-system"
-
-class NoAgentAvailableError(Exception):
-    """Exception raised when loading MCP tools fails."""
-    pass
-
 
 async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
@@ -50,7 +47,7 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
     if len(agent_configs) == 1:
         agent_cfg = agent_configs[0]
         tools = await _load_mcp_tools(agent_cfg, websocket)
-        graph = create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg)
+        graph = create_child_agent(llm, tools, checkpointer, agent_cfg)
         return graph, [{"name": agent_cfg.name, "status": "active"}]
 
     # Multi-agent setup
@@ -70,7 +67,7 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
     graph = create_supervisor_agent(llm, child_agents, checkpointer)
     supervisor = SupervisorGraph(
         graph=graph,
-        child_agents={ca.config.name: ca.agent for ca in child_agents},
+        child_agents={ca.config.name: ca for ca in child_agents},
     )
     return supervisor, agents_metadata
 
@@ -95,14 +92,49 @@ async def _build_child_agents(
             tools = await _load_mcp_tools(agent_cfg, websocket)
             child_agents.append(ChildAgent(
                 config=agent_cfg,
-                agent=create_child_agent(llm, tools, agent_cfg.system_prompt, checkpointer, agent_cfg),
+                agent=create_child_agent(llm, tools, checkpointer, agent_cfg),
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active"})
+        except NeedsOauth2 as e:
+            logging.debug(f"OAuth2 authentication required for agent '{agent_cfg.name}': {e}")
+            child_agents.append(ChildAgent(
+                config=agent_cfg,
+                agent=create_child_agent(llm, [], checkpointer, agent_cfg),
+                needs_oauth2=True
+            ))
+            agents_metadata.append({"name": agent_cfg.name, "status": "active", "description": "needs_oauth2"})
         except (NoAgentAvailableError, Exception) as e:
             logging.error(f"Failed to load MCP tools for agent '{agent_cfg.name}': {e}")
             agents_metadata.append({"name": agent_cfg.name, "status": "error", "description": str(e)})
 
     return child_agents, agents_metadata
+
+
+async def reload_agent_tools(
+    llm: BaseLanguageModel,
+    agent_cfg: AgentConfig,
+    websocket: WebSocket,
+) -> CompiledStateGraph:
+    """
+    Reload MCP tools for an agent and rebuild its child agent graph.
+
+    Used after successful OAuth2 authentication to reconnect to the MCP server
+    with valid credentials and rebuild the agent with the new tools.
+
+    Args:
+        llm: The language model for the agent.
+        agent_cfg: The agent configuration.
+        websocket: The WebSocket connection (now with OAuth cookies set).
+
+    Returns:
+        The compiled child agent graph.
+
+    Raises:
+        NoAgentAvailableError: If MCP connection fails.
+    """
+    checkpointer = websocket.app.memory_manager.get_checkpointer()
+    tools = await _load_mcp_tools(agent_cfg, websocket)
+    return create_child_agent(llm, tools, checkpointer, agent_cfg)
 
 
 async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
@@ -113,16 +145,29 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     Raises:
         NoAgentAvailableError: If the MCP connection fails.
     """
-    mcp_client = create_mcp_client(agent_cfg, websocket)
+
+    mcp_client = await create_mcp_client(agent_cfg, websocket)
+    
     try:
         tools = await mcp_client.get_tools()
     except* Exception as eg:
         error_message = " ".join(str(e) for e in eg.exceptions)
-        _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
-        raise NoAgentAvailableError(
-            f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}\n"
-            f"Please check the AI Agents configuration and ensure the MCP server is accessible."
-        ) from eg
+
+        _error_lower = error_message.lower()
+        if agent_cfg.authentication == AuthenticationType.OAUTH2 and (
+            "401" in error_message
+            or "unauthorized" in _error_lower
+            or "not authorized" in _error_lower
+            or "access denied" in _error_lower
+        ):
+            raise NeedsOauth2(agent_cfg)
+        else:
+            _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
+            raise NoAgentAvailableError(
+                f"Failed to load MCP tools for agent '{agent_cfg.name}': {error_message}\n"
+                f"Please check the AI Agents configuration and ensure the MCP server is accessible."
+            ) from eg
+
 
     if agent_cfg.toolset:
         tools = [t for t in tools if t.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset]
@@ -133,7 +178,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
 
 
 
-def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
+async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
     """
     Create an MCP client for the agent based on the agent configuration.
     
@@ -160,10 +205,8 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
     if agent_config.authentication == AuthenticationType.RANCHER:
         if websocket:
             cookies = websocket.cookies
-            rancher_url = os.environ.get("RANCHER_URL", "https://" + websocket.url.hostname)
             token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
         else:
-            rancher_url = os.environ.get("RANCHER_URL", "")
             token = os.environ.get("RANCHER_API_TOKEN", "")
         
         mcp_url = os.environ.get("MCP_URL", agent_config.mcp_url)
@@ -174,7 +217,6 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
                 mcp_url = "https://" + mcp_url
         headers = {
             "R_token": token,
-            "R_url": rancher_url
         }
     elif agent_config.authentication == AuthenticationType.BASIC:
         mcp_url = agent_config.mcp_url
@@ -192,6 +234,18 @@ def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = N
             headers = get_header_auth_headers(agent_config.authentication_secret)
         except Exception as e:
             logging.error(f"Failed to get header auth headers: {str(e)}")
+
+    elif agent_config.authentication == AuthenticationType.OAUTH2:
+        mcp_url = agent_config.mcp_url
+
+        cookie_name = get_oauth_cookie_names(agent_config.name)["access_token"]
+        oauth_token = websocket.cookies.get(cookie_name) if websocket else None
+
+        mcp_url = agent_config.mcp_url
+        if oauth_token:
+            headers = {
+                "Authorization": f"Bearer {oauth_token or ''}"
+            }
 
     else:
         mcp_url = agent_config.mcp_url

@@ -2,7 +2,7 @@ ARG PYTHON_VERSION=3.14
 ARG UID=1000
 ARG GID=1000
 
-FROM registry.suse.com/bci/bci-micro:15.7 AS target
+FROM registry.suse.com/bci/bci-micro:16.1 AS target
 
 FROM registry.suse.com/bci/python:3.14 AS builder
 ARG PYTHON_VERSION
@@ -12,8 +12,8 @@ COPY --from=target / /target
 
 # Install python on both builder and target.
 RUN PY_ZYPP=$(echo ${PYTHON_VERSION} | tr -d '.') && \
-    zypper --non-interactive install --no-recommends python${PY_ZYPP} python${PY_ZYPP}-pip && \
-    zypper --non-interactive --installroot /target install --no-recommends python${PY_ZYPP} python${PY_ZYPP}-pip
+    zypper --non-interactive install --no-recommends python${PY_ZYPP} python${PY_ZYPP}-pip libgcc_s1 && \
+    zypper --non-interactive --installroot /target install --no-recommends python${PY_ZYPP} python${PY_ZYPP}-pip libgcc_s1
 
 # Create group and user 'ai-agent' (UID/GID 1000) with no home directory and no shell.
 RUN echo "ai-agent:x:${GID}:" >> /target/etc/group && \

@@ -193,7 +193,7 @@ async def test_invoke_normal_sends_messages_to_child(child_agent, mock_compiled_
     call_args = mock_compiled_graph.ainvoke.call_args
     input_data = call_args[0][0]
     assert "messages" in input_data
-    assert input_data["messages"][0]["content"] == "test query"
+    assert input_data["messages"][0].content == "test query"
 
 
 @pytest.mark.asyncio
@@ -402,6 +402,141 @@ async def test_invoke_normal_child_interrupts_during_invocation(child_agent, moc
     mock_interrupt_fn.assert_called_once_with(
         "<confirmation-response>create resource plan</confirmation-response>"
     )
+
+
+# ============================================================================
+# GraphBubbleUp propagation Tests
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_graph_bubble_up_propagates_during_normal_invocation(child_agent, mock_compiled_graph):
+    """GraphBubbleUp raised by the child during a normal (no pending interrupt) invocation
+    must propagate out of _invoke rather than being caught as a generic error."""
+    from langgraph.errors import GraphBubbleUp
+
+    mock_state = MagicMock()
+    mock_state.interrupts = ()
+    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_compiled_graph.ainvoke.side_effect = GraphBubbleUp("internal signal")
+
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }):
+        with pytest.raises(GraphBubbleUp):
+            await tool.ainvoke({"query": "trigger bubble up"})
+
+
+@pytest.mark.asyncio
+async def test_graph_bubble_up_not_treated_as_error_during_normal_invocation(child_agent, mock_compiled_graph):
+    """GraphBubbleUp must not cause _build_error_result to be returned; the exception
+    must escape so the supervisor graph runtime can handle it."""
+    from langgraph.errors import GraphBubbleUp
+
+    mock_state = MagicMock()
+    mock_state.interrupts = ()
+    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_compiled_graph.ainvoke.side_effect = GraphBubbleUp("internal signal")
+
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }):
+        try:
+            await tool.ainvoke({"query": "trigger bubble up"})
+        except GraphBubbleUp:
+            pass  # expected
+        except Exception as e:
+            pytest.fail(f"GraphBubbleUp was swallowed and replaced by: {type(e).__name__}: {e}")
+
+
+@pytest.mark.asyncio
+async def test_graph_bubble_up_propagates_during_resume(child_agent, mock_compiled_graph):
+    """GraphBubbleUp raised by the child during a resume invocation must propagate
+    out of _invoke rather than being caught as a generic error."""
+    from langgraph.errors import GraphBubbleUp
+
+    mock_interrupt = MagicMock()
+    mock_interrupt.value = "confirm?"
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+    mock_compiled_graph.aget_state.return_value = mock_state_with_interrupt
+    mock_compiled_graph.ainvoke.side_effect = GraphBubbleUp("internal signal on resume")
+
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes"):
+        with pytest.raises(GraphBubbleUp):
+            await tool.ainvoke({"query": "resume action"})
+
+
+@pytest.mark.asyncio
+async def test_graph_bubble_up_not_treated_as_error_during_resume(child_agent, mock_compiled_graph):
+    """GraphBubbleUp during resume must not produce an error result tuple; it must escape."""
+    from langgraph.errors import GraphBubbleUp
+
+    mock_interrupt = MagicMock()
+    mock_interrupt.value = "confirm?"
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+    mock_compiled_graph.aget_state.return_value = mock_state_with_interrupt
+    mock_compiled_graph.ainvoke.side_effect = GraphBubbleUp("internal signal on resume")
+
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes"):
+        try:
+            await tool.ainvoke({"query": "resume action"})
+        except GraphBubbleUp:
+            pass  # expected
+        except Exception as e:
+            pytest.fail(f"GraphBubbleUp was swallowed and replaced by: {type(e).__name__}: {e}")
+
+
+@pytest.mark.asyncio
+async def test_generic_exception_still_returns_error_result_during_normal_invocation(child_agent, mock_compiled_graph):
+    """Non-GraphBubbleUp exceptions during normal invocation are caught and returned
+    as an error result tuple, not re-raised."""
+    mock_state = MagicMock()
+    mock_state.interrupts = ()
+    mock_compiled_graph.aget_state.return_value = mock_state
+    mock_compiled_graph.ainvoke.side_effect = RuntimeError("mcp connection refused")
+
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }):
+        result = await tool.ainvoke({"query": "do something"})
+
+    assert "failed" in result.lower() or "mcp connection refused" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_generic_exception_still_returns_error_result_during_resume(child_agent, mock_compiled_graph):
+    """Non-GraphBubbleUp exceptions during resume are caught and returned as an error
+    result tuple, not re-raised."""
+    mock_interrupt = MagicMock()
+    mock_interrupt.value = "confirm?"
+    mock_state_with_interrupt = MagicMock()
+    mock_state_with_interrupt.interrupts = (mock_interrupt,)
+    mock_compiled_graph.aget_state.return_value = mock_state_with_interrupt
+    mock_compiled_graph.ainvoke.side_effect = RuntimeError("timeout during resume")
+
+    tool = _create_agent_tool(child_agent, _AgentCallCounter())
+
+    with patch("app.services.agent.supervisor.ensure_config", return_value={
+        "configurable": {"thread_id": "t1"}
+    }), patch("app.services.agent.supervisor.langgraph.types.interrupt", return_value="yes"):
+        result = await tool.ainvoke({"query": "resume action"})
+
+    assert "timeout during resume" in result.lower()
 
 
 # ============================================================================

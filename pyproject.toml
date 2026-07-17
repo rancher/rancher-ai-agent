@@ -20,7 +20,7 @@ dependencies = [
     "mcp==1.28.1",
     "numpy==2.5.1",
     "fastmcp==3.4.4",
-    "kubernetes==36.0.2",
+    "kubernetes==36.0.3",
     "langchain-aws==1.6.2",
     "psycopg[binary,pool]==3.3.4",
     "kopf==1.44.6",

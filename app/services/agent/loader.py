@@ -366,7 +366,7 @@ def _get_default_ai_agent_config_crds() -> list:
                 "namespace": NAMESPACE,
             },
             "spec": {
-                "displayName": "Fleet",
+                "displayName": "Continuous Delivery",
                 "description": FLEET_DESCRIPTION,
                 "systemPrompt": FLEET_SYSTEM_PROMPT,
                 "toolSet": "fleet",

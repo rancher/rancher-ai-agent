@@ -22,6 +22,7 @@ from .middleware import (
     human_validation_middleware,
     cancel_human_validation_middleware,
 )
+from .system_prompts import SEQUENTIAL_TOOL_CALLS
 from ..llm import get_llm_with_model
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -67,7 +68,7 @@ def create_child_agent(
     return create_agent(
         llm,
         tools=execution_tools,
-        system_prompt=agent_config.system_prompt + CHILD_TOOL_USE_INSTRUCTIONS,
+        system_prompt=agent_config.system_prompt + CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS,
         checkpointer=checkpointer,
         middleware=middleware,
     )

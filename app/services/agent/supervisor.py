@@ -297,13 +297,29 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
         interrupt_ui_tools: list[dict] = []
 
         if child_state and child_state.interrupts:
-            interrupt_value = child_state.interrupts[0].value
-            if isinstance(interrupt_value, dict):
-                interrupt_ui_tools = interrupt_value.get("ui_tools", [])
+            pending_interrupts = child_state.interrupts
+            first_value = pending_interrupts[0].value
+            if isinstance(first_value, dict):
+                interrupt_ui_tools = first_value.get("ui_tools", [])
 
-            resume_value = langgraph.types.interrupt(interrupt_value)
+            # Collect a response for every pending interrupt. Each supervisor-level
+            # interrupt() call is replayed in order on resume, so this loop surfaces
+            # the prompts one at a time until all have been answered.
+            #
+            # When the child has a single pending interrupt we resume with the bare
+            # value; with multiple pending interrupts LangGraph requires the resume
+            # map keyed by interrupt id (Command(resume={id: value})), otherwise it
+            # raises "you must specify the interrupt id when resuming".
+            if len(pending_interrupts) == 1:
+                resume_command = Command(resume=langgraph.types.interrupt(first_value))
+            else:
+                resume_map = {
+                    intr.id: langgraph.types.interrupt(intr.value)
+                    for intr in pending_interrupts
+                }
+                resume_command = Command(resume=resume_map)
             try:
-                result = await child_agent.agent.ainvoke(Command(resume=resume_value), config=child_config)
+                result = await child_agent.agent.ainvoke(resume_command, config=child_config)
             except GraphBubbleUp:
                 # GraphBubbleUp is a LangGraph internal signal (e.g. a new interrupt) that
                 # must propagate up through the call stack to be handled by the supervisor

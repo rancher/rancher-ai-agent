@@ -26,8 +26,8 @@ async def test_get_models_openai_success(mock_request):
         resp = await config_router.get_models(mock_request, llm_name="openai")
         assert resp.status_code == status.HTTP_200_OK
         content = json.loads(resp.body)
-        assert "gpt-4o" in content
-        assert "gpt-3.5-turbo" in content
+        for model in config_router.AVAILABLE_MODELS["openai"]:
+            assert model in content, f"Model {model} not found in response"
 
 
 @pytest.mark.asyncio
@@ -37,7 +37,8 @@ async def test_get_models_gemini_success(mock_request):
         resp = await config_router.get_models(mock_request, llm_name="gemini")
         assert resp.status_code == status.HTTP_200_OK
         content = json.loads(resp.body)
-        assert "gemini-2.0-flash" in content
+        for model in config_router.AVAILABLE_MODELS["gemini"]:
+            assert model in content, f"Model {model} not found in response"
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ from kubernetes import client, config as k8s_config
 from kubernetes.client.rest import ApiException
 
 from ..services.llm import LLMManager
-from ..services.auth import get_user_id_from_request
+from ..services.auth import get_user_id_from_token
 
 router = APIRouter(prefix="/v1/api", tags=["configuration"])
 
@@ -139,7 +139,7 @@ async def get_models(request: Request, llm_name: str):
     For bedrock: requires 'region' and 'bearer_token'
     """
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -264,7 +264,7 @@ async def get_settings(request: Request):
     Endpoint to retrieve current agent settings.
     """
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -294,7 +294,7 @@ async def update_settings(settings: SettingsUpdate, request: Request):
     Requires permission to patch secrets in the agent namespace.
     """
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
 
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")

@@ -59,7 +59,7 @@ class MockWebSocket:
 def mock_dependencies():
     with patch('app.routers.websocket.build_agent', new_callable=AsyncMock) as mock_build_agent, \
          patch('app.routers.websocket._call_agent', new_callable=AsyncMock) as mock_call_agent, \
-         patch('app.routers.websocket.get_user_id_from_websocket', new_callable=AsyncMock) as mock_get_user_id:
+         patch('app.routers.websocket.get_user_id_from_token', new_callable=AsyncMock) as mock_get_user_id:
 
         mock_agent = MagicMock()
         mock_agent.aget_state = AsyncMock(return_value=MagicMock(interrupts=[]))

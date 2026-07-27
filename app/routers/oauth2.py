@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi import HTTPException, status
 from pydantic import BaseModel, HttpUrl
 from urllib.parse import urlparse
-from ..services.auth import get_user_id_from_request
+from ..services.auth import get_user_id_from_token
 from ..services.oauth2.client import OAuthClientManager, get_tls_verify
 from ..services.oauth2.discovery import discover_metadata_endpoint
 from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_configs
@@ -216,7 +216,7 @@ async def get_metadata(mcpUrl: str, request: Request):
 
     Returns discovered metadata (or `null` if discovery fails).
     """
-    user_id = await get_user_id_from_request(request)
+    user_id = await get_user_id_from_token(request.cookies)
     if not user_id:
        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
@@ -240,7 +240,7 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
     """
     # Without authentication this endpoint would let any network-reachable caller
     # use the agent pod as an SSRF proxy to probe internal services.
-    user_id = await get_user_id_from_request(request)
+    user_id = await get_user_id_from_token(request.cookies)
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 

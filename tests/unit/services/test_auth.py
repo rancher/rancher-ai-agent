@@ -14,7 +14,7 @@ from app.services.auth import (
     _is_tls_error,
     _get_tls_verify,
     get_user_id,
-    get_user_id_from_request,
+    get_user_id_from_token,
 )
 
 SAMPLE_CA_PEM = """\
@@ -398,55 +398,53 @@ class TestGetUserId:
 
 
 # ---------------------------------------------------------------------------
-# get_user_id_from_request
+# get_user_id_from_token
 # ---------------------------------------------------------------------------
 
-class TestGetUserIdFromRequest:
+class TestGetUserIdFromToken:
     @pytest.mark.asyncio
-    async def test_returns_none_when_no_r_sess_cookie(self):
-        mock_request = MagicMock()
-        mock_request.cookies.get.return_value = None
-        result = await get_user_id_from_request(mock_request)
+    async def test_returns_none_when_no_token(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = await get_user_id_from_token({})
         assert result is None
 
     @pytest.mark.asyncio
     async def test_delegates_to_get_user_id(self):
-        mock_request = MagicMock()
-        mock_request.cookies.get.return_value = "my-session-token"
         with patch.dict(os.environ, {"RANCHER_URL": "https://rancher.example.com"}), \
              patch("app.services.auth.get_user_id", new=AsyncMock(return_value="user-789")) as mock_get:
-            result = await get_user_id_from_request(mock_request)
+            result = await get_user_id_from_token({"R_SESS": "my-session-token"})
         mock_get.assert_called_once_with("https://rancher.example.com", "my-session-token")
         assert result == "user-789"
 
     @pytest.mark.asyncio
+    async def test_api_token_env_takes_precedence_over_cookie(self):
+        with patch.dict(os.environ, {"RANCHER_URL": "https://rancher.example.com", "RANCHER_API_TOKEN": "env-token"}), \
+             patch("app.services.auth.get_user_id", new=AsyncMock(return_value="user-789")) as mock_get:
+            await get_user_id_from_token({"R_SESS": "cookie-token"})
+        mock_get.assert_called_once_with("https://rancher.example.com", "env-token")
+
+    @pytest.mark.asyncio
     async def test_returns_none_when_cluster_lookup_fails(self):
-        mock_request = MagicMock()
-        mock_request.cookies.get.return_value = "token"
         with patch.dict(os.environ, {}, clear=True), \
              patch("app.services.auth._load_rancher_url", return_value=None), \
              patch("app.services.auth.get_user_id", new=AsyncMock()) as mock_get:
-            result = await get_user_id_from_request(mock_request)
+            result = await get_user_id_from_token({"R_SESS": "token"})
         assert result is None
         mock_get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_uses_rancher_url_from_cluster_when_env_not_set(self):
-        mock_request = MagicMock()
-        mock_request.cookies.get.return_value = "token"
         with patch.dict(os.environ, {}, clear=True), \
              patch("app.services.auth._load_rancher_url", return_value="https://10.43.31.188"), \
              patch("app.services.auth.get_user_id", new=AsyncMock(return_value="user-001")) as mock_get:
-            await get_user_id_from_request(mock_request)
+            await get_user_id_from_token({"R_SESS": "token"})
         mock_get.assert_called_once_with("https://10.43.31.188", "token")
 
     @pytest.mark.asyncio
     async def test_env_var_takes_precedence_over_cluster_url(self):
-        mock_request = MagicMock()
-        mock_request.cookies.get.return_value = "token"
         with patch.dict(os.environ, {"RANCHER_URL": "https://rancher.example.com"}), \
              patch("app.services.auth._load_rancher_url") as mock_load, \
              patch("app.services.auth.get_user_id", new=AsyncMock(return_value="user-002")) as mock_get:
-            await get_user_id_from_request(mock_request)
+            await get_user_id_from_token({"R_SESS": "token"})
         mock_load.assert_not_called()
         mock_get.assert_called_once_with("https://rancher.example.com", "token")

@@ -3,8 +3,6 @@ import ssl
 import httpx
 import os
 import urllib3
-from urllib.parse import urlparse
-from fastapi import Request
 from typing import cast
 from kubernetes import client, config
 
@@ -130,7 +128,6 @@ async def get_user_id(host: str, token: str) -> str | None:
                 user_id = payload["data"][0]["id"]
 
                 if user_id:
-                    logging.info("user API returned: %s - userId %s", resp.status_code, user_id)
                     return user_id
                 break
         except httpx.ConnectError as e:
@@ -138,7 +135,7 @@ async def get_user_id(host: str, token: str) -> str | None:
                 logging.warning("TLS error connecting to Rancher API, reloading CA certificate and retrying")
                 _reset_cacerts_cache()
                 continue
-            logging.error("user API call failed: %s", e)
+            logging.error("TLS: user API call failed: %s", e)
             break
         except Exception as e:
             logging.error("user API call failed: %s", e)
@@ -146,20 +143,23 @@ async def get_user_id(host: str, token: str) -> str | None:
 
     return None
 
-async def get_user_id_from_request(request: Request) -> str | None:
+async def get_user_id_from_token(cookies) -> str | None:
     """
-    Retrieves the user ID from the Rancher API using the session token from the request cookies.
+    Retrieves the user ID from the Rancher API using the session token extracted
+    from the given cookies, preferring the RANCHER_API_TOKEN env var and falling
+    back to the R_SESS cookie.
     """
+    token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
+    if not token:
+        logging.warning("R_SESS token not found")
+        return None
+    
     rancher_url = os.environ.get("RANCHER_URL", "").strip()
     if not rancher_url:
         rancher_url = _load_rancher_url()
     if not rancher_url:
         logging.error("Rancher URL is not configured and could not be fetched from the cluster")
         return None
-    token = request.cookies.get("R_SESS")
 
-    if not token:
-        logging.warning("R_SESS cookie not found")
-        return None
 
     return await get_user_id(rancher_url, token)

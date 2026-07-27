@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response, JSONResponse
 
-from ..services.auth import get_user_id_from_request
+from ..services.auth import get_user_id_from_token
 
 router = APIRouter(prefix="/v1/api", tags=["chats"])
 
@@ -17,7 +17,7 @@ async def get_chats(request: Request, sort: str = "createdAt:desc"):
     """
 
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -52,7 +52,7 @@ async def delete_chats(request: Request) -> JSONResponse:
     """
 
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -84,7 +84,7 @@ async def get_chat(request: Request, chat_id: str) -> JSONResponse:
     """
 
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -125,7 +125,7 @@ async def update_chat(request: Request, chat_id: str, chat_data: dict) -> JSONRe
     """
 
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -179,7 +179,7 @@ async def delete_chat(request: Request, chat_id: str) -> JSONResponse:
     """
 
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -215,7 +215,7 @@ async def get_chat_messages(request: Request, chat_id: str) -> JSONResponse:
     """
 
     try:        
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")

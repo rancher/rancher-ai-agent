@@ -22,7 +22,7 @@ def mock_request():
 @pytest.mark.asyncio
 async def test_get_models_openai_success(mock_request):
     """Test getting OpenAI models successfully."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         resp = await config_router.get_models(mock_request, llm_name="openai")
         assert resp.status_code == status.HTTP_200_OK
         content = json.loads(resp.body)
@@ -33,7 +33,7 @@ async def test_get_models_openai_success(mock_request):
 @pytest.mark.asyncio
 async def test_get_models_gemini_success(mock_request):
     """Test getting Gemini models successfully."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         resp = await config_router.get_models(mock_request, llm_name="gemini")
         assert resp.status_code == status.HTTP_200_OK
         content = json.loads(resp.body)
@@ -44,7 +44,7 @@ async def test_get_models_gemini_success(mock_request):
 @pytest.mark.asyncio
 async def test_get_models_unsupported_provider(mock_request):
     """Test getting models for unsupported provider."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with pytest.raises(HTTPException) as exc:
             await config_router.get_models(mock_request, llm_name="invalid-provider")
         assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -53,7 +53,7 @@ async def test_get_models_unsupported_provider(mock_request):
 @pytest.mark.asyncio
 async def test_get_models_unauthorized(mock_request):
     """Test getting models without authentication."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value=None)):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc:
             await config_router.get_models(mock_request, llm_name="openai")
         assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
@@ -62,7 +62,7 @@ async def test_get_models_unauthorized(mock_request):
 @pytest.mark.asyncio
 async def test_get_models_ollama_no_url(mock_request):
     """Test getting Ollama models without URL parameter."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with pytest.raises(HTTPException) as exc:
             await config_router.get_models(mock_request, llm_name="ollama")
         assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -85,7 +85,7 @@ async def test_get_models_ollama_success(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -105,7 +105,7 @@ async def test_get_models_ollama_connection_error(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(side_effect=httpx.RequestError("Connection failed"))
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -125,7 +125,7 @@ async def test_get_models_ollama_bad_status(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -141,7 +141,7 @@ async def test_get_models_ollama_malformed_url(mock_request):
     
     import httpx
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_http_client = AsyncMock()
             mock_http_client.get = AsyncMock(side_effect=httpx.InvalidURL("Invalid port in URL"))
@@ -158,7 +158,7 @@ async def test_get_models_bedrock_missing_region(mock_request):
     """Test getting Bedrock models without region parameter."""
     mock_request.query_params = {"bearerToken": "test-token"}
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with pytest.raises(HTTPException) as exc:
             await config_router.get_models(mock_request, llm_name="bedrock")
         assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -169,7 +169,7 @@ async def test_get_models_bedrock_missing_credentials(mock_request):
     """Test getting Bedrock models without bearer token."""
     mock_request.query_params = {"region": "us-east-1"}
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with pytest.raises(HTTPException) as exc:
             await config_router.get_models(mock_request, llm_name="bedrock")
         assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -195,7 +195,7 @@ async def test_get_models_bedrock_bearer_token_success(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -226,7 +226,7 @@ async def test_get_models_bedrock_bearer_token_invalid(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -256,7 +256,7 @@ async def test_get_models_bedrock_with_openai_models(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -292,7 +292,7 @@ async def test_get_models_bedrock_with_already_prefixed_models(mock_request):
     mock_http_client = AsyncMock()
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -310,7 +310,7 @@ async def test_get_models_bedrock_with_already_prefixed_models(mock_request):
 @pytest.mark.asyncio
 async def test_get_settings_success(mock_request):
     """Test getting settings successfully."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         resp = await config_router.get_settings(mock_request)
         assert resp.status_code == status.HTTP_200_OK
         content = json.loads(resp.body)
@@ -321,7 +321,7 @@ async def test_get_settings_success(mock_request):
 @pytest.mark.asyncio
 async def test_get_settings_unauthorized(mock_request):
     """Test getting settings without authentication."""
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value=None)):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc:
             await config_router.get_settings(mock_request)
         assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
@@ -331,7 +331,7 @@ async def test_get_settings_unauthorized(mock_request):
 async def test_update_settings_unauthorized(mock_request):
     """Test updating settings without authentication."""
     settings = SettingsUpdate(OPENAI_API_KEY="test-key")
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value=None)):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc:
             await config_router.update_settings(settings, mock_request)
         assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
@@ -341,7 +341,7 @@ async def test_update_settings_unauthorized(mock_request):
 async def test_update_settings_permission_denied(mock_request):
     """Test updating settings without permission."""
     settings = SettingsUpdate(OPENAI_API_KEY="test-key")
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=False)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_403_FORBIDDEN
@@ -369,7 +369,7 @@ async def test_update_settings_success(mock_request):
         "OPENAI_MODEL": "gpt-3.5-turbo",
     }
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             with patch("app.routers.configuration.k8s_config.load_incluster_config"):
                 with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
@@ -392,7 +392,7 @@ async def test_update_settings_k8s_error(mock_request):
     """Test updating settings with Kubernetes API error."""
     settings = SettingsUpdate(OPENAI_API_KEY="test-key")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             with patch("app.routers.configuration.k8s_config.load_incluster_config"):
                 with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
@@ -428,7 +428,7 @@ async def test_update_settings_partial_fields(mock_request):
         "ACTIVE_LLM": "gemini",
     }
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             with patch("app.routers.configuration.k8s_config.load_incluster_config"):
                 with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
@@ -460,7 +460,7 @@ async def test_update_settings_nonexistent_field(mock_request):
     mock_configmap = MagicMock()
     mock_configmap.data = {}
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             with patch("app.routers.configuration.k8s_config.load_incluster_config"):
                 with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
@@ -482,7 +482,7 @@ async def test_update_settings_validate_ollama(mock_request):
     """Test validation when ACTIVE_LLM is set to ollama."""
     settings = SettingsUpdate(ACTIVE_LLM="ollama")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -495,7 +495,7 @@ async def test_update_settings_validate_invalid_llm(mock_request):
     """Test validation when ACTIVE_LLM is set to an invalid value."""
     settings = SettingsUpdate(ACTIVE_LLM="invalid-llm")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -525,7 +525,7 @@ async def test_update_settings_validate_ollama_success(mock_request):
         "ACTIVE_LLM": "gemini"
     }
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             with patch("app.routers.configuration.k8s_config.load_incluster_config"):
                 with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
@@ -543,7 +543,7 @@ async def test_update_settings_validate_bedrock_missing_region(mock_request):
     """Test validation when ACTIVE_LLM is bedrock without region."""
     settings = SettingsUpdate(ACTIVE_LLM="bedrock", BEDROCK_MODEL="claude-opus")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -560,7 +560,7 @@ async def test_update_settings_validate_bedrock_missing_auth(mock_request):
         BEDROCK_MODEL="claude-opus"
     )
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -590,7 +590,7 @@ async def test_update_settings_validate_bedrock_with_bearer_token(mock_request):
         "ACTIVE_LLM": "openai"
     }
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             with patch("app.routers.configuration.k8s_config.load_incluster_config"):
                 with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
@@ -608,7 +608,7 @@ async def test_update_settings_validate_openai(mock_request):
     """Test validation when ACTIVE_LLM is openai."""
     settings = SettingsUpdate(ACTIVE_LLM="openai", OPENAI_MODEL="gpt-4")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -621,7 +621,7 @@ async def test_update_settings_validate_gemini(mock_request):
     """Test validation when ACTIVE_LLM is gemini."""
     settings = SettingsUpdate(ACTIVE_LLM="gemini", GEMINI_MODEL="gemini-2.0-flash")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -633,7 +633,7 @@ async def test_update_settings_validate_generic_openai(mock_request):
     """Test validation when ACTIVE_LLM is generic-openai."""
     settings = SettingsUpdate(ACTIVE_LLM="generic-openai", GENERIC_OPENAI_MODEL="gpt-4")
     
-    with patch("app.routers.configuration.get_user_id_from_request", AsyncMock(return_value="test-user")):
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
             resp = await config_router.update_settings(settings, mock_request)
             assert resp.status_code == status.HTTP_400_BAD_REQUEST

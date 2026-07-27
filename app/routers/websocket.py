@@ -21,20 +21,10 @@ from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 
-from ..services.auth import get_user_id
+from ..services.auth import get_user_id_from_token
 from ..constants import CONTEXT_PARAMETERS_SUFFIX
 
 router = APIRouter()
-
-async def get_user_id_from_websocket(websocket: WebSocket) -> str:
-    """
-    Retrieves the user ID from the Rancher API using the session token from the WebSocket cookies.
-    """
-    cookies = websocket.cookies
-    rancher_url = os.environ.get("RANCHER_URL","https://rancher.cattle-system")
-    token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
-
-    return await get_user_id(rancher_url, token)
 
 def build_chat_metadata(thread_id: str, agents_metadata: list[dict], websocket: WebSocket) -> str:
     """
@@ -71,7 +61,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     handles the back-and-forth communication with the client.
     """
     
-    user_id = await get_user_id_from_websocket(websocket)
+    user_id = await get_user_id_from_token(websocket.cookies)
     
     if not thread_id:
         thread_id = str(uuid.uuid4())

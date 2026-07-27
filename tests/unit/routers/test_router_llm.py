@@ -17,7 +17,7 @@ async def test_complete_ui_tools_success(mock_request):
     mock_selector = MagicMock()
     mock_selector.select_tools = AsyncMock(return_value=[{"toolName": "show"}])
     
-    with patch("app.routers.llm.get_user_id_from_request", AsyncMock(return_value="u")):
+    with patch("app.routers.llm.get_user_id_from_token", AsyncMock(return_value="u")):
         ui_tools_config = llm_router.UIToolsConfig(name="tools", tools=["show"])
         ui_tools_request = llm_router.UIToolsRequest(
             prompt="test",
@@ -31,7 +31,7 @@ async def test_complete_ui_tools_success(mock_request):
 
 @pytest.mark.asyncio
 async def test_complete_ui_tools_missing_name(mock_request):    
-    with patch("app.routers.llm.get_user_id_from_request", AsyncMock(return_value="u")):
+    with patch("app.routers.llm.get_user_id_from_token", AsyncMock(return_value="u")):
         ui_tools_config = llm_router.UIToolsConfig(name="", tools=None)
         ui_tools_request = llm_router.UIToolsRequest(
             prompt="test",

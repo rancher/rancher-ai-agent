@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from langchain_core.language_models.llms import BaseLanguageModel
 
-from ..services.auth import get_user_id_from_request
+from ..services.auth import get_user_id_from_token
 from ..dependencies import get_llm
 from ..services.ui_tools.selector import create_ui_tools_selector
 
@@ -45,7 +45,7 @@ async def complete_ui_tools(
     """
 
     try:
-        user_id = await get_user_id_from_request(request)
+        user_id = await get_user_id_from_token(request.cookies)
         
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")

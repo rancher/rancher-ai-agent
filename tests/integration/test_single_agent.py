@@ -59,7 +59,7 @@ def setup_mock_mcp_server(module_monkeypatch):
 
     app.memory_manager = MockMemoryManager()
     
-    module_monkeypatch.setattr("app.routers.websocket.get_user_id", AsyncMock(return_value="test-user-id"))
+    module_monkeypatch.setattr("app.routers.websocket.get_user_id_from_token", AsyncMock(return_value="test-user-id"))
     
     mock_agent_config = AgentConfig(
         name="test-agent",

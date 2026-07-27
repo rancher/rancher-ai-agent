@@ -1,8 +1,11 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import RANCHER_AGENT_PROMPT, AgentConfig, AuthenticationType
-from app.services.agent.child import CHILD_TOOL_USE_INSTRUCTIONS
-from app.services.agent.system_prompts import IDENTITY_PREAMBLE
+from app.services.agent.child import CHILD_TOOL_USE_INSTRUCTIONS as _CHILD_TOOL_USE_INSTRUCTIONS
+from app.services.agent.system_prompts import IDENTITY_PREAMBLE, SEQUENTIAL_TOOL_CALLS
+
+# Child agents build their system prompt as: system_prompt + CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
+CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
 from mcp.server.fastmcp import FastMCP

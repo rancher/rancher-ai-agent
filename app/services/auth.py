@@ -78,7 +78,7 @@ def _load_rancher_url() -> str | None:
         url: str = result.get("value", "")
         if url:
             _rancher_url = url
-            logging.info("Loaded Rancher URL from internal-server-url setting: %s", url)
+            logging.info("Loaded Rancher URL from internal-server-url setting")
         else:
             logging.warning("internal-server-url setting is empty")
     except Exception as e:

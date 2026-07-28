@@ -51,6 +51,10 @@ probes:
     timeoutSeconds: 5
     failureThreshold: 2
 insecureSkipTls: false
+proxy:
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""
 seLinux:
   enabled: false
 llmMock:

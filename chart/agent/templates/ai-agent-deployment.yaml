@@ -164,6 +164,24 @@ spec:
             value: "{{ .Values.llmMock.enabled }}"
           - name: LLM_MOCK_URL
             value: "{{ .Values.llmMock.url }}"
+          {{- if .Values.proxy.httpProxy }}
+          - name: HTTP_PROXY
+            value: "{{ .Values.proxy.httpProxy }}"
+          - name: http_proxy
+            value: "{{ .Values.proxy.httpProxy }}"
+          {{- end }}
+          {{- if .Values.proxy.httpsProxy }}
+          - name: HTTPS_PROXY
+            value: "{{ .Values.proxy.httpsProxy }}"
+          - name: https_proxy
+            value: "{{ .Values.proxy.httpsProxy }}"
+          {{- end }}
+          {{- if .Values.proxy.noProxy }}
+          - name: NO_PROXY
+            value: "{{ .Values.proxy.noProxy }}"
+          - name: no_proxy
+            value: "{{ .Values.proxy.noProxy }}"
+          {{- end }}
         ports:
          - containerPort: 8000
         startupProbe:

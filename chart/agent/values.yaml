@@ -26,6 +26,7 @@ openaiUrl:
 awsBedrock:
   bearerToken:
   region:
+  url:
 genericOpenaiUrl:
 genericOpenaiApiKey:
 activeLlm: # ollama, gemini, openai, bedrock, generic-openai

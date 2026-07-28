@@ -87,6 +87,9 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
     if activeLlm == "bedrock":
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
+        bedrock_url = os.environ.get("BEDROCK_URL")
+        if bedrock_url:
+            return ChatBedrockConverse(model=model, endpoint_url=bedrock_url)
         return ChatBedrockConverse(model=model)
     if activeLlm == "generic-openai":        
         generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")

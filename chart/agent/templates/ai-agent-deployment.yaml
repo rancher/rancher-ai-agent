@@ -140,6 +140,12 @@ spec:
                 name: llm-secret
                 key: AWS_REGION
                 optional: true
+          - name: BEDROCK_URL
+            valueFrom:
+              secretKeyRef:
+                name: llm-secret
+                key: BEDROCK_URL
+                optional: true
           - name: GENERIC_OPENAI_URL
             valueFrom:
               secretKeyRef:

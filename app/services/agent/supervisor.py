@@ -31,7 +31,9 @@ from .middleware import (
     MessagesHistoryMiddleware,
     cancel_human_validation_middleware,
     inject_additional_kwargs_middleware,
-    ui_tools_middleware
+    ui_tools_middleware,
+    build_summarization_model,
+    summary_token_counter,
 )
 from ._constants import NeedsOauth2
 
@@ -148,7 +150,12 @@ def create_supervisor_agent(
             cancel_human_validation_middleware(),
             inject_additional_kwargs_middleware(),
             ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm.bind_tools(agent_tools), trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+            SummarizationMiddleware(
+                model=build_summarization_model(llm),
+                token_counter=summary_token_counter(llm),
+                trigger=[("messages", 30), ("tokens", 30000)],
+                keep=("messages", 15),
+            ),
         ],
     )
 

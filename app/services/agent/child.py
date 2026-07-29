@@ -21,6 +21,8 @@ from .middleware import (
     identity_preamble_middleware,
     human_validation_middleware,
     cancel_human_validation_middleware,
+    build_summarization_model,
+    summary_token_counter,
 )
 from ..llm import get_llm_with_model
 
@@ -58,7 +60,12 @@ def create_child_agent(
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm, only_when_direct=True),
-        SummarizationMiddleware(model=llm.bind_tools(tools), trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+        SummarizationMiddleware(
+            model=build_summarization_model(llm),
+            token_counter=summary_token_counter(llm),
+            trigger=[("messages", 30), ("tokens", 30000)],
+            keep=("messages", 15),
+        ),
     ]
 
     if agent_config.llm_model_enabled and agent_config.llm_model:

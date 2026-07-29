@@ -544,18 +544,28 @@ async def test_load_mcp_tools_filters_by_toolset(mock_update_status, mock_create
     tool_other.name = "other_tool"
     tool_other.metadata = {"_meta": {"toolset": "fleet"}}
 
+    tool_multi_after = MagicMock()
+    tool_multi_after.name = "multi_toolset_after"
+    tool_multi_after.metadata = {"_meta": {"toolset": "fleet, rancher-core"}}
+
+    tool_multi_before = MagicMock()
+    tool_multi_before.name = "multi_toolset_before"
+    tool_multi_before.metadata = {"_meta": {"toolset": "rancher-core, harvester, fleet"}}
+
     tool_no_meta = MagicMock()
     tool_no_meta.name = "generic_tool"
     tool_no_meta.metadata = {}
 
     mock_client_instance = MagicMock()
-    mock_client_instance.get_tools = AsyncMock(return_value=[tool_matching, tool_other, tool_no_meta])
+    mock_client_instance.get_tools = AsyncMock(return_value=[tool_matching, tool_other, tool_multi_after, tool_multi_before, tool_no_meta])
     mock_create_client.return_value = mock_client_instance
 
     result = await _load_mcp_tools(mock_config, mock_websocket)
 
-    assert len(result) == 1
+    assert len(result) == 3
     assert result[0].name == "matching_tool"
+    assert result[1].name == "multi_toolset_after"
+    assert result[2].name == "multi_toolset_before"
 
 
 @pytest.mark.asyncio

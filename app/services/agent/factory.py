@@ -168,9 +168,14 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
                 f"Please check the AI Agents configuration and ensure the MCP server is accessible."
             ) from eg
 
-
     if agent_cfg.toolset:
-        tools = [t for t in tools if t.metadata.get("_meta", {}).get("toolset") == agent_cfg.toolset]
+        tools = [
+            t for t in tools
+            if agent_cfg.toolset in [
+                ts.strip() 
+                for ts in (((t.metadata or {}).get("_meta") or {}).get("toolset") or "").split(",")
+            ]
+        ]                
         logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
 
     _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')

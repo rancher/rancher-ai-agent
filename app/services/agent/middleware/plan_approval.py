@@ -21,12 +21,14 @@ def plan_approval_middleware():
     ``TodoListMiddleware`` exposes a ``write_todos`` tool the agent uses to lay out a
     multi-step plan. When the agent first creates that plan, this middleware pauses the
     graph via ``langgraph.types.interrupt()`` and surfaces the proposed todo list to the
-    client so the user can accept or reject it before any work starts.
+    client so the user can accept, reject, or revise it before any work starts.
 
-    - If the user accepts (answers ``"yes"``), the ``write_todos`` tool executes normally
-      and the agent proceeds with the plan.
-    - If the user rejects, a ``ToolMessage`` with ``INTERRUPT_CANCEL_MESSAGE`` is returned
-      so ``cancel_human_validation_middleware`` ends the graph gracefully.
+    - ``"yes"``: the ``write_todos`` tool executes normally and the agent proceeds.
+    - ``"no"``: a ``ToolMessage`` with ``INTERRUPT_CANCEL_MESSAGE`` is returned so
+      ``cancel_human_validation_middleware`` ends the graph gracefully.
+    - any other text: treated as feedback. The plan is not written and a ``ToolMessage``
+      relaying the feedback is returned so the agent revises the plan and calls
+      ``write_todos`` again — which is gated by this middleware once more.
 
     Subsequent ``write_todos`` calls (status updates on an already-approved plan) are not
     gated, so the agent can mark todos in-progress/completed without re-prompting.
@@ -58,11 +60,34 @@ def plan_approval_middleware():
             }
         )
 
-        if response != "yes":
+        normalized = response.strip().lower() if isinstance(response, str) else response
+
+        if normalized == "no":
             logging.debug("User rejected the proposed plan")
             additional_kwargs["confirmation"] = False
             return ToolMessage(
                 content=INTERRUPT_CANCEL_MESSAGE,
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+                additional_kwargs=additional_kwargs,
+            )
+
+        if normalized != "yes":
+            # Any answer other than yes/no is treated as feedback: the plan is not
+            # written and the agent is asked to revise it. Since write_todos never
+            # executes, the `todos` state stays empty and the revised plan is gated
+            # by this middleware again.
+            logging.debug("User requested changes to the proposed plan")
+            additional_kwargs["confirmation"] = False
+            return ToolMessage(
+                content=(
+                    "The user requested changes to this plan. Immediately call "
+                    "write_todos again with the revised plan that incorporates the "
+                    "feedback below. Do NOT reply with text, do NOT ask the user to "
+                    "confirm, and do NOT wait for further input — the updated plan will "
+                    "be presented to the user for approval automatically.\n"
+                    f"User feedback: {response}"
+                ),
                 name=tool_call["name"],
                 tool_call_id=tool_call["id"],
                 additional_kwargs=additional_kwargs,

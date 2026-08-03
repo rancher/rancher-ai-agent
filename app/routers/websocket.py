@@ -255,7 +255,13 @@ async def _call_agent(
             # Model turn is complete: the AIMessage now has fully-assembled tool_calls,
             # so the `write_todos` args can be read here (they arrive as partial chunks while streaming).
             if todos := _extract_todos(stream):
-                await websocket.send_text(todos)
+                # The initial plan is gated by plan_approval_middleware, which surfaces
+                # the todos inside the following <plan-approval> interrupt. Suppress the
+                # pre-approval <todos> here so the plan is not shown before it is approved.
+                # Only forward todos for status updates on an already-approved plan
+                # (i.e. once todos exist in state).
+                if await _plan_already_approved(agent, config):
+                    await websocket.send_text(todos)
 
         if stream["event"] == "on_custom_event":
             # App-dispatched events (e.g. subagent_call, ui_tools) — already formatted, forward as-is.
@@ -354,6 +360,23 @@ def _extract_todos(stream: dict) -> str | None:
             return f"<todos>{json.dumps({'todos': todos})}</todos>"
 
     return None
+
+async def _plan_already_approved(agent: CompiledStateGraph, config: dict) -> bool:
+    """Return True if a plan has already been written to state (and thus approved).
+
+    ``plan_approval_middleware`` gates only the *first* ``write_todos`` call, surfacing
+    the proposed plan through a ``<plan-approval>`` interrupt. At that point the ``todos``
+    state key is still empty, so this returns False and the pre-approval ``<todos>``
+    message is suppressed. Once the plan is approved and written, ``todos`` is populated,
+    so subsequent status updates return True and stream normally.
+    """
+    try:
+        state = await agent.aget_state(config=config)
+        return bool(state.values.get("todos"))
+    except Exception as e:
+        logging.debug("Could not determine plan approval state: %s", e)
+        return True
+
 
 def _extract_interrupt_value(stream: dict) -> str | None:
     """

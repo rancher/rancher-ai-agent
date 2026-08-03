@@ -236,19 +236,29 @@ async def _call_agent(
     """
 
     await websocket.send_text("<message>")
-    
+
+    interrupt_surfaced = False
     async for stream in agent.astream_events(
         input_data,
         config=config,
         stream_mode=["updates", "messages", "custom", "events"],
     ):
+        logging.debug("astream event: %s (name=%s)", stream["event"], stream.get("name"))
         if stream["event"] == "on_chat_model_stream":
+            # Token-by-token model output — stream visible text to the client as it's generated.
             if not _should_stream_text(stream):
                 continue
             if text := _extract_streaming_text(stream):
                 await websocket.send_text(text)
-        
+
+        if stream["event"] == "on_chat_model_end":
+            # Model turn is complete: the AIMessage now has fully-assembled tool_calls,
+            # so the `write_todos` args can be read here (they arrive as partial chunks while streaming).
+            if todos := _extract_todos(stream):
+                await websocket.send_text(todos)
+
         if stream["event"] == "on_custom_event":
+            # App-dispatched events (e.g. subagent_call, ui_tools) — already formatted, forward as-is.
             event_data = stream.get("data", "")
             # Send custom events as-is (they should already be formatted)
             if isinstance(event_data, str):
@@ -257,8 +267,26 @@ async def _call_agent(
                 await websocket.send_text(json.dumps(event_data))
     
         if stream["event"] == "on_chain_stream":
+            # Graph-level updates — this is where LangGraph surfaces interrupts (__interrupt__).
             if interrupt_value := _extract_interrupt_value(stream):
                 await websocket.send_text(interrupt_value)
+                interrupt_surfaced = True
+
+    # Interrupts raised from inside a tool node (e.g. a child agent invoked as a tool
+    # re-triggering a confirmation) bubble up as GraphBubbleUp and pause the graph
+    # WITHOUT emitting an `__interrupt__` chunk in the event stream. Without this the
+    # run looks "stuck": astream_events returns normally but the graph is waiting for a
+    # resume that never comes because the client was never prompted. Surface any pending
+    # interrupt from the final checkpoint state as a fallback.
+    if not interrupt_surfaced:
+        try:
+            final_state = await agent.aget_state(config=config)
+            if final_state and final_state.interrupts:
+                if prompt := _format_interrupt_value(final_state.interrupts[0].value):
+                    logging.debug("Surfacing pending interrupt from final graph state to the client")
+                    await websocket.send_text(prompt)
+        except Exception as e:
+            logging.debug("Could not inspect final graph state after stream: %s", e)
 
 
 def _should_stream_text(stream: dict) -> bool:
@@ -301,6 +329,32 @@ def _extract_streaming_text(stream: dict) -> str | None:
     
     return _extract_text_from_chunk_content(chunk.content)
 
+def _extract_todos(stream: dict) -> str | None:
+    """
+    Extracts todo-list updates from a chat model end event.
+
+    The TodoListMiddleware exposes a ``write_todos`` tool. Whenever the agent updates
+    its plan, the model output contains a ``write_todos`` tool call whose args carry the
+    full todo list. This surfaces that list to the client as a ``<todos>`` message.
+
+    Args:
+        stream: The stream event dictionary from astream_events.
+
+    Returns:
+        A ``<todos>{json}</todos>`` string if a todo update is present, None otherwise.
+    """
+    output = stream.get("data", {}).get("output")
+    tool_calls = getattr(output, "tool_calls", None)
+    if not tool_calls:
+        return None
+
+    for tc in tool_calls:
+        if tc.get("name") == "write_todos":
+            todos = tc.get("args", {}).get("todos", [])
+            return f"<todos>{json.dumps({'todos': todos})}</todos>"
+
+    return None
+
 def _extract_interrupt_value(stream: dict) -> str | None:
     """
     Extracts the interrupt value from a chain stream event.
@@ -333,7 +387,18 @@ def _extract_interrupt_value(stream: dict) -> str | None:
     if not interrupts:
         return None
     
-    value = interrupts[0].value
+    return _format_interrupt_value(interrupts[0].value)
+
+def _format_interrupt_value(value: any) -> str | None:
+    """
+    Formats an interrupt's value into the string sent to the client.
+
+    Args:
+        value: The ``Interrupt.value`` payload (dict with a ``message`` key, str, or other).
+
+    Returns:
+        The prompt string to send, or None if there is nothing to surface.
+    """
     if value is None:
         return None
     if isinstance(value, dict):

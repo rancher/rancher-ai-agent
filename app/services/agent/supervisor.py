@@ -12,12 +12,14 @@ import json
 import logging
 import yaml
 
+from typing import Sequence, cast
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
-from langchain.agents.middleware import SummarizationMiddleware
+from langgraph.graph.state import CompiledStateGraph, Checkpointer
+from langchain.agents.middleware import AgentMiddleware, SummarizationMiddleware
+from langchain.agents.middleware.todo import TodoListMiddleware
 from langchain.messages import  HumanMessage, ToolMessage
 import langgraph.types
 from langgraph.errors import GraphBubbleUp
@@ -34,6 +36,7 @@ from .middleware import (
     ui_tools_middleware
 )
 from ._constants import NeedsOauth2
+
 
 @dataclass
 class ChildAgent:
@@ -137,19 +140,28 @@ def create_supervisor_agent(
         [t.name for t in agent_tools],
     )
 
+
     return create_agent(
-        llm,
+        model=llm,
         tools=agent_tools,
         system_prompt=SUPERVISOR_PROMPT,
         checkpointer=checkpointer,
         name="supervisor",
-        middleware=[
+        middleware=cast(
+        Sequence[AgentMiddleware],
+        [
             MessagesHistoryMiddleware(),
             cancel_human_validation_middleware(),
             inject_additional_kwargs_middleware(),
             ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+            TodoListMiddleware(),
+            SummarizationMiddleware(
+                model=llm,
+                trigger=[("messages", 30), ("tokens", 30000)],
+                keep=("messages", 15),
+            ),
         ],
+        ),
     )
 
 def _build_child_config(agent_name: str) -> RunnableConfig:
@@ -293,6 +305,11 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
             raise NeedsOauth2(child_agent.config)
 
         child_config = _build_child_config(agent_name)
+        # Suppress the child's own token stream from reaching the client. The supervisor
+        # synthesizes the final answer; leaking the child's raw output (and its custom
+        # events) here would corrupt the stream, including any confirmation prompt the
+        # child re-triggers. Applied to both the fresh and resume invocations below.
+        child_config["tags"] = ["no-stream"]
         child_state = await child_agent.agent.aget_state(config=child_config)
         interrupt_ui_tools: list[dict] = []
 
@@ -323,8 +340,6 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
                         metadata["ui_tools"] = interrupt_ui_tools
                     return INTERRUPT_CANCEL_MESSAGE, metadata
         else:
-            child_config["tags"] = ["no-stream"]
-            
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
             try:
                 result = await child_agent.agent.ainvoke(

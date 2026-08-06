@@ -12,6 +12,7 @@ from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
 from ...ui_tools.selector import create_ui_tools_selector
+from .messages_history import merge_usage, usage_entry_from_metadata
 
 
 def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
@@ -37,13 +38,15 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
         if only_when_direct and not config.get("configurable", {}).get("agent"):
             return None
 
-        ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
+        ui_tools_list, usage, usage_id = await _dispatch_ui_tools_event(llm, state, config)
+
+        result: dict[str, Any] = {}
 
         if ui_tools_list:
             request_id = config.get("configurable", {}).get("request_id")
             if request_id:
                 last_message.additional_kwargs["ui_tools"] = ui_tools_list
-                result: dict[str, Any] = {"messages": [last_message]}
+                result["messages"] = [last_message]
                 history = state.get("messages_history", [])
                 if history:
                     msg_id = getattr(last_message, "id", None)
@@ -52,9 +55,14 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
                         for m in history
                     ]
                     result["messages_history"] = updated_history
-                return result
 
-        return None
+        # Account for the tokens the selector call spent, even when no tools were
+        # selected (the LLM call still consumed tokens).
+        entry = usage_entry_from_metadata(usage, "ui-tools")
+        if entry and usage_id:
+            result["token_usage"] = merge_usage(state.get("token_usage"), {usage_id: entry})
+
+        return result or None
 
     return ui_tools_dispatch
 
@@ -74,11 +82,13 @@ async def _dispatch_ui_tools_event(
     llm: BaseChatModel,
     state: AgentState[Any],
     config: RunnableConfig,
-) -> list[dict]:
+) -> tuple[list[dict], dict | None, str | None]:
     """Select and dispatch UI tools based on the current conversation state.
 
     Returns:
-        List of selected UI tools, or empty list if dispatch was skipped.
+        A ``(ui_tools_list, usage_metadata, usage_id)`` tuple. The list is empty and
+        usage is None if dispatch was skipped; usage may be present even when the
+        list is empty (the selection LLM call still spent tokens).
     """
     try:
         request_metadata = config.get("configurable", {}).get("request_metadata", {})
@@ -88,7 +98,7 @@ async def _dispatch_ui_tools_event(
 
         selector = create_ui_tools_selector(llm, ui_tools_config)
         if not selector:
-            return []
+            return [], None, None
 
         await adispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
@@ -104,10 +114,10 @@ async def _dispatch_ui_tools_event(
         )
 
         _dispatch_ui_tools(ui_tools_list)
-        return ui_tools_list
+        return ui_tools_list, selector.last_usage, selector.last_usage_id
     except Exception as e:
         logging.error(f"Error dispatching UI tools event: {e}", exc_info=True)
-        return []
+        return [], None, None
 
 
 def _collect_all_mcp_responses(state: AgentState[Any]) -> str | None:

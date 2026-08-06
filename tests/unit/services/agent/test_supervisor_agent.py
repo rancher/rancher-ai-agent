@@ -103,8 +103,6 @@ def test_create_supervisor_agent_registers_expected_middleware(mock_create_agent
     from app.services.agent.middleware import (
         MessagesHistoryMiddleware,
     )
-    from langchain.agents.middleware import SummarizationMiddleware
-
     mock_create_agent.return_value = MagicMock()
 
     create_supervisor_agent(mock_llm, mock_child_agents, mock_checkpointer)
@@ -115,7 +113,7 @@ def test_create_supervisor_agent_registers_expected_middleware(mock_create_agent
     # Check expected middleware types are present
     middleware_types = [type(m).__name__ for m in middleware]
     assert "MessagesHistoryMiddleware" in middleware_types
-    assert "SummarizationMiddleware" in middleware_types
+    assert "UsageTrackingSummarizationMiddleware" in middleware_types
 
     # Decorator-based middleware are plain functions, check count
     assert len(middleware) == 5

@@ -79,7 +79,6 @@ def test_create_child_agent_excludes_plan_tools_from_execution(mock_create_agent
 def test_create_child_agent_registers_expected_middleware(mock_create_agent, mock_llm, mock_checkpointer, agent_config):
     """Verify the child agent registers the expected middleware stack."""
     from app.services.agent.middleware import MessagesHistoryMiddleware
-    from langchain.agents.middleware import SummarizationMiddleware
 
     mock_create_agent.return_value = MagicMock()
 
@@ -97,7 +96,7 @@ def test_create_child_agent_registers_expected_middleware(mock_create_agent, moc
 
     middleware_types = [type(m).__name__ for m in middleware]
     assert "MessagesHistoryMiddleware" in middleware_types
-    assert "SummarizationMiddleware" in middleware_types
+    assert "UsageTrackingSummarizationMiddleware" in middleware_types
 
     # 7 middleware total: MessagesHistory, human_validation, identity_preamble,
     # cancel_check, inject_kwargs, ui_tools, Summarization

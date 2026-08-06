@@ -10,6 +10,77 @@ from typing_extensions import override
 from ....constants import INTERRUPT_CANCEL_REPLY
 
 
+def merge_usage(existing: dict | None, new_entries: dict | None) -> dict:
+    """Merge token-usage entries keyed by message id.
+
+    ``create_agent`` registers middleware-declared channels as ``LastValue`` (the
+    ``Annotated`` reducer is ignored), so every write site must read the existing
+    ``token_usage`` and return the full merged dict — mirroring how
+    MessagesHistoryMiddleware rebuilds ``messages_history``. Keying by message id
+    keeps accumulation idempotent across retries/resumes.
+    """
+    return {**(existing or {}), **(new_entries or {})}
+
+
+def usage_entry_from_metadata(um: dict | None, source: str) -> dict | None:
+    """Build a ``token_usage`` entry from a raw ``usage_metadata`` dict.
+
+    Returns None when there is no usage metadata. ``source`` tags where the tokens
+    were spent ("agent", "ui-tools", "summarization") so the read layer can bucket
+    usage per source.
+    """
+    if not um:
+        return None
+    details = um.get("input_token_details") or {}
+    return {
+        "source": source,
+        "input_tokens": um.get("input_tokens", 0),
+        "output_tokens": um.get("output_tokens", 0),
+        "total_tokens": um.get("total_tokens", 0),
+        "cache_read": details.get("cache_read", 0),
+        "cache_creation": details.get("cache_creation", 0),
+    }
+
+
+def usage_entry(msg: AnyMessage, source: str) -> dict | None:
+    """Build a ``token_usage`` entry from a message's ``usage_metadata``."""
+    return usage_entry_from_metadata(getattr(msg, "usage_metadata", None), source)
+
+
+def usage_entry_from_response(response: Any, source: str) -> dict | None:
+    """Build a ``token_usage`` entry from a model response, with fallbacks.
+
+    Prefers the normalized ``usage_metadata``. When it is absent (some providers
+    only populate it on *streamed* calls, so a plain ``.ainvoke`` — as used by
+    summarization — may lack it), falls back to the raw counts most providers put
+    in ``response_metadata`` under ``token_usage`` / ``usage``
+    (OpenAI-style ``prompt_tokens``/``completion_tokens`` or Anthropic-style
+    ``input_tokens``/``output_tokens``).
+    """
+    entry = usage_entry_from_metadata(getattr(response, "usage_metadata", None), source)
+    if entry:
+        return entry
+
+    meta = getattr(response, "response_metadata", None) or {}
+    raw = meta.get("token_usage") or meta.get("usage") or {}
+    if not raw:
+        return None
+
+    input_tokens = raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0
+    output_tokens = raw.get("output_tokens", raw.get("completion_tokens", 0)) or 0
+    total_tokens = raw.get("total_tokens", input_tokens + output_tokens) or 0
+    if not (input_tokens or output_tokens or total_tokens):
+        return None
+    return {
+        "source": source,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
+
+
 def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
     """Return messages worth preserving in the full history.
 
@@ -68,7 +139,18 @@ def _append_new_to_history(
     return updated if changed else None
 
 
-class _MessagesHistoryState(AgentState):
+class _TokenUsageState(AgentState):
+    """State channel accumulating per-model-call token usage, keyed by message id.
+
+    Declared as a shared base so any middleware (agent turns, ui-tools,
+    summarization) can write ``token_usage`` updates into the same channel. The
+    channel is effectively LastValue under create_agent, so writers must merge with
+    the existing value via ``merge_usage`` and return the full dict.
+    """
+    token_usage: NotRequired[Annotated[dict[str, dict], merge_usage, OmitFromSchema()]]
+
+
+class _MessagesHistoryState(_TokenUsageState):
     """Extended state that keeps a full, unsummarized copy of all messages."""
     messages_history: NotRequired[Annotated[list[AnyMessage], add_messages, OmitFromSchema()]]
 
@@ -87,7 +169,26 @@ class MessagesHistoryMiddleware(AgentMiddleware):
     def after_model(self, state, runtime) -> dict[str, Any] | None:
         candidates = _select_history_messages(state.get("messages", []))
         updated = _append_new_to_history(candidates, state.get("messages_history", []))
-        return {"messages_history": updated} if updated is not None else None
+
+        result: dict[str, Any] = {}
+        if updated is not None:
+            result["messages_history"] = updated
+
+        # Capture token usage from the model call that just produced the last
+        # AIMessage. Recording here (before summarization can prune it) keeps the
+        # count accurate even for tool-call turns that never enter messages_history.
+        messages = state.get("messages", [])
+        last = messages[-1] if messages else None
+        if (
+            isinstance(last, AIMessage)
+            and getattr(last, "id", None)
+            and last.additional_kwargs.get("lc_source") != "summarization"
+        ):
+            entry = usage_entry(last, "agent")
+            if entry:
+                result["token_usage"] = merge_usage(state.get("token_usage"), {last.id: entry})
+
+        return result or None
 
     @override
     def after_agent(self, state, runtime) -> dict[str, Any] | None:

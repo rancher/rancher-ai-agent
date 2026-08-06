@@ -8,7 +8,6 @@ and automatic retry on malformed tool calls.
 """
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import Checkpointer, CompiledStateGraph
@@ -16,6 +15,7 @@ from langgraph.graph.state import Checkpointer, CompiledStateGraph
 from .loader import AgentConfig
 from .middleware import (
     MessagesHistoryMiddleware,
+    UsageTrackingSummarizationMiddleware,
     ui_tools_middleware,
     inject_additional_kwargs_middleware,
     identity_preamble_middleware,
@@ -59,7 +59,7 @@ def create_child_agent(
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm, only_when_direct=True),
-        SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+        UsageTrackingSummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
     ]
 
     if agent_config.llm_model_enabled and agent_config.llm_model:

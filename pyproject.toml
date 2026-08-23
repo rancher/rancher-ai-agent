@@ -11,7 +11,7 @@ dependencies = [
     "fastapi[standard]==0.141.1",
     "langchain-mcp-adapters==0.3.2",
     "langchain-ollama==1.1.0",
-    "langchain-openai==1.4.2",
+    "langchain-openai==1.6.0",
     "langchain-text-splitters==1.1.2",
     "langchain-community==0.4.2",
     "langgraph==1.2.11",

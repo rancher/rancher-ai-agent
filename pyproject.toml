@@ -15,7 +15,7 @@ dependencies = [
     "langchain-text-splitters==1.1.2",
     "langchain-community==0.4.2",
     "langgraph==1.2.11",
-    "langfuse==4.15.0",
+    "langfuse==4.15.1",
     "langgraph-checkpoint-postgres==3.1.2",
     "mcp==1.29.0",
     "numpy==2.5.2",

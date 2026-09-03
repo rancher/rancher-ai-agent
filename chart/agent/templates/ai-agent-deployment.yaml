@@ -110,11 +110,11 @@ spec:
                 name: llm-config
                 key: ACTIVE_LLM
                 optional: true
-          - name: PLAN_ENABLED
+          - name: PLAN_APPROVAL_ENABLED
             valueFrom:
               configMapKeyRef:
                 name: llm-config
-                key: PLAN_ENABLED
+                key: PLAN_APPROVAL_ENABLED
                 optional: true
           - name: LANGFUSE_PUBLIC_KEY
             valueFrom:

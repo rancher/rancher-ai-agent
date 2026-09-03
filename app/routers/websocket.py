@@ -8,6 +8,7 @@ from ..dependencies import get_llm
 from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.loader import load_agent_configs
+from ..services.agent.middleware.plan_approval import plan_approval_enabled
 from ..services.agent.supervisor import SupervisorGraph
 from ..services.oauth2 import handle_oauth_authentication
 from ..services.oauth2.models import OAuth2Canceled
@@ -243,7 +244,6 @@ async def _call_agent(
         config=config,
         stream_mode=["updates", "messages", "custom", "events"],
     ):
-        logging.debug("astream event: %s (name=%s)", stream["event"], stream.get("name"))
         if stream["event"] == "on_chat_model_stream":
             # Token-by-token model output — stream visible text to the client as it's generated.
             if not _should_stream_text(stream):
@@ -255,12 +255,13 @@ async def _call_agent(
             # Model turn is complete: the AIMessage now has fully-assembled tool_calls,
             # so the `write_todos` args can be read here (they arrive as partial chunks while streaming).
             if todos := _extract_todos(stream):
-                # The initial plan is gated by plan_approval_middleware, which surfaces
-                # the todos inside the following <plan-approval> interrupt. Suppress the
-                # pre-approval <todos> here so the plan is not shown before it is approved.
-                # Only forward todos for status updates on an already-approved plan
-                # (i.e. once todos exist in state).
-                if await _plan_already_approved(agent, config):
+                # When plan approval is enabled, the initial plan is surfaced inside the
+                # following <plan-approval> interrupt. Suppress the pre-approval <todos>
+                # here so the plan is not shown twice before it is approved, and only
+                # forward todos for status updates on an already-approved plan (i.e. once
+                # todos exist in state). When plan approval is disabled there is no
+                # interrupt, so always forward todos — including the initial plan.
+                if not plan_approval_enabled() or await _plan_already_approved(agent, config):
                     await websocket.send_text(todos)
 
         if stream["event"] == "on_custom_event":

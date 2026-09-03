@@ -8,7 +8,7 @@ from .._constants import INTERRUPT_CANCEL_MESSAGE
 from .messages_history import MessagesHistoryMiddleware
 from .inject_kwargs import inject_additional_kwargs_middleware
 from .cancel_human_validation import cancel_human_validation_middleware
-from .plan_approval import plan_approval_middleware
+from .plan_approval import plan_approval_middleware, plan_approval_enabled
 from .ui_tools import (
     ui_tools_middleware,
     _dispatch_ui_tools,

@@ -27,12 +27,18 @@ from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
 from .loader import AgentConfig
-from .system_prompts import SUPERVISOR_PROMPT
+from .system_prompts import (
+    SUPERVISOR_PROMPT,
+    SUPERVISOR_TODO_MANDATE,
+    MANDATORY_TODOS_SYSTEM_PROMPT,
+    MANDATORY_TODOS_TOOL_DESCRIPTION,
+)
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
     MessagesHistoryMiddleware,
     cancel_human_validation_middleware,
     inject_additional_kwargs_middleware,
+    plan_approval_enabled,
     plan_approval_middleware,
     ui_tools_middleware
 )
@@ -142,28 +148,47 @@ def create_supervisor_agent(
     )
 
 
+    # Plan approval is opt-in via PLAN_APPROVAL_ENABLED. When enabled, we also mandate
+    # that the agent always plans with write_todos (custom TodoListMiddleware prompts +
+    # a supervisor-prompt reminder) so the plan-approval interrupt reliably fires. When
+    # disabled, TodoListMiddleware keeps its default (optional) prompts and the plan
+    # approval middleware is not registered.
+    plan_approval = plan_approval_enabled()
+
+    if plan_approval:
+        todo_middleware = TodoListMiddleware(
+            system_prompt=MANDATORY_TODOS_SYSTEM_PROMPT,
+            tool_description=MANDATORY_TODOS_TOOL_DESCRIPTION,
+        )
+        system_prompt = SUPERVISOR_PROMPT + SUPERVISOR_TODO_MANDATE
+    else:
+        todo_middleware = TodoListMiddleware()
+        system_prompt = SUPERVISOR_PROMPT
+
+    middleware: list[AgentMiddleware] = [
+        MessagesHistoryMiddleware(),
+        cancel_human_validation_middleware(),
+        inject_additional_kwargs_middleware(),
+        ui_tools_middleware(llm),
+        todo_middleware,
+    ]
+    if plan_approval:
+        middleware.append(plan_approval_middleware())
+    middleware.append(
+        SummarizationMiddleware(
+            model=llm,
+            trigger=[("messages", 30), ("tokens", 30000)],
+            keep=("messages", 15),
+        )
+    )
+
     return create_agent(
         model=llm,
         tools=agent_tools,
-        system_prompt=SUPERVISOR_PROMPT,
+        system_prompt=system_prompt,
         checkpointer=checkpointer,
         name="supervisor",
-        middleware=cast(
-        Sequence[AgentMiddleware],
-        [
-            MessagesHistoryMiddleware(),
-            cancel_human_validation_middleware(),
-            inject_additional_kwargs_middleware(),
-            ui_tools_middleware(llm),
-            TodoListMiddleware(),
-            plan_approval_middleware(),
-            SummarizationMiddleware(
-                model=llm,
-                trigger=[("messages", 30), ("tokens", 30000)],
-                keep=("messages", 15),
-            ),
-        ],
-        ),
+        middleware=middleware,
     )
 
 def _build_child_config(agent_name: str) -> RunnableConfig:

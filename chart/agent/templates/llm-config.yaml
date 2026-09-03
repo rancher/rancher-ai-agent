@@ -10,4 +10,4 @@ data:
   BEDROCK_MODEL: "{{ .Values.bedrockLlmModel }}"
   GENERIC_OPENAI_MODEL: "{{ .Values.genericOpenaiLlmModel }}"
   ACTIVE_LLM: "{{ .Values.activeLlm }}"
-  PLAN_ENABLED: "{{ .Values.planEnabled }}"
+  PLAN_APPROVAL_ENABLED: "{{ .Values.planApprovalEnabled }}"

@@ -32,7 +32,7 @@ awsBedrock:
 genericOpenaiUrl:
 genericOpenaiApiKey:
 activeLlm: # ollama, gemini, openai, bedrock, generic-openai
-planEnabled: false
+planApprovalEnabled: false
 langfuseSecretKey:
 langfusePublicKey:
 langfuseHost:

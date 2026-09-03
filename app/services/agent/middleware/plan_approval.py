@@ -16,16 +16,17 @@ from .._constants import INTERRUPT_CANCEL_MESSAGE
 _WRITE_TODOS_TOOL = "write_todos"
 
 
-def _plan_approval_enabled() -> bool:
-    """Whether plan confirmation is enabled via the ``PLAN_ENABLED`` environment variable."""
-    return os.environ.get("PLAN_ENABLED", "false").lower() == "true"
+def plan_approval_enabled() -> bool:
+    """Whether plan confirmation is enabled via the ``PLAN_APPROVAL_ENABLED`` environment variable."""
+    return os.environ.get("PLAN_APPROVAL_ENABLED", "false").lower() == "true"
 
 
 def plan_approval_middleware():
     """``@wrap_tool_call`` middleware that gates the initial plan behind human approval.
 
-    Plan approval is opt-in and controlled by the ``PLAN_ENABLED`` environment variable.
-    When it is not enabled, this middleware is a no-op and every tool call passes through.
+    Plan approval is opt-in and controlled by the ``PLAN_APPROVAL_ENABLED`` environment
+    variable. This middleware is only registered when plan approval is enabled (see
+    ``plan_approval_enabled``), so when disabled it is never added to the agent.
 
     ``TodoListMiddleware`` exposes a ``write_todos`` tool the agent uses to lay out a
     multi-step plan. When the agent first creates that plan, this middleware pauses the
@@ -49,11 +50,6 @@ def plan_approval_middleware():
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
         tool_call = request.tool_call
-
-        # Plan confirmation is opt-in. When ``PLAN_ENABLED`` is not enabled, every
-        # tool call — including ``write_todos`` — passes straight through.
-        if not _plan_approval_enabled():
-            return await handler(request)
 
         # Only gate the plan-writing tool; every other tool passes straight through.
         if tool_call["name"] != _WRITE_TODOS_TOOL:

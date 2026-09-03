@@ -88,3 +88,114 @@ After every agent tool call, you MUST verify whether it succeeded before proceed
 * Do NOT silently swallow errors or proceed with subsequent tool calls if a prior one failed.
 * Do NOT fabricate a successful result when the tool returned an error.
 """
+
+# Appended to SUPERVISOR_PROMPT only when plan approval is enabled, to reinforce the
+# mandatory-todo behavior configured on TodoListMiddleware in that mode.
+SUPERVISOR_TODO_MANDATE = """
+
+## PLANNING WITH TODOS
+For every request that requires doing work (anything that involves calling an agent/tool or taking \
+an action), your FIRST action MUST be to call `write_todos` to lay out the plan — even for \
+single-step tasks. Only skip `write_todos` for purely conversational or identity questions that \
+require no work at all."""
+
+# Custom prompts for TodoListMiddleware. These override the library defaults, which
+# actively discourage using `write_todos` for short tasks. We instead mandate a todo
+# list for every actionable request so the agent always plans and tracks its work.
+MANDATORY_TODOS_SYSTEM_PROMPT = """## `write_todos` — MANDATORY PLANNING
+
+You have access to the `write_todos` tool to plan and track your work. Using it is MANDATORY, not \
+optional.
+
+- For EVERY request that requires doing work — anything that involves calling an agent/tool or \
+taking an action — your FIRST action MUST be to call `write_todos` to lay out the plan. This applies \
+even to single-step tasks.
+- Because you may emit at most one tool call per response, `write_todos` is the single tool call for \
+that turn. After it returns, proceed with the rest of the work one tool call per response.
+- Mark a todo as `in_progress` BEFORE you start it and `completed` IMMEDIATELY after you finish it. \
+Never batch completions. Unless everything is done, always keep exactly one todo `in_progress`.
+- Revise the todo list as new information appears (add, remove, or update upcoming todos). Do not \
+change already-completed todos.
+- Never call `write_todos` more than once in the same response.
+
+The ONLY time you may skip `write_todos` is a purely conversational or identity question that \
+requires no work at all (e.g. a greeting, or "who are you"). Everything else — including simple, \
+single-step tasks — requires a todo list.
+
+## Finishing a task
+
+`write_todos` tracks your work; it does not deliver the answer. When you finish all work, write your \
+final answer in the message AFTER your last `write_todos` call — not in the same turn as that call. \
+Start that final message with the substantive content the user asked for (the data, computation, \
+summary, or analysis), not a confirmation that the work is done."""
+
+MANDATORY_TODOS_TOOL_DESCRIPTION = """Use this tool to create and manage a structured task list for \
+your current work session. It tracks progress and organizes your work.
+
+Using this tool is MANDATORY for any request that requires doing work.
+
+## When to Use This Tool
+
+You MUST use this tool for EVERY actionable request — any request that requires calling an \
+agent/tool or taking an action — including:
+
+1. Any task that requires one or more agent/tool calls, even a single step.
+2. Complex multi-step tasks requiring careful planning or multiple operations.
+3. When the user provides multiple tasks (numbered or comma-separated).
+4. When the plan may need future revisions based on results from the first few steps.
+
+Always call `write_todos` FIRST, before any other tool, to lay out the plan.
+
+## How to Use This Tool
+
+1. When you start working on a task - Mark it as in_progress BEFORE beginning work.
+2. After completing a task - Mark it as completed and add any new follow-up tasks discovered during \
+implementation.
+3. You can also update future tasks, such as deleting them if they are no longer necessary, or \
+adding new tasks that are necessary. Don't change previously completed tasks.
+4. You can make several updates to the todo list at once. For example, when you complete a task, you \
+can mark the next task you need to start as in_progress.
+
+## When You May Skip This Tool
+
+Skip this tool ONLY for a purely conversational or informational message that requires no work at \
+all (e.g. a greeting, small talk, or an identity question). Everything else requires a todo list.
+
+## Task States and Management
+
+1. **Task States**: Use these states to track progress:
+    - pending: Task not yet started
+    - in_progress: Currently working on (you can have multiple tasks in_progress at a time if they \
+are not related to each other and can be run in parallel)
+    - completed: Task finished successfully
+
+2. **Task Management**:
+    - Update task status in real-time as you work
+    - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)
+    - Complete current tasks before starting new ones
+    - Remove tasks that are no longer relevant from the list entirely
+    - IMPORTANT: When you write this todo list, you should mark your first task (or tasks) as \
+in_progress immediately!.
+    - IMPORTANT: Unless all tasks are completed, you should always have at least one task in_progress.
+
+3. **Task Completion Requirements**:
+    - ONLY mark a task as completed when you have FULLY accomplished it
+    - If you encounter errors, blockers, or cannot finish, keep the task as in_progress
+    - When blocked, create a new task describing what needs to be resolved
+    - Never mark a task as completed if:
+        - There are unresolved issues or errors
+        - Work is partial or incomplete
+        - You encountered blockers that prevent completion
+        - You couldn't find necessary resources or dependencies
+        - Quality standards haven't been met
+
+4. **Task Breakdown**:
+    - Create specific, actionable items
+    - Break complex tasks into smaller, manageable steps
+    - Use clear, descriptive task names
+
+## When You Finish
+
+`write_todos` tracks your work; it does not deliver the answer. Whatever the user asked for — \
+computations, summaries, comparisons, data — must appear as text content in a message after your \
+final `write_todos` call. Marking the last todo complete is not itself an answer to the user."""

@@ -29,7 +29,8 @@ The following environment variables must be set at minimum to run the agent: `RA
 | `INSECURE_SKIP_TLS` | `TRUE` | Skips TLS verification for local dev. |
 | `ENABLE_TEST_UI` | `TRUE` | Enables the built-in testing user interface. |
 | `LOG_LEVEL` | `INFO` | Log verbosity level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Defaults to `INFO`. |
-| `PLAN_APPROVAL_ENABLED` | `TRUE` | Requires human approval of the agent's initial plan before it starts work. Defaults to `false`. |
+| `PLAN_ENABLED` | `FALSE` | Enables the agent's planning todo list (`write_todos`). Defaults to `true`. |
+| `PLAN_APPROVAL_ENABLED` | `TRUE` | Requires human approval of the agent's initial plan before it starts work. Only applies when `PLAN_ENABLED` is `true`. Defaults to `false`. |
 | `RANCHER_URL` | `https://rancher.example.com` | URL of your Rancher instance. |
 | `RANCHER_API_TOKEN` | `token-xxx` | Your Rancher API token (can be extracted from the `R_SESS` cookie). |
 | `MCP_URL` | `http://localhost:9092` | Points to your running Rancher MCP instance. |

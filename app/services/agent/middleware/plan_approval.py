@@ -16,6 +16,11 @@ from .._constants import INTERRUPT_CANCEL_MESSAGE
 _WRITE_TODOS_TOOL = "write_todos"
 
 
+def plan_enabled() -> bool:
+    """Whether the planning todo list is enabled via the ``PLAN_ENABLED`` environment variable."""
+    return os.environ.get("PLAN_ENABLED", "false").lower() == "true"
+
+
 def plan_approval_enabled() -> bool:
     """Whether plan confirmation is enabled via the ``PLAN_APPROVAL_ENABLED`` environment variable."""
     return os.environ.get("PLAN_APPROVAL_ENABLED", "false").lower() == "true"

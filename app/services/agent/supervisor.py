@@ -40,6 +40,7 @@ from .middleware import (
     inject_additional_kwargs_middleware,
     plan_approval_enabled,
     plan_approval_middleware,
+    plan_enabled,
     ui_tools_middleware
 )
 from ._constants import NeedsOauth2
@@ -148,30 +149,35 @@ def create_supervisor_agent(
     )
 
 
-    # Plan approval is opt-in via PLAN_APPROVAL_ENABLED. When enabled, we also mandate
-    # that the agent always plans with write_todos (custom TodoListMiddleware prompts +
-    # a supervisor-prompt reminder) so the plan-approval interrupt reliably fires. When
-    # disabled, TodoListMiddleware keeps its default (optional) prompts and the plan
-    # approval middleware is not registered.
-    plan_approval = plan_approval_enabled()
+    # Planning (TodoListMiddleware) is opt-out via PLAN_ENABLED. Plan approval is opt-in via
+    # PLAN_APPROVAL_ENABLED and only meaningful when planning is enabled. When approval is
+    # enabled, we also mandate that the agent always plans with write_todos (custom
+    # TodoListMiddleware prompts + a supervisor-prompt reminder) so the plan-approval
+    # interrupt reliably fires. When disabled, TodoListMiddleware keeps its default
+    # (optional) prompts and the plan approval middleware is not registered.
+    todos_enabled = plan_enabled()
+    plan_approval = todos_enabled and plan_approval_enabled()
 
-    if plan_approval:
-        todo_middleware = TodoListMiddleware(
-            system_prompt=MANDATORY_TODOS_SYSTEM_PROMPT,
-            tool_description=MANDATORY_TODOS_TOOL_DESCRIPTION,
-        )
-        system_prompt = SUPERVISOR_PROMPT + SUPERVISOR_TODO_MANDATE
-    else:
-        todo_middleware = TodoListMiddleware()
-        system_prompt = SUPERVISOR_PROMPT
+    todo_middleware = None
+    system_prompt = SUPERVISOR_PROMPT
+    if todos_enabled:
+        if plan_approval:
+            todo_middleware = TodoListMiddleware(
+                system_prompt=MANDATORY_TODOS_SYSTEM_PROMPT,
+                tool_description=MANDATORY_TODOS_TOOL_DESCRIPTION,
+            )
+            system_prompt = SUPERVISOR_PROMPT + SUPERVISOR_TODO_MANDATE
+        else:
+            todo_middleware = TodoListMiddleware()
 
     middleware: list[AgentMiddleware] = [
         MessagesHistoryMiddleware(),
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm),
-        todo_middleware,
     ]
+    if todo_middleware is not None:
+        middleware.append(todo_middleware)
     if plan_approval:
         middleware.append(plan_approval_middleware())
     middleware.append(

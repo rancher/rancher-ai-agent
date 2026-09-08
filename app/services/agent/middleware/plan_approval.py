@@ -89,7 +89,7 @@ def plan_approval_middleware():
 
         response = langgraph.types.interrupt(
             {
-                "message": f"<planning-approval>{json.dumps({'todos': todos})}</planning-approval>",
+                "message": f"<planning-approval>{json.dumps(todos)}</planning-approval>",
                 "todos": todos,
             }
         )
@@ -111,7 +111,6 @@ def plan_approval_middleware():
             # written and the agent is asked to revise it. Since write_todos never
             # executes, the `todos` state is unchanged (no active plan) and the revised
             # plan is gated by this middleware again.
-            logging.debug("User requested changes to the proposed plan")
             additional_kwargs["confirmation"] = False
             return ToolMessage(
                 content=(
@@ -127,7 +126,6 @@ def plan_approval_middleware():
                 additional_kwargs=additional_kwargs,
             )
 
-        logging.debug("User approved the proposed plan")
         additional_kwargs["confirmation"] = True
         result = await handler(request)
         if isinstance(result, ToolMessage):

@@ -8,7 +8,7 @@ from ..dependencies import get_llm
 from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.loader import load_agent_configs
-from ..services.agent.middleware.plan_approval import plan_approval_enabled
+from ..services.agent.middleware.plan_approval import has_active_plan, plan_approval_enabled
 from ..services.agent.supervisor import SupervisorGraph
 from ..services.oauth2 import handle_oauth_authentication
 from ..services.oauth2.models import OAuth2Canceled
@@ -238,7 +238,6 @@ async def _call_agent(
 
     await websocket.send_text("<message>")
 
-    interrupt_surfaced = False
     async for stream in agent.astream_events(
         input_data,
         config=config,
@@ -254,15 +253,15 @@ async def _call_agent(
         if stream["event"] == "on_chat_model_end":
             # Model turn is complete: the AIMessage now has fully-assembled tool_calls,
             # so the `write_todos` args can be read here (they arrive as partial chunks while streaming).
-            if todos := _extract_todos(stream):
-                # When plan approval is enabled, the initial plan is surfaced inside the
-                # following <plan-approval> interrupt. Suppress the pre-approval <todos>
-                # here so the plan is not shown twice before it is approved, and only
-                # forward todos for status updates on an already-approved plan (i.e. once
-                # todos exist in state). When plan approval is disabled there is no
-                # interrupt, so always forward todos — including the initial plan.
-                if not plan_approval_enabled() or await _plan_already_approved(agent, config):
-                    await websocket.send_text(todos)
+            if (todos := _extract_todos(stream)) is not None:
+                # When plan approval is enabled, a brand-new plan is surfaced inside the
+                # following <planning-approval> interrupt. Suppress the pre-approval
+                # <planning> here so the plan is not shown twice before it is approved, and
+                # only forward status updates on an already-approved plan (identified by a
+                # carried-forward completed todo). When plan approval is disabled there is
+                # no interrupt, so always forward todos — including the initial plan.
+                if not plan_approval_enabled() or has_active_plan(todos):
+                    await websocket.send_text(f"<planning>{json.dumps(todos)}</planning>")
 
         if stream["event"] == "on_custom_event":
             # App-dispatched events (e.g. subagent_call, ui_tools) — already formatted, forward as-is.
@@ -276,25 +275,8 @@ async def _call_agent(
         if stream["event"] == "on_chain_stream":
             # Graph-level updates — this is where LangGraph surfaces interrupts (__interrupt__).
             if interrupt_value := _extract_interrupt_value(stream):
-                await websocket.send_text(interrupt_value)
-                interrupt_surfaced = True
-
-    # Interrupts raised from inside a tool node (e.g. a child agent invoked as a tool
-    # re-triggering a confirmation) bubble up as GraphBubbleUp and pause the graph
-    # WITHOUT emitting an `__interrupt__` chunk in the event stream. Without this the
-    # run looks "stuck": astream_events returns normally but the graph is waiting for a
-    # resume that never comes because the client was never prompted. Surface any pending
-    # interrupt from the final checkpoint state as a fallback.
-    if not interrupt_surfaced:
-        try:
-            final_state = await agent.aget_state(config=config)
-            if final_state and final_state.interrupts:
-                if prompt := _format_interrupt_value(final_state.interrupts[0].value):
-                    logging.debug("Surfacing pending interrupt from final graph state to the client")
-                    await websocket.send_text(prompt)
-        except Exception as e:
-            logging.debug("Could not inspect final graph state after stream: %s", e)
-
+                await websocket.send_text(interrupt_value)   
+    
 
 def _should_stream_text(stream: dict) -> bool:
     """
@@ -336,19 +318,20 @@ def _extract_streaming_text(stream: dict) -> str | None:
     
     return _extract_text_from_chunk_content(chunk.content)
 
-def _extract_todos(stream: dict) -> str | None:
+def _extract_todos(stream: dict) -> list | None:
     """
-    Extracts todo-list updates from a chat model end event.
+    Extracts the proposed todo list from a chat model end event.
 
     The TodoListMiddleware exposes a ``write_todos`` tool. Whenever the agent updates
     its plan, the model output contains a ``write_todos`` tool call whose args carry the
-    full todo list. This surfaces that list to the client as a ``<todos>`` message.
+    full todo list. This returns that list so the caller can decide whether/how to surface
+    it to the client as a ``<planning>`` message.
 
     Args:
         stream: The stream event dictionary from astream_events.
 
     Returns:
-        A ``<todos>{json}</todos>`` string if a todo update is present, None otherwise.
+        The list of todos if a ``write_todos`` call is present, None otherwise.
     """
     output = stream.get("data", {}).get("output")
     tool_calls = getattr(output, "tool_calls", None)
@@ -357,26 +340,9 @@ def _extract_todos(stream: dict) -> str | None:
 
     for tc in tool_calls:
         if tc.get("name") == "write_todos":
-            todos = tc.get("args", {}).get("todos", [])
-            return f"<todos>{json.dumps({'todos': todos})}</todos>"
+            return tc.get("args", {}).get("todos", [])
 
     return None
-
-async def _plan_already_approved(agent: CompiledStateGraph, config: dict) -> bool:
-    """Return True if a plan has already been written to state (and thus approved).
-
-    ``plan_approval_middleware`` gates only the *first* ``write_todos`` call, surfacing
-    the proposed plan through a ``<plan-approval>`` interrupt. At that point the ``todos``
-    state key is still empty, so this returns False and the pre-approval ``<todos>``
-    message is suppressed. Once the plan is approved and written, ``todos`` is populated,
-    so subsequent status updates return True and stream normally.
-    """
-    try:
-        state = await agent.aget_state(config=config)
-        return bool(state.values.get("todos"))
-    except Exception as e:
-        logging.debug("Could not determine plan approval state: %s", e)
-        return True
 
 
 def _extract_interrupt_value(stream: dict) -> str | None:

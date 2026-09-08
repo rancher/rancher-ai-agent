@@ -3,7 +3,6 @@ import ssl
 import logging
 from datetime import datetime, timezone
 
-import httpx
 from kubernetes import client
 from .loader import (
     AuthenticationType,
@@ -20,8 +19,9 @@ from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
 from ._constants import NoAgentAvailableError, NeedsOauth2
 from fastapi import  WebSocket
+from fastmcp.client.transports import StreamableHttpTransport
+from langchain.mcp import MCPAdapter
 from langchain_core.language_models.llms import BaseLanguageModel
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph.state import Checkpointer, CompiledStateGraph
 
 NAMESPACE = "cattle-ai-agent-system"
@@ -163,7 +163,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     mcp_client = await create_mcp_client(agent_cfg, websocket)
     
     try:
-        tools = await mcp_client.get_tools()
+        tools = await mcp_client.list_tools()
     except* Exception as eg:
         error_message = " ".join(str(e) for e in eg.exceptions)
 
@@ -187,7 +187,9 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
             t for t in tools
             if agent_cfg.toolset in [
                 ts.strip() 
-                for ts in (((t.metadata or {}).get("_meta") or {}).get("toolset") or "").split(",")
+                for ts in (
+                    (((t.metadata or {}).get("mcp") or {}).get("tool") or {}).get("_meta", {}).get("toolset", "")
+                ).split(",")
             ]
         ]                
         logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
@@ -197,7 +199,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
 
 
 
-async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
+async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MCPAdapter:
     """
     Create an MCP client for the agent based on the agent configuration.
     
@@ -211,7 +213,7 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
                    If not provided, falls back to environment variables only.
     
     Returns:
-        MultiServerMCPClient: A configured MCP client ready to connect to the server.
+        MCPAdapter: A configured MCP adapter ready to connect to the server.
     
     Note:
         - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
@@ -269,13 +271,9 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
     else:
         mcp_url = agent_config.mcp_url
 
-    client_config: dict = {
-        "url": mcp_url,
-        "transport": "streamable_http",
-        "headers": headers,
-    }
+    verify: ssl.SSLContext | bool | None = None
     if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == "true":
-        client_config["httpx_client_factory"] = _make_insecure_http_client
+        verify = False
         
     elif agent_config.ca_bundle_ref:
         try:
@@ -283,42 +281,17 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
                 agent_config.ca_bundle_ref.name,
                 agent_config.ca_bundle_ref.key,
             )
-            client_config["httpx_client_factory"] = _make_ca_httpx_factory(ca_pem)
+            verify = ssl.create_default_context()
+            verify.load_verify_locations(cadata=ca_pem)
         except Exception as e:
             logging.error(f"Failed to load CA cert from secret '{agent_config.ca_bundle_ref.name}': {e}")
 
-
-    return MultiServerMCPClient({
-        agent_config.name: client_config,
-    })
-
-
-def _make_ca_httpx_factory(ca_pem: str):
-    """
-    Return an httpx_client_factory that trusts *both* the system CAs and
-    the supplied PEM-encoded CA certificate.
-
-    The factory follows the ``McpHttpClientFactory`` protocol expected by
-    ``langchain-mcp-adapters`` / the MCP Python SDK.
-    """
-    ctx = ssl.create_default_context()  # loads system CAs
-    ctx.load_verify_locations(cadata=ca_pem)
-
-    def factory(
-        headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
-        kwargs: dict = {"follow_redirects": True, "verify": ctx}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        if headers is not None:
-            kwargs["headers"] = headers
-        if auth is not None:
-            kwargs["auth"] = auth
-        return httpx.AsyncClient(**kwargs)
-
-    return factory
+    transport = StreamableHttpTransport(
+        url=mcp_url,
+        headers=headers,
+        verify=verify,
+    )
+    return MCPAdapter(transport)
 
 
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
@@ -361,15 +334,6 @@ def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, me
         logging.info(f"Updated status for AIAgentConfig '{agent_cfg.name}' to {status['phase']}")
     except Exception as e:
         logging.error(f"Failed to update status for AIAgentConfig '{agent_cfg.name}': {str(e)}")
-
-
-def _make_insecure_http_client(
-    headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
-    """httpx_client_factory that disables TLS certificate verification."""
-    return httpx.AsyncClient(headers=headers or {}, timeout=timeout, auth=auth, verify=False)
 
 
 async def _load_agents_for_user(websocket: WebSocket) -> list[AgentConfig]:

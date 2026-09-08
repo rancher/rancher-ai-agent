@@ -10,7 +10,7 @@ CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CAL
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
 from langchain_core.language_models import FakeMessagesListChatModel
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
 from _pytest.monkeypatch import MonkeyPatch
 from langchain_core.language_models.base import LanguageModelInput
@@ -31,8 +31,8 @@ CALCULATOR_AGENT_NAME = "calculator-agent"
 MATH_AGENT_PROMPT = "You are a math agent that can add numbers."
 CALCULATOR_AGENT_PROMPT = "You are a calculator agent that can multiply numbers."
 
-mock_mcp_1 = FastMCP("mock1")
-mock_mcp_2 = FastMCP("mock2")
+mock_mcp_1 = MCPServer("mock1")
+mock_mcp_2 = MCPServer("mock2")
 
 
 @mock_mcp_1.tool()
@@ -49,14 +49,12 @@ def multiply(a: int, b: int) -> str:
 
 def run_mock_mcp_1():
     """Runs the first mock MCP server on port 8001."""
-    import uvicorn
-    uvicorn.run(mock_mcp_1.streamable_http_app(), host="0.0.0.0", port=8001, log_level="error")
+    mock_mcp_1.run(transport="streamable-http", host="0.0.0.0", port=8001, log_level="error")
 
 
 def run_mock_mcp_2():
     """Runs the second mock MCP server on port 8002."""
-    import uvicorn
-    uvicorn.run(mock_mcp_2.streamable_http_app(), host="0.0.0.0", port=8002, log_level="error")
+    mock_mcp_2.run(transport="streamable-http", host="0.0.0.0", port=8002, log_level="error")
 
 
 client = TestClient(app)

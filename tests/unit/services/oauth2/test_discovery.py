@@ -1,7 +1,7 @@
 """Tests for app.services.oauth2.discovery"""
 
 import pytest
-import httpx
+import httpx2
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.services.oauth2.discovery import (
@@ -77,7 +77,7 @@ class TestDiscoverFromWwwAuthenticate:
     @pytest.mark.asyncio
     async def test_returns_none_on_request_error(self):
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.RequestError("connection failed", request=MagicMock()))
+        mock_client.get = AsyncMock(side_effect=httpx2.RequestError("connection failed", request=MagicMock()))
 
         result = await _discover_from_www_authenticate(mock_client, "https://mcp.example.com/sse")
         assert result is None
@@ -183,7 +183,7 @@ class TestDiscoverAuthServerMetadataEndpoint:
     async def test_handles_request_errors_gracefully(self):
         async def mock_get(url):
             if "oauth-authorization-server" in url:
-                raise httpx.RequestError("connection failed", request=MagicMock())
+                raise httpx2.RequestError("connection failed", request=MagicMock())
             response = MagicMock()
             response.status_code = 200
             return response
@@ -219,7 +219,7 @@ class TestDiscoverMetadataEndpoint:
 
             mock_auth_server.return_value = auth_server_url
 
-            with patch("httpx.AsyncClient") as mock_client_cls:
+            with patch("httpx2.AsyncClient") as mock_client_cls:
                 mock_client_instance = AsyncMock()
                 mock_client_instance.get = AsyncMock(return_value=resource_response)
                 mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
@@ -238,7 +238,7 @@ class TestDiscoverMetadataEndpoint:
         with patch("app.services.oauth2.discovery._discover_from_www_authenticate") as mock_www_auth:
             mock_www_auth.return_value = None
 
-            with patch("httpx.AsyncClient") as mock_client_cls:
+            with patch("httpx2.AsyncClient") as mock_client_cls:
                 mock_client_instance = AsyncMock()
                 mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
                 mock_client_instance.__aexit__ = AsyncMock(return_value=False)
@@ -263,7 +263,7 @@ class TestDiscoverMetadataEndpoint:
             }
             resource_response.raise_for_status = MagicMock()
 
-            with patch("httpx.AsyncClient") as mock_client_cls:
+            with patch("httpx2.AsyncClient") as mock_client_cls:
                 mock_client_instance = AsyncMock()
                 mock_client_instance.get = AsyncMock(return_value=resource_response)
                 mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)

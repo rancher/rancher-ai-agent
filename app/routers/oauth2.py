@@ -1,6 +1,6 @@
 import json
 import logging
-import httpx
+import httpx2
 import os
 
 from fastapi import APIRouter, Request
@@ -250,7 +250,7 @@ async def dynamic_registration(payload: RegistrationPayload, request: Request):
 
     metadata_origin = f"{urlparse(str(metadata_endpoint)).scheme}://{urlparse(str(metadata_endpoint)).netloc}"
 
-    async with httpx.AsyncClient(follow_redirects=True, verify=get_tls_verify()) as http_client:
+    async with httpx2.AsyncClient(follow_redirects=True, verify=get_tls_verify()) as http_client:
         metadata = await http_client.get(str(metadata_endpoint))
         metadata.raise_for_status()
         data = metadata.json()

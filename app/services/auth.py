@@ -1,6 +1,6 @@
 import logging
 import ssl
-import httpx
+import httpx2
 import os
 import urllib3
 from typing import cast
@@ -95,7 +95,7 @@ def _is_tls_error(exc: Exception) -> bool:
 
 
 def _get_tls_verify():
-    """Return the appropriate verify parameter for httpx."""
+    """Return the appropriate verify parameter for httpx2."""
     if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == 'true':
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         return False
@@ -117,7 +117,7 @@ async def get_user_id(host: str, token: str) -> str | None:
     }
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=5.0, verify=_get_tls_verify()) as http_client:
+            async with httpx2.AsyncClient(timeout=5.0, verify=_get_tls_verify()) as http_client:
                 resp = await http_client.get(url, headers=headers)
                 payload = resp.json()
 
@@ -130,7 +130,7 @@ async def get_user_id(host: str, token: str) -> str | None:
                 if user_id:
                     return user_id
                 break
-        except httpx.ConnectError as e:
+        except httpx2.ConnectError as e:
             if attempt == 0 and _is_tls_error(e):
                 logging.warning("TLS error connecting to Rancher API, reloading CA certificate and retrying")
                 _reset_cacerts_cache()

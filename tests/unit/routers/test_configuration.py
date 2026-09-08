@@ -86,7 +86,7 @@ async def test_get_models_ollama_success(mock_request):
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             resp = await config_router.get_models(mock_request, llm_name="ollama")
@@ -101,12 +101,12 @@ async def test_get_models_ollama_connection_error(mock_request):
     """Test getting Ollama models with connection error."""
     mock_request.query_params = {"url": "http://localhost:11434"}
     
-    import httpx
+    import httpx2
     mock_http_client = AsyncMock()
-    mock_http_client.get = AsyncMock(side_effect=httpx.RequestError("Connection failed"))
+    mock_http_client.get = AsyncMock(side_effect=httpx2.RequestError("Connection failed"))
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             with pytest.raises(HTTPException) as exc:
@@ -126,7 +126,7 @@ async def test_get_models_ollama_bad_status(mock_request):
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             with pytest.raises(HTTPException) as exc:
@@ -139,12 +139,12 @@ async def test_get_models_ollama_malformed_url(mock_request):
     """Test getting Ollama models with malformed URL."""
     mock_request.query_params = {"url": "http://10.124.137.250:1invalid"}
     
-    import httpx
+    import httpx2
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_http_client = AsyncMock()
-            mock_http_client.get = AsyncMock(side_effect=httpx.InvalidURL("Invalid port in URL"))
+            mock_http_client.get = AsyncMock(side_effect=httpx2.InvalidURL("Invalid port in URL"))
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             with pytest.raises(HTTPException) as exc:
@@ -196,7 +196,7 @@ async def test_get_models_bedrock_bearer_token_success(mock_request):
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             resp = await config_router.get_models(mock_request, llm_name="bedrock")
@@ -227,7 +227,7 @@ async def test_get_models_bedrock_bearer_token_invalid(mock_request):
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             with pytest.raises(HTTPException) as exc:
@@ -257,7 +257,7 @@ async def test_get_models_bedrock_with_openai_models(mock_request):
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             resp = await config_router.get_models(mock_request, llm_name="bedrock")
@@ -293,7 +293,7 @@ async def test_get_models_bedrock_with_already_prefixed_models(mock_request):
     mock_http_client.get = AsyncMock(return_value=mock_response)
     
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             resp = await config_router.get_models(mock_request, llm_name="bedrock")

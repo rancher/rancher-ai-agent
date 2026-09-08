@@ -1,6 +1,6 @@
 import logging
 import base64
-import httpx
+import httpx2
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -156,7 +156,7 @@ async def get_models(request: Request, llm_name: str):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ollama URL is required")
 
             try:
-                async with httpx.AsyncClient(timeout=2.0) as http_client:
+                async with httpx2.AsyncClient(timeout=2.0) as http_client:
                     response = await http_client.get(f"{ollama_url}/api/tags")
                     if response.status_code == 200:
                         ollama_data = response.json()
@@ -167,13 +167,13 @@ async def get_models(request: Request, llm_name: str):
                             status_code=status.HTTP_502_BAD_GATEWAY,
                             detail=f"Ollama server returned status {response.status_code}"
                         )
-            except httpx.InvalidURL as e:
+            except httpx2.InvalidURL as e:
                 logging.error(f"Invalid Ollama URL: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid Ollama URL: {ollama_url}"
                 )
-            except httpx.RequestError as e:
+            except httpx2.RequestError as e:
                 logging.error(f"Failed to fetch Ollama models: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
@@ -194,7 +194,7 @@ async def get_models(request: Request, llm_name: str):
             logging.info("Using bearer token authentication for Bedrock")
             try:
                 # Use direct HTTP request with bearer token
-                async with httpx.AsyncClient(timeout=2.0) as http_client:
+                async with httpx2.AsyncClient(timeout=2.0) as http_client:
                     headers = {"Authorization": f"Bearer {bearer_token}"}
                     response = await http_client.get(
                         f"https://bedrock.{region}.amazonaws.com/foundation-models",
@@ -231,13 +231,13 @@ async def get_models(request: Request, llm_name: str):
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid AWS region: {region}"
                 )
-            except httpx.InvalidURL as e:
+            except httpx2.InvalidURL as e:
                 logging.error(f"Invalid region format for Bedrock URL: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid AWS region: {region}"
                 )
-            except httpx.RequestError as e:
+            except httpx2.RequestError as e:
                 logging.error(f"{e}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,

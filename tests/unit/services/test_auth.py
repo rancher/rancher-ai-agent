@@ -3,7 +3,7 @@
 import ssl
 import os
 import pytest
-import httpx
+import httpx2
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.auth as auth_module
@@ -52,7 +52,7 @@ def reset_cache():
 class TestIsTlsError:
     def test_returns_true_for_ssl_error_cause(self):
         ssl_err = ssl.SSLError("certificate verify failed")
-        exc = httpx.ConnectError("TLS handshake failed")
+        exc = httpx2.ConnectError("TLS handshake failed")
         exc.__cause__ = ssl_err
         assert _is_tls_error(exc) is True
 
@@ -66,7 +66,7 @@ class TestIsTlsError:
 
     def test_returns_false_when_cause_is_not_ssl(self):
         inner = OSError("network error")
-        exc = httpx.ConnectError("connect failed")
+        exc = httpx2.ConnectError("connect failed")
         exc.__cause__ = inner
         assert _is_tls_error(exc) is False
 
@@ -287,7 +287,7 @@ class TestGetUserId:
     async def test_returns_user_id_on_success(self):
         response = _make_response(200, {"data": [{"id": "user-123"}]})
         mock_ctx, _ = self._patch_client(response)
-        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+        with patch("app.services.auth.httpx2.AsyncClient", return_value=mock_ctx), \
              patch("app.services.auth._get_tls_verify", return_value=True):
             result = await get_user_id("https://rancher.example.com", "token-abc")
         assert result == "user-123"
@@ -296,7 +296,7 @@ class TestGetUserId:
     async def test_returns_none_on_api_error_response(self):
         response = _make_response(200, {"type": "error", "message": "unauthorized"})
         mock_ctx, _ = self._patch_client(response)
-        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+        with patch("app.services.auth.httpx2.AsyncClient", return_value=mock_ctx), \
              patch("app.services.auth._get_tls_verify", return_value=True):
             result = await get_user_id("https://rancher.example.com", "token-abc")
         assert result is None
@@ -305,7 +305,7 @@ class TestGetUserId:
     async def test_returns_none_on_non_200_status(self):
         response = _make_response(401, {})
         mock_ctx, _ = self._patch_client(response)
-        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+        with patch("app.services.auth.httpx2.AsyncClient", return_value=mock_ctx), \
              patch("app.services.auth._get_tls_verify", return_value=True):
             result = await get_user_id("https://rancher.example.com", "bad-token")
         assert result is None
@@ -314,7 +314,7 @@ class TestGetUserId:
     async def test_returns_none_on_empty_data(self):
         response = _make_response(200, {"data": []})
         mock_ctx, _ = self._patch_client(response)
-        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+        with patch("app.services.auth.httpx2.AsyncClient", return_value=mock_ctx), \
              patch("app.services.auth._get_tls_verify", return_value=True):
             result = await get_user_id("https://rancher.example.com", "token-abc")
         assert result is None
@@ -324,7 +324,7 @@ class TestGetUserId:
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(side_effect=Exception("network failure"))
         mock_ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+        with patch("app.services.auth.httpx2.AsyncClient", return_value=mock_ctx), \
              patch("app.services.auth._get_tls_verify", return_value=True):
             result = await get_user_id("https://rancher.example.com", "token-abc")
         assert result is None
@@ -333,7 +333,7 @@ class TestGetUserId:
     async def test_retries_on_tls_error_and_succeeds(self):
         """On TLS ConnectError, cache is reset and the second attempt succeeds."""
         ssl_err = ssl.SSLError("certificate verify failed")
-        tls_connect_err = httpx.ConnectError("TLS handshake failed")
+        tls_connect_err = httpx2.ConnectError("TLS handshake failed")
         tls_connect_err.__cause__ = ssl_err
 
         success_response = _make_response(200, {"data": [{"id": "user-456"}]})
@@ -348,7 +348,7 @@ class TestGetUserId:
         success_ctx.__aexit__ = AsyncMock(return_value=False)
 
         side_effects = [fail_ctx, success_ctx]
-        with patch("app.services.auth.httpx.AsyncClient", side_effect=side_effects), \
+        with patch("app.services.auth.httpx2.AsyncClient", side_effect=side_effects), \
              patch("app.services.auth._get_tls_verify", return_value=True), \
              patch("app.services.auth._reset_cacerts_cache") as mock_reset:
             result = await get_user_id("https://rancher.example.com", "token-abc")
@@ -359,14 +359,14 @@ class TestGetUserId:
     @pytest.mark.asyncio
     async def test_no_retry_on_non_tls_connect_error(self):
         """A ConnectError that is NOT a TLS error should not trigger a retry."""
-        connect_err = httpx.ConnectError("connection refused")
+        connect_err = httpx2.ConnectError("connection refused")
         connect_err.__cause__ = ConnectionRefusedError("connection refused")
 
         fail_ctx = AsyncMock()
         fail_ctx.__aenter__ = AsyncMock(side_effect=connect_err)
         fail_ctx.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("app.services.auth.httpx.AsyncClient", return_value=fail_ctx) as mock_client, \
+        with patch("app.services.auth.httpx2.AsyncClient", return_value=fail_ctx) as mock_client, \
              patch("app.services.auth._get_tls_verify", return_value=True), \
              patch("app.services.auth._reset_cacerts_cache") as mock_reset:
             result = await get_user_id("https://rancher.example.com", "token-abc")
@@ -381,14 +381,14 @@ class TestGetUserId:
         ssl_err = ssl.SSLError("certificate verify failed")
 
         def make_tls_ctx():
-            err = httpx.ConnectError("TLS handshake failed")
+            err = httpx2.ConnectError("TLS handshake failed")
             err.__cause__ = ssl_err
             ctx = AsyncMock()
             ctx.__aenter__ = AsyncMock(side_effect=err)
             ctx.__aexit__ = AsyncMock(return_value=False)
             return ctx
 
-        with patch("app.services.auth.httpx.AsyncClient", side_effect=[make_tls_ctx(), make_tls_ctx()]), \
+        with patch("app.services.auth.httpx2.AsyncClient", side_effect=[make_tls_ctx(), make_tls_ctx()]), \
              patch("app.services.auth._get_tls_verify", return_value=True), \
              patch("app.services.auth._reset_cacerts_cache") as mock_reset:
             result = await get_user_id("https://rancher.example.com", "token-abc")

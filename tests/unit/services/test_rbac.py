@@ -15,7 +15,7 @@ def _steve_item(name: str, enabled: bool = True) -> dict:
 
 
 def _mock_http(status_code=200, items=None):
-    """Patch httpx.AsyncClient so GET returns a Rancher list of *items*."""
+    """Patch httpx2.AsyncClient so GET returns a Rancher list of *items*."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.json.return_value = {"data": items or []}
@@ -24,7 +24,7 @@ def _mock_http(status_code=200, items=None):
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=client)
     ctx.__aexit__ = AsyncMock(return_value=False)
-    return patch("app.services.rbac.httpx.AsyncClient", return_value=ctx)
+    return patch("app.services.rbac.httpx2.AsyncClient", return_value=ctx)
 
 
 @pytest.mark.asyncio
@@ -79,6 +79,6 @@ async def test_request_error_raises(_url, _tls):
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=client)
     ctx.__aexit__ = AsyncMock(return_value=False)
-    with patch("app.services.rbac.httpx.AsyncClient", return_value=ctx):
+    with patch("app.services.rbac.httpx2.AsyncClient", return_value=ctx):
         with pytest.raises(RBACError):
             await accessible_agent_configs("tok")

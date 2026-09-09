@@ -25,7 +25,6 @@ dependencies = [
     "psycopg[binary,pool]==3.3.5",
     "kopf==1.44.6",
     "authlib==1.8.0",
-    "boto3==1.43.82",
 ]
 
 [dependency-groups]

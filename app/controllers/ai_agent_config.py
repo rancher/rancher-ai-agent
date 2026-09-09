@@ -9,7 +9,7 @@ import asyncio
 import logging
 import threading
 import kopf
-import httpx
+import httpx2
 
 from kopf._cogs.configs.configuration import ScanningSettings, PostingSettings
 from datetime import datetime, timezone
@@ -25,11 +25,11 @@ _TRANSIENT_EXCEPTIONS = (
     ConnectionError,        # ConnectionRefusedError, ConnectionResetError, etc.
     TimeoutError,
     OSError,                # Low-level socket errors (e.g. "Network unreachable")
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
-    httpx.WriteTimeout,
-    httpx.PoolTimeout,
+    httpx2.ConnectError,
+    httpx2.ConnectTimeout,
+    httpx2.ReadTimeout,
+    httpx2.WriteTimeout,
+    httpx2.PoolTimeout,
 )
 
 _INITIAL_RETRY_DELAY = 1

@@ -61,14 +61,14 @@ logging.getLogger("uvicorn.access").addFilter(_NoisyEndpointFilter())
 NOISY_LOGGERS = [
     "kubernetes.client.rest",
     "kopf.objects",
-    "httpcore.http11",
+    "httpcore2.http11",
     "urllib3", 
     "botocore",
     "boto3",
     "asyncio",
     "mcp.client.streamable_http",
     "openai._base_client",
-    "httpcore.connection",
+    "httpcore2.connection",
     "authlib"
 ]
 

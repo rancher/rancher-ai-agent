@@ -9,7 +9,7 @@ Implements the MCP specification for OAuth discovery:
 import re
 import logging
 
-import httpx
+import httpx2
 
 from urllib.parse import urlparse
 
@@ -39,7 +39,7 @@ async def discover_metadata_endpoint(mcp_url: str) -> DiscoveredMetadata:
     Raises:
         OAuthDiscoveryError: If all discovery strategies fail.
     """
-    async with httpx.AsyncClient(follow_redirects=True, verify=get_tls_verify()) as client:
+    async with httpx2.AsyncClient(follow_redirects=True, verify=get_tls_verify()) as client:
         resource_metadata_url = await _discover_from_www_authenticate(client, mcp_url)
         if resource_metadata_url:
             response = await client.get(resource_metadata_url)
@@ -87,7 +87,7 @@ def _parse_www_authenticate(header: str) -> str | None:
 
 
 async def _discover_from_www_authenticate(
-    client: httpx.AsyncClient, mcp_url: str
+    client: httpx2.AsyncClient, mcp_url: str
 ) -> str | None:
     """
     Discover resource metadata URL from a 401 WWW-Authenticate header.
@@ -113,13 +113,13 @@ async def _discover_from_www_authenticate(
             return None
 
         return _parse_www_authenticate(www_auth)
-    except httpx.RequestError as e:
+    except httpx2.RequestError as e:
         logger.warning(f"Failed to connect to MCP server at {mcp_url} for OAuth discovery: {e}")
         return None
 
 
 async def _discover_auth_server_metadata_endpoint(
-    client: httpx.AsyncClient, protected_resource_endpoint: str
+    client: httpx2.AsyncClient, protected_resource_endpoint: str
 ) -> str:
     """
     Discover authorization server metadata following RFC 8414.
@@ -154,7 +154,7 @@ async def _discover_auth_server_metadata_endpoint(
             response = await client.get(url)
             if response.status_code == 200:
                 return url
-        except (httpx.RequestError, KeyError, ValueError) as e:
+        except (httpx2.RequestError, KeyError, ValueError) as e:
             logger.debug(f"Failed to fetch auth server metadata from {url}: {e}")
 
     raise OAuthDiscoveryError(

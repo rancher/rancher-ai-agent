@@ -4,7 +4,7 @@ Unit tests for the AIAgentConfig kopf controller.
 Tests transient vs permanent error classification and retry behaviour.
 """
 import pytest
-import httpx
+import httpx2
 import kopf
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -71,16 +71,16 @@ async def test_create_fn_success(mock_validate):
         ConnectionResetError,
         TimeoutError,
         OSError,
-        httpx.ConnectError,
-        httpx.ConnectTimeout,
-        httpx.ReadTimeout,
+        httpx2.ConnectError,
+        httpx2.ConnectTimeout,
+        httpx2.ReadTimeout,
     ],
     ids=lambda c: c.__name__,
 )
 @patch("app.controllers.ai_agent_config._validate", new_callable=AsyncMock)
 async def test_transient_error_raises_temporary(mock_validate, exc_class):
     """Transient connection errors should raise TemporaryError with a retry delay."""
-    if issubclass(exc_class, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)):
+    if issubclass(exc_class, (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.ReadTimeout)):
         exc = exc_class("connection failed", request=MagicMock())
     else:
         exc = exc_class("connection failed")

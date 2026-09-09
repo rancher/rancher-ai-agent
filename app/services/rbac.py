@@ -16,7 +16,7 @@ collection to what the user may access.
 
 import os
 
-import httpx
+import httpx2
 
 from .agent.loader import AgentConfig, _crd_to_agent_config
 from .auth import _load_rancher_url, _get_tls_verify
@@ -67,7 +67,7 @@ async def accessible_agent_configs(token: str) -> list[AgentConfig]:
     headers = {"Cookie": f"R_SESS={token}", "Accept": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=_get_tls_verify()) as http_client:
+        async with httpx2.AsyncClient(timeout=5.0, verify=_get_tls_verify()) as http_client:
             resp = await http_client.get(url, headers=headers)
     except Exception as e:
         raise RBACError(f"Failed to list AIAgentConfigs from Rancher: {e}") from e

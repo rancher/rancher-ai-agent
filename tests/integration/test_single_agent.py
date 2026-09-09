@@ -8,7 +8,7 @@ from app.services.agent.system_prompts import IDENTITY_PREAMBLE, SEQUENTIAL_TOOL
 CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from _pytest.monkeypatch import MonkeyPatch
 from unittest.mock import AsyncMock
@@ -20,7 +20,7 @@ import multiprocessing
 import requests
 import pytest
 
-mock_mcp = FastMCP("mock")
+mock_mcp = MCPServer("mock")
 
 
 @mock_mcp.tool()

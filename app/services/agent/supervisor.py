@@ -12,7 +12,6 @@ import json
 import logging
 import yaml
 
-from typing import Sequence, cast
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import RunnableConfig, ensure_config

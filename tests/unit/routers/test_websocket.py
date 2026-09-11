@@ -1,6 +1,6 @@
 import pytest
 import json
-
+import asyncio
 from app.routers.websocket import (
     websocket_endpoint,
     build_chat_metadata,
@@ -12,8 +12,11 @@ from app.routers.websocket import (
     _resolve_target_agent,
     _build_input_data,
     _patch_tool_result,
+    _call_agent,
     WebSocketRequest,
 )
+from app.constants import STOP_MESSAGE, STOP_CANCEL_REPLY
+from app.services.agent._constants import NeedsOauth2
 from app.services.agent.supervisor import SupervisorGraph
 from app.services.oauth2.models import OAuth2Canceled
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -725,3 +728,115 @@ class TestResolveTargetAgentOAuth2:
         # Should have sent auth-error
         auth_error_sent = any("<auth-error>" in str(call) for call in websocket.send_text.call_args_list)
         assert auth_error_sent
+
+
+# --- Tests for _call_agent stop functionality ---
+
+def _make_stream_agent(events, stall_after=None):
+    """
+    Build a mock agent whose ``astream_events`` yields the given events.
+
+    Args:
+        events: List of event dicts to yield.
+        stall_after: If set, after yielding this many events the generator awaits
+            a long sleep, simulating an in-flight/long-running execution that can
+            be cancelled.
+    """
+    agent = MagicMock()
+
+    async def _astream_events(input_data, config=None, stream_mode=None):
+        for i, event in enumerate(events):
+            yield event
+            if stall_after is not None and i + 1 >= stall_after:
+                await asyncio.sleep(60)
+
+    agent.astream_events = _astream_events
+    agent.aget_state = AsyncMock(return_value=MagicMock(values={"messages": []}))
+    agent.aupdate_state = AsyncMock()
+    return agent
+
+
+def _text_event(text):
+    chunk = MagicMock()
+    chunk.content = text
+    return {"event": "on_chat_model_stream", "data": {"chunk": chunk}, "tags": [], "metadata": {}}
+
+
+class TestCallAgentStop:
+    @pytest.mark.asyncio
+    async def test_stop_message_cancels_execution(self):
+        """A <stop> message mid-stream cancels streaming and patches tool result."""
+        agent = _make_stream_agent([_text_event("partial")], stall_after=1)
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(return_value=STOP_MESSAGE)
+
+        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch:
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        mock_patch.assert_awaited_once()
+        # Patched with the stop reply message
+        assert mock_patch.call_args.args[2] == STOP_CANCEL_REPLY
+        # Opened the message block
+        websocket.send_text.assert_any_await("<message>")
+
+    @pytest.mark.asyncio
+    async def test_normal_completion_no_patch(self):
+        """When streaming completes normally, the pending receiver is cancelled and no patch occurs."""
+        agent = _make_stream_agent([_text_event("hello"), _text_event(" world")])
+
+        async def _block():
+            await asyncio.sleep(60)
+
+        websocket = AsyncMock()
+        # Receiver blocks forever so streaming wins the race.
+        websocket.receive_text = AsyncMock(side_effect=_block)
+
+        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch:
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        mock_patch.assert_not_awaited()
+        # Streamed text was forwarded
+        websocket.send_text.assert_any_await("hello")
+        websocket.send_text.assert_any_await(" world")
+
+    @pytest.mark.asyncio
+    async def test_non_stop_message_ignored(self):
+        """A non-stop message mid-run is ignored and streaming continues to completion."""
+        agent = _make_stream_agent([_text_event("chunk")])
+
+        messages = ["not a stop"]
+
+        async def _receive():
+            if messages:
+                return messages.pop(0)
+            await asyncio.sleep(60)
+
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=_receive)
+
+        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch:
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        mock_patch.assert_not_awaited()
+        websocket.send_text.assert_any_await("chunk")
+
+    @pytest.mark.asyncio
+    async def test_stream_exception_propagates(self):
+        """Exceptions raised by the stream (e.g. NeedsOauth2) propagate out of _call_agent."""
+        agent = MagicMock()
+        agent_cfg = MagicMock()
+
+        async def _astream_events(input_data, config=None, stream_mode=None):
+            raise NeedsOauth2(agent_cfg)
+            yield  # pragma: no cover - makes this an async generator
+
+        agent.astream_events = _astream_events
+
+        async def _block():
+            await asyncio.sleep(60)
+
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=_block)
+
+        with pytest.raises(NeedsOauth2):
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)

@@ -2,6 +2,7 @@ import os
 import uuid
 import logging
 import json
+import asyncio
 from datetime import datetime
 
 from ..dependencies import get_llm
@@ -22,7 +23,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id_from_token
-from ..constants import CONTEXT_PARAMETERS_SUFFIX
+from ..constants import CONTEXT_PARAMETERS_SUFFIX, STOP_MESSAGE, STOP_CANCEL_REPLY
 
 router = APIRouter()
 
@@ -226,17 +227,96 @@ async def _call_agent(
 ) -> None:
     """
     Streams the agent's response to a WebSocket connection, handling interruptions.
-    
+
+    The streaming runs as a cancellable task that is raced against an incoming
+    WebSocket message. If the client sends ``STOP_MESSAGE`` (``<stop>``) while the
+    agent is running, the streaming task is cancelled (which aborts the in-flight
+    LLM/tool call) and any pending tool call is patched with a result so the next
+    turn stays valid. Any other message received mid-run is ignored.
+
     Args:
         agent: The compiled LangGraph agent.
         input_data: The input data for the agent's run.
         config: The run configuration.
         websocket: The WebSocket connection.
-        stream_mode: The types of events to stream from the agent.
     """
 
     await websocket.send_text("<message>")
-    
+
+    stream_task = asyncio.create_task(
+        _stream_agent_events(agent, input_data, config, websocket)
+    )
+    receiver_task = asyncio.create_task(websocket.receive_text())
+
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {stream_task, receiver_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if stream_task in done:
+                # Streaming finished (or raised); stop listening for a stop signal.
+                await _cancel_task(receiver_task)
+                # Re-raise any exception from the stream (e.g. NeedsOauth2) so the
+                # endpoint's error/OAuth handling still fires.
+                stream_task.result()
+                return
+
+            # receiver_task completed: retrieve the message (may raise
+            # WebSocketDisconnect, which propagates to the endpoint's handler).
+            message = receiver_task.result()
+            if message == STOP_MESSAGE:
+                logging.debug("Received stop message; cancelling agent execution.")
+                await _cancel_task(stream_task)
+                await _patch_tool_result(agent, config, STOP_CANCEL_REPLY)
+                return
+
+            # Ignore any non-stop message while the agent is running and keep
+            # listening for a possible stop signal.
+            receiver_task = asyncio.create_task(websocket.receive_text())
+    finally:
+        await _cancel_task(stream_task)
+        await _cancel_task(receiver_task)
+
+
+async def _cancel_task(task: asyncio.Task) -> None:
+    """
+    Cancel a task and await it, suppressing the resulting ``CancelledError``.
+
+    Awaiting the cancelled task ensures the cancellation fully unwinds (aborting
+    any in-flight LLM/tool call or WebSocket receive) and that any pending
+    exception is retrieved so asyncio does not emit a "never retrieved" warning.
+    """
+    if task.done():
+        # Retrieve any exception to avoid an "exception never retrieved" warning.
+        # A cancelled task raises CancelledError from .exception(), so guard for it.
+        if not task.cancelled():
+            task.exception()
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def _stream_agent_events(
+    agent: CompiledStateGraph,
+    input_data: any,
+    config: dict,
+    websocket: WebSocket,
+) -> None:
+    """
+    Streams the agent's events to a WebSocket connection.
+
+    Args:
+        agent: The compiled LangGraph agent.
+        input_data: The input data for the agent's run.
+        config: The run configuration.
+        websocket: The WebSocket connection.
+    """
+
     async for stream in agent.astream_events(
         input_data,
         config=config,

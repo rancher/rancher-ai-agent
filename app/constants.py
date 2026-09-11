@@ -3,3 +3,9 @@ CONTEXT_PARAMETERS_SUFFIX = (
 )
 
 INTERRUPT_CANCEL_REPLY = "Previous tool canceled by the user."
+
+# Control message the client sends to stop the currently running agent execution.
+STOP_MESSAGE = "<stop>"
+
+# Message injected as the tool result when a running execution is stopped by the user.
+STOP_CANCEL_REPLY = "Execution stopped by the user."

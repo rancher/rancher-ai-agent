@@ -141,7 +141,10 @@ def create_planner_agent(
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
         logging.info("Planner created %d subtask(s)", len(subtasks))
 
-        dispatch_custom_event("planner-plan-created",  f"<plan>{json.dumps(subtasks)}</plan>")
+        # With a single subtask, hand off directly to the subagent without exposing the
+        # plan to the client.
+        if len(subtasks) > 1:
+            dispatch_custom_event("planner-plan-created",  f"<plan>{json.dumps(subtasks)}</plan>")
         return {"subtasks": subtasks, "results": [], "cancelled": False}
 
     async def execute_node(state: PlannerState) -> dict:
@@ -153,6 +156,10 @@ def create_planner_agent(
         """
         subtasks = state["subtasks"]
         results = list(state.get("results", []))
+
+        # A single-subtask plan is handed off directly to the subagent without exposing
+        # the plan to the client.
+        single_subtask = len(subtasks) == 1
 
         index = next(i for i, st in enumerate(subtasks) if st["status"] == "pending")
         subtask = subtasks[index]
@@ -186,9 +193,10 @@ def create_planner_agent(
                 if _is_cancelled(result):
                     logging.info("Planner subtask for agent '%s' cancelled by the user", agent_name)
                     subtasks[index]["status"] = "cancelled"
-                    dispatch_custom_event(
-                        "planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>"
-                    )
+                    if not single_subtask:
+                        dispatch_custom_event(
+                            "planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>"
+                        )
                     return {
                         "subtasks": subtasks,
                         "results": results,
@@ -197,7 +205,8 @@ def create_planner_agent(
                     }
             else:
                 subtasks[index]["status"] = "in_progress"
-                dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
+                if not single_subtask:
+                    dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
                 try:
                     result = await child.agent.ainvoke(
                         {"messages": [HumanMessage(content=task)]},
@@ -220,6 +229,15 @@ def create_planner_agent(
 
         subtasks[index]["status"] = "completed"
         results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
+
+        # A single-subtask plan is handed off directly to the subagent: return its
+        # answer as-is; _route_next sends it to END, skipping the reducer.
+        if single_subtask:
+            return {
+                "subtasks": subtasks,
+                "results": results,
+                "messages": [AIMessage(content=content)],
+            }
 
         # The child agent notifies that it has finished its subtask.
         dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
@@ -267,8 +285,13 @@ def _route_next(state: PlannerState) -> str:
     """Route to execute while pending subtasks remain, otherwise reduce."""
     if state.get("cancelled"):
         return "end"
-    if any(st["status"] == "pending" for st in state.get("subtasks", [])):
+    subtasks = state.get("subtasks", [])
+    if any(st["status"] == "pending" for st in subtasks):
         return "execute"
+    # A single-subtask plan is handed off directly to the subagent, so skip the reducer
+    # and end with the child's answer.
+    if len(subtasks) <= 1:
+        return "end"
     return "reduce"
 
 

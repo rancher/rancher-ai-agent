@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 from kubernetes import client
+
 from .loader import (
     AuthenticationType,
     load_agent_configs,
@@ -14,6 +15,7 @@ from .loader import (
     get_ca_cert_from_secret,
     _load_k8s_config,
 )
+from .planner import create_planner_agent
 from ..rbac import accessible_agent_configs, rbac_enabled, RBACError
 from ..oauth2 import get_oauth_cookie_names
 from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
@@ -78,7 +80,7 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
         logging.warning("Only one child agent connected successfully. Using it directly instead of a supervisor.")
         return child_agents[0].agent, agents_metadata
 
-    graph = create_supervisor_agent(llm, child_agents, checkpointer)
+    graph = create_planner_agent(llm, child_agents, checkpointer)
     supervisor = SupervisorGraph(
         graph=graph,
         child_agents={ca.config.name: ca for ca in child_agents},
@@ -107,6 +109,7 @@ async def _build_child_agents(
             child_agents.append(ChildAgent(
                 config=agent_cfg,
                 agent=create_child_agent(llm, tools, checkpointer, agent_cfg),
+                tools=tools,
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active"})
         except NeedsOauth2 as e:

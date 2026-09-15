@@ -111,7 +111,7 @@ def create_planner_agent(
     """
     agents_by_name = {child.config.name: child for child in child_agents}
     agents_description = "\n".join(
-        _describe_agent(child) for child in child_agents
+        f"- {child.config.name}: {child.config.description}" for child in child_agents
     )
 
     # TODO check middleware here!
@@ -147,20 +147,20 @@ def create_planner_agent(
             dispatch_custom_event("planner-plan-created",  f"<plan>{json.dumps(subtasks)}</plan>")
         return {"subtasks": subtasks, "results": [], "cancelled": False}
 
-    async def execute_node(state: PlannerState) -> dict:
+    async def _run_pending_subtask(
+        subtasks: list[dict], results: list[str], emit_plan: bool
+    ) -> dict | str:
         """Run the next pending subtask in its assigned child agent.
 
         Handles human-in-the-loop interrupts: if a child agent pauses for confirmation,
         the interrupt is surfaced at the planner level and the child is resumed once the
-        user responds.
+        user responds. On completion the subtask is marked completed and its result is
+        appended to ``results``. When ``emit_plan`` is True, plan-progress events are
+        dispatched to the client.
+
+        Returns a state-update dict when the user cancels the plan, otherwise the child
+        agent's final message content.
         """
-        subtasks = state["subtasks"]
-        results = list(state.get("results", []))
-
-        # A single-subtask plan is handed off directly to the subagent without exposing
-        # the plan to the client.
-        single_subtask = len(subtasks) == 1
-
         index = next(i for i, st in enumerate(subtasks) if st["status"] == "pending")
         subtask = subtasks[index]
         agent_name = subtask["agent"]
@@ -193,7 +193,7 @@ def create_planner_agent(
                 if _is_cancelled(result):
                     logging.info("Planner subtask for agent '%s' cancelled by the user", agent_name)
                     subtasks[index]["status"] = "cancelled"
-                    if not single_subtask:
+                    if emit_plan:
                         dispatch_custom_event(
                             "planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>"
                         )
@@ -205,7 +205,7 @@ def create_planner_agent(
                     }
             else:
                 subtasks[index]["status"] = "in_progress"
-                if not single_subtask:
+                if emit_plan:
                     dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
                 try:
                     result = await child.agent.ainvoke(
@@ -229,18 +229,34 @@ def create_planner_agent(
 
         subtasks[index]["status"] = "completed"
         results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
+        return content
 
-        # A single-subtask plan is handed off directly to the subagent: return its
-        # answer as-is; _route_next sends it to END, skipping the reducer.
+    async def execute_node(state: PlannerState) -> dict:
+        """Run the next pending subtask in its assigned child agent."""
+        subtasks = state["subtasks"]
+        results = list(state.get("results", []))
+
+        single_subtask = len(subtasks) == 1
+
+        # A single-subtask plan is handed off directly to the subagent without exposing
+        # the plan to the client: execute it and exit here, returning its answer as-is;
+        # _route_next sends it to END, skipping the reducer.
         if single_subtask:
+            outcome = await _run_pending_subtask(subtasks, results, emit_plan=False)
+            if isinstance(outcome, dict):
+                return outcome
             return {
                 "subtasks": subtasks,
                 "results": results,
-                "messages": [AIMessage(content=content)],
+                "messages": [AIMessage(content=outcome)],
             }
 
+        outcome = await _run_pending_subtask(subtasks, results, emit_plan=True)
+        if isinstance(outcome, dict):
+            return outcome
+
         # The child agent notifies that it has finished its subtask.
-        dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
+        dispatch_custom_event("planner-plan-finished", f"<plan>{json.dumps(subtasks)}</plan>")
         return {"subtasks": subtasks, "results": results}
 
     async def reduce_node(state: PlannerState) -> dict:
@@ -268,6 +284,7 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
+#TODO remove?
 def _describe_agent(child: ChildAgent) -> str:
     """Render an agent's name, description, and available tools for the planner prompt."""
     description = child.config.description or "Specialized agent"

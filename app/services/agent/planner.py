@@ -103,6 +103,18 @@ results of each subtask that was executed. Combine them into a single, coherent 
 answer for the user.
 """
 
+PLANNER_FEEDBACK_SUFFIX = """\
+
+The user reviewed previous versions of this plan and requested changes. Produce a new
+plan that takes ALL of the following feedback into account, in order (later feedback
+refines or overrides earlier feedback):
+{feedback}
+"""
+
+PLAN_FAILED_REPLY = (
+    "There was a problem generating a plan for your request. Please try again with a different prompt."
+)
+
 
 def create_planner_agent(
     llm: BaseChatModel,
@@ -141,51 +153,54 @@ def create_planner_agent(
 
     async def plan_node(state: PlannerState) -> dict:
         """Generate the list of subtasks from the user's request."""
-        request = _last_user_request(state)
-        prompt = PLANNER_PROMPT.format(agents=agents_description, request=request)
+        needs_confirmation = True #TODO replace with env var
+        feedback: list[str] = []
 
-        plan: Plan | None = None
-        try:
-            response = await llm.with_structured_output(
-                Plan, include_raw=True
-            ).ainvoke(prompt, config={"tags": ["no-stream"]})
-        except Exception:  # noqa: BLE001 - small models can emit unparsable output
-            logging.warning("Planner structured output failed", exc_info=True)
-            response = None
+        while True:
+            plan = await _create_plan(state, feedback)
+            if plan is None or plan.subtasks is None or not plan.subtasks:
+                logging.error("Planner failed to produce a valid plan.")
+                return {
+                    "subtasks": [],
+                    "results": [],
+                    "cancelled": False,
+                    "messages": [AIMessage(content=PLAN_FAILED_REPLY)],
+                }
+            subtasks = [subtask.model_dump() for subtask in plan.subtasks]
+            
+            # With a single subtask, hand off directly to the subagent without exposing the
+            # plan to the client.
+            if len(plan.subtasks) == 1:
+                break
 
-        if response is not None:
-            # include_raw=True returns {"raw": AIMessage, "parsed": Plan|None,
-            # "parsing_error": Exception|None}.
-            response = cast(dict, response)
-            candidate = response.get("parsed")
-            if isinstance(candidate, Plan) and candidate.subtasks:
-                plan = candidate
-            else:
-                # Some models (e.g. gpt-oss-20b on bedrock_converse) emit the plan as
-                # plain text/JSON instead of a tool call, so tool-call-based structured
-                # output yields parsed=None. Recover the JSON from the raw message text.
-                candidate = _parse_plan_from_raw(response.get("raw"))
-                if candidate is not None and candidate.subtasks:
-                    logging.info("Planner recovered plan from raw message text.")
-                    plan = candidate
+            if not needs_confirmation:
+                break
 
-        if plan is None or not plan.subtasks:
-            # Small models (e.g. gpt-oss:20b) sometimes fail to produce a valid plan.
-            # Fall back to a single subtask covering the whole request, delegated to the
-            # first available child agent.
-            fallback_agent = child_agents[0].config.name
-            logging.warning(
-                "Planner falling back to a single subtask on agent '%s'", fallback_agent
+            response = langgraph.types.interrupt(
+                f"<plan-approval>{json.dumps([st.model_dump() for st in plan.subtasks])}</plan-approval>"
             )
-            plan = Plan(subtasks=[SubTask(task=request, agent=fallback_agent)])
+            normalized = response.strip().lower() if isinstance(response, str) else response
 
-        subtasks = [subtask.model_dump() for subtask in plan.subtasks]
-        logging.info("Planner created %d subtask(s)", len(subtasks))
+            if normalized == "yes":
+                break
 
-        # With a single subtask, hand off directly to the subagent without exposing the
-        # plan to the client.
-        if len(subtasks) > 1:
-            dispatch_custom_event("planner-plan-created",  f"<plan>{json.dumps(subtasks)}</plan>")
+            if normalized == "no":
+                logging.debug("Planner plan was rejected by the user.")
+                return {
+                    "subtasks": [],
+                    "results": [],
+                    "cancelled": True,
+                    "messages": [AIMessage(content="Plan was not approved by the user.")],
+                }
+
+            # Any other response is treated as feedback: accumulate it and regenerate
+            # the plan so successive rounds of feedback all apply, then ask the user to
+            # review the revised version.
+            logging.debug("Planner regenerating plan from user feedback.")
+            feedback.append(response)
+
+            # TODO do we need this? dispatch_custom_event("planner-plan-created",  f"<plan>{json.dumps(subtasks)}</plan>")
+        
         return {"subtasks": subtasks, "results": [], "cancelled": False}
 
     async def _run_pending_subtask(
@@ -271,6 +286,46 @@ def create_planner_agent(
         subtasks[index]["status"] = "completed"
         results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
         return content
+
+    async def _create_plan(state: PlannerState, feedback: list[str] | None = None) -> Plan | None:
+        """Generate a plan from the user's request using the LLM.
+
+        When ``feedback`` is provided, the user rejected one or more previous plans and
+        asked for changes; every round of feedback is appended to the prompt, in order,
+        so the new plan reflects all of their requests.
+        """
+        request = _last_user_request(state)
+        prompt = PLANNER_PROMPT.format(agents=agents_description, request=request)
+        if feedback:
+            joined = "\n".join(f"- {item}" for item in feedback)
+            prompt += PLANNER_FEEDBACK_SUFFIX.format(feedback=joined)
+
+        plan: Plan | None = None
+        try:
+            response = await llm.with_structured_output(
+                Plan, include_raw=True
+            ).ainvoke(prompt, config={"tags": ["no-stream"]})
+        except Exception:  # noqa: BLE001 - small models can emit unparsable output
+            logging.warning("Planner structured output failed", exc_info=True)
+            response = None
+
+        if response is not None:
+            # include_raw=True returns {"raw": AIMessage, "parsed": Plan|None,
+            # "parsing_error": Exception|None}.
+            response = cast(dict, response)
+            candidate = response.get("parsed")
+            if isinstance(candidate, Plan) and candidate.subtasks:
+                plan = candidate
+            else:
+                # Some models (e.g. gpt-oss-20b on bedrock_converse) emit the plan as
+                # plain text/JSON instead of a tool call, so tool-call-based structured
+                # output yields parsed=None. Recover the JSON from the raw message text.
+                candidate = _parse_plan_from_raw(response.get("raw"))
+                if candidate is not None and candidate.subtasks:
+                    logging.info("Planner recovered plan from raw message text.")
+                    plan = candidate
+        
+        return plan
 
     async def execute_node(state: PlannerState) -> dict:
         """Run the next pending subtask in its assigned child agent."""

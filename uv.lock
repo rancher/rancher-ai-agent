@@ -1575,7 +1575,7 @@ wheels = [
 
 [[package]]
 name = "langchain-aws"
-version = "1.7.4"
+version = "1.7.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -1583,9 +1583,9 @@ dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/5c/a34197f3e3cb5a6d67f60542dd40df4a3710c63a1d41239c0bf20fab6dd9/langchain_aws-1.7.4.tar.gz", hash = "sha256:93b814fb55aa8464d152b05b985cd6664ddf8fc37e1dc2717b9b0bf903ea551b", size = 675188, upload-time = "2026-08-26T14:13:09.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/8b/1219e01f73c7ff83a2e315067f8051965ce838a4401a8d99e2e5ce44315b/langchain_aws-1.7.6.tar.gz", hash = "sha256:b46a64a16e56f268b9b841d7388ac2c057d77803b09b3933aec673a54904a81f", size = 758756, upload-time = "2026-09-11T02:08:13.58Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/94/5c0dcb02194c984556a705e3f4981bcaaf3a16244b660972a475348c148d/langchain_aws-1.7.4-py3-none-any.whl", hash = "sha256:0d6a30e0b503fc66b140ccd35fddbdeb7171c33028bac03933274d86c99288a0", size = 233224, upload-time = "2026-08-26T14:13:08.039Z" },
+    { url = "https://files.pythonhosted.org/packages/15/3d/498648271f2d622c28ae5d5d06207272b2654a747fed6c04a4e8ca198b73/langchain_aws-1.7.6-py3-none-any.whl", hash = "sha256:d165931487b1aadf839a2bb17570faf69104fc60a40505bc43300a3bd317b3cb", size = 236663, upload-time = "2026-09-11T02:08:12.153Z" },
 ]
 
 [[package]]
@@ -2984,7 +2984,7 @@ requires-dist = [
     { name = "kopf", specifier = "==1.44.6" },
     { name = "kubernetes", specifier = "==36.0.3" },
     { name = "langchain", specifier = "==1.3.14" },
-    { name = "langchain-aws", specifier = "==1.7.4" },
+    { name = "langchain-aws", specifier = "==1.7.6" },
     { name = "langchain-community", specifier = "==0.4.2" },
     { name = "langchain-google-genai", specifier = "==4.3.7" },
     { name = "langchain-mcp-adapters", specifier = "==0.3.2" },
@@ -3406,8 +3406,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
-    { name = "jeepney", marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

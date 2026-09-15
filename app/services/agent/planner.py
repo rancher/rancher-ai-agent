@@ -10,7 +10,7 @@ node synthesizes the individual results into a single final answer for the user.
 
 import json
 import logging
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, TypedDict, cast
 
 from pydantic import BaseModel, Field
 from langchain.agents import create_agent
@@ -73,6 +73,16 @@ User request:
 
 Return a plan where each subtask has a clear, self-contained task description and the
 name of the agent best suited to perform it. Keep the number of subtasks minimal.
+
+Rules you MUST follow:
+- Always return at least one subtask. If the request is simple, return exactly one
+  subtask that covers the whole request.
+- The "agent" field of every subtask MUST be one of the agent names listed above,
+  copied exactly (case-sensitive). Do not invent new agent names.
+- Each "task" must be a complete, standalone instruction that does not rely on context
+  from other subtasks.
+- Respond with a single, valid JSON object only. Do not add explanations, comments,
+  markdown code fences, or any text before or after the JSON.
 """
 
 REDUCER_PROMPT = """\
@@ -133,10 +143,41 @@ def create_planner_agent(
         """Generate the list of subtasks from the user's request."""
         request = _last_user_request(state)
         prompt = PLANNER_PROMPT.format(agents=agents_description, request=request)
-        plan = await llm.with_structured_output(Plan).ainvoke(
-            prompt, config={"tags": ["no-stream"]}
-        )
-        assert isinstance(plan, Plan)
+
+        plan: Plan | None = None
+        try:
+            response = await llm.with_structured_output(
+                Plan, include_raw=True
+            ).ainvoke(prompt, config={"tags": ["no-stream"]})
+        except Exception:  # noqa: BLE001 - small models can emit unparsable output
+            logging.warning("Planner structured output failed", exc_info=True)
+            response = None
+
+        if response is not None:
+            # include_raw=True returns {"raw": AIMessage, "parsed": Plan|None,
+            # "parsing_error": Exception|None}.
+            response = cast(dict, response)
+            candidate = response.get("parsed")
+            if isinstance(candidate, Plan) and candidate.subtasks:
+                plan = candidate
+            else:
+                # Some models (e.g. gpt-oss-20b on bedrock_converse) emit the plan as
+                # plain text/JSON instead of a tool call, so tool-call-based structured
+                # output yields parsed=None. Recover the JSON from the raw message text.
+                candidate = _parse_plan_from_raw(response.get("raw"))
+                if candidate is not None and candidate.subtasks:
+                    logging.info("Planner recovered plan from raw message text.")
+                    plan = candidate
+
+        if plan is None or not plan.subtasks:
+            # Small models (e.g. gpt-oss:20b) sometimes fail to produce a valid plan.
+            # Fall back to a single subtask covering the whole request, delegated to the
+            # first available child agent.
+            fallback_agent = child_agents[0].config.name
+            logging.warning(
+                "Planner falling back to a single subtask on agent '%s'", fallback_agent
+            )
+            plan = Plan(subtasks=[SubTask(task=request, agent=fallback_agent)])
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
         logging.info("Planner created %d subtask(s)", len(subtasks))
@@ -296,6 +337,55 @@ def _describe_agent(child: ChildAgent) -> str:
         )
         lines.append(f"  Tools:\n{tool_lines}")
     return "\n".join(lines)
+
+
+def _extract_text(raw: object) -> str:
+    """Concatenate the textual content of an AIMessage, ignoring reasoning blocks.
+
+    Message content can be a plain string or a list of typed blocks (e.g. ``text`` and
+    ``reasoning_content``). Only ``text`` blocks are kept.
+    """
+    content = getattr(raw, "content", raw)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    return ""
+
+
+def _parse_plan_from_raw(raw: object) -> Plan | None:
+    """Best-effort recovery of a Plan from a raw message when tool-calling parsing fails.
+
+    Small models sometimes return the plan as JSON text instead of a tool call. Extract
+    the first ``{...}`` JSON object from the message text and validate it against Plan.
+    """
+    text = _extract_text(raw)
+    if not text:
+        return None
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+
+    snippet = text[start : end + 1]
+    try:
+        data = json.loads(snippet)
+    except json.JSONDecodeError:
+        logging.warning("Planner could not JSON-decode recovered snippet: %r", snippet)
+        return None
+
+    try:
+        return Plan.model_validate(data)
+    except Exception:  # noqa: BLE001 - validation failure just means no usable plan
+        logging.warning("Planner recovered JSON did not match Plan schema: %r", data)
+        return None
 
 
 def _route_next(state: PlannerState) -> str:

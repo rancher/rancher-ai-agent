@@ -72,15 +72,13 @@ User request:
 {request}
 
 Return a plan where each subtask has a clear, self-contained task description and the
-name of the agent best suited to perform it. Keep the number of subtasks minimal.
+name of the agent best suited to perform it.
 
 Rules you MUST follow:
 - Always return at least one subtask. If the request is simple, return exactly one
   subtask that covers the whole request.
 - The "agent" field of every subtask MUST be one of the agent names listed above,
   copied exactly (case-sensitive). Do not invent new agent names.
-- Each "task" must be a complete, standalone instruction that does not rely on context
-  from other subtasks.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,
   markdown code fences, or any text before or after the JSON.
 """
@@ -265,7 +263,7 @@ def create_planner_agent(
                     dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
                 try:
                     result = await child.agent.ainvoke(
-                        {"messages": [HumanMessage(content=task)]},
+                        {"messages": [HumanMessage(content=_build_task_message(task, results))]},
                         config=child_config,
                     )
                 except GraphBubbleUp:
@@ -380,6 +378,21 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
+def _build_task_message(task: str, previous_results: list[str]) -> str:
+    """Build the message sent to a child agent, including prior subtask outcomes.
+
+    A subtask may depend on the results of the subtasks that ran before it, so the
+    accumulated results are prepended as context ahead of the current task.
+    """
+    if not previous_results:
+        return task
+    joined = "\n\n".join(previous_results)
+    return (
+        "Results of the previous subtasks in the plan (use them as needed to complete "
+        f"your task):\n{joined}\n\nYour task:\n{task}"
+    )
+
+
 #TODO remove?
 def _describe_agent(child: ChildAgent) -> str:
     """Render an agent's name, description, and available tools for the planner prompt."""
@@ -396,7 +409,6 @@ def _describe_agent(child: ChildAgent) -> str:
 
 def _extract_text(raw: object) -> str:
     """Concatenate the textual content of an AIMessage, ignoring reasoning blocks.
-
     Message content can be a plain string or a list of typed blocks (e.g. ``text`` and
     ``reasoning_content``). Only ``text`` blocks are kept.
     """

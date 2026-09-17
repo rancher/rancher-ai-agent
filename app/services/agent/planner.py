@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.callbacks.manager import dispatch_custom_event
 import langgraph.types
@@ -68,9 +68,6 @@ Assign each subtask to exactly one of the available agents (use the agent name).
 Available agents:
 {agents}
 
-User request:
-{request}
-
 Return a plan where each subtask has a clear, self-contained task description and the
 name of the agent best suited to perform it.
 
@@ -115,10 +112,11 @@ refines or overrides earlier feedback):
 
 PLANNER_RETRY_SUFFIX = """\
 
+---
 The previous plan attempt failed and execution was stopped early:
 {details}
 
-Treat the user's latest message as new or corrected information. Create a brand-new,
+Treat the new user message above as new or corrected information. Create a brand-new,
 complete plan that covers the ENTIRE original request from the beginning, with every
 step needed to fully satisfy it. Do not resume from where the previous attempt stopped
 and do not assume any of its steps are still valid.
@@ -371,19 +369,29 @@ def create_planner_agent(
         stopped.
         """
         request = _last_user_request(state)
-        prompt = PLANNER_PROMPT.format(agents=agents_description, request=request)
         retry_details = _last_plan_failure_details(state)
-        if retry_details:
-            prompt += PLANNER_RETRY_SUFFIX.format(details=retry_details)
-        if feedback:
-            joined = "\n".join(f"- {item}" for item in feedback)
-            prompt += PLANNER_FEEDBACK_SUFFIX.format(feedback=joined)
+        if retry_details or feedback:
+            # Label the request so it is not confused with the appended failure/feedback
+            # context that follows it.
+            human_content = f"New user message:\n{request}"
+            if retry_details:
+                human_content += PLANNER_RETRY_SUFFIX.format(details=retry_details)
+            if feedback:
+                joined = "\n".join(f"- {item}" for item in feedback)
+                human_content += PLANNER_FEEDBACK_SUFFIX.format(feedback=joined)
+        else:
+            human_content = request
+
+        messages = [
+            SystemMessage(content=PLANNER_PROMPT.format(agents=agents_description)),
+            HumanMessage(content=human_content),
+        ]
 
         plan: Plan | None = None
         try:
             response = await llm.with_structured_output(
                 Plan, include_raw=True
-            ).ainvoke(prompt, config={"tags": ["no-stream"]})
+            ).ainvoke(messages, config={"tags": ["no-stream"]})
         except Exception:  # noqa: BLE001 - small models can emit unparsable output
             logging.warning("Planner structured output failed", exc_info=True)
             response = None

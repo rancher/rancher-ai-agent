@@ -3,6 +3,10 @@ from .loader import AgentConfig
 
 INTERRUPT_CANCEL_MESSAGE = "tool execution cancelled by the user"
 
+# Marker a child agent is instructed to prefix its reply with when it cannot
+# complete an assigned subtask. The planner scans for it to fail the plan.
+SUBTASK_FAILED_MARKER = "SUBTASK_FAILED"
+
 class NoAgentAvailableError(Exception):
     """Exception raised when loading MCP tools fails."""
     pass

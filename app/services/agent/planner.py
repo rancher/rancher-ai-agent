@@ -27,7 +27,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
 from .supervisor import ChildAgent, _extract_last_message
-from ._constants import INTERRUPT_CANCEL_MESSAGE
+from ._constants import INTERRUPT_CANCEL_MESSAGE, SUBTASK_FAILED_MARKER
 from ...constants import INTERRUPT_CANCEL_REPLY
 from .middleware import (
     MessagesHistoryMiddleware,
@@ -40,7 +40,7 @@ class SubTask(BaseModel):
     """A single unit of work assigned to a child agent."""
 
     task: str = Field(description="The task to be performed.")
-    status: Literal["pending", "in_progress", "completed", "cancelled"] = Field(
+    status: Literal["pending", "in_progress", "completed", "cancelled", "failed"] = Field(
         default="pending", description="The current status of the subtask."
     )
     agent: str = Field(description="The name of the child agent chosen to run this task.")
@@ -112,6 +112,47 @@ refines or overrides earlier feedback):
 PLAN_FAILED_REPLY = (
     "There was a problem generating a plan for your request. Please try again with a different prompt."
 )
+
+PLAN_SUBTASK_FAILED_REPLY = (
+    'I couldn\'t complete the step "{task}" with the "{agent}" agent: {error}\n\n'
+    "I've stopped the plan here instead of continuing with the remaining steps, so the "
+    "results stay consistent. Please provide any missing information or adjust your "
+    "request, and I'll try again."
+)
+
+
+def _fail_plan(
+    subtasks: list[dict],
+    results: list[str],
+    index: int,
+    task: str,
+    agent_name: str,
+    error: Exception | str,
+    emit_plan: bool,
+) -> dict:
+    """Stop the plan after a subtask fails and report the failure to the user.
+
+    Marks the failed subtask, emits a plan-progress event when running a multi-subtask
+    plan, and returns a state update that routes the graph to END (via ``cancelled``)
+    with a user-facing explanation instead of silently marking the subtask completed and
+    continuing with the remaining subtasks.
+
+    ``error`` may be the exception that was raised or a plain reason string (e.g. when the
+    child agent signalled failure via the marker or no agent was available).
+    """
+    subtasks[index]["status"] = "failed"
+    if emit_plan:
+        dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
+    return {
+        "subtasks": subtasks,
+        "results": results,
+        "cancelled": True,
+        "messages": [
+            AIMessage(
+                content=PLAN_SUBTASK_FAILED_REPLY.format(task=task, agent=agent_name, error=error)
+            )
+        ],
+    }
 
 
 def create_planner_agent(
@@ -206,14 +247,18 @@ def create_planner_agent(
     ) -> dict | str:
         """Run the next pending subtask in its assigned child agent.
 
-        Handles human-in-the-loop interrupts: if a child agent pauses for confirmation,
-        the interrupt is surfaced at the planner level and the child is resumed once the
-        user responds. On completion the subtask is marked completed and its result is
-        appended to ``results``. When ``emit_plan`` is True, plan-progress events are
-        dispatched to the client.
+        Handles human-in-the-loop interrupts: if a child agent pauses for confirmation
+        or to ask the user for more data, the interrupt is surfaced at the planner level
+        and the child is resumed once the user responds. On completion the subtask is
+        marked completed and its result is appended to ``results``. When ``emit_plan`` is
+        True, plan-progress events are dispatched to the client.
 
-        Returns a state-update dict when the user cancels the plan, otherwise the child
-        agent's final message content.
+        If the child agent raises an error the plan is stopped rather than silently
+        continuing with the remaining subtasks: the failure is reported to the user via
+        ``_fail_plan``.
+
+        Returns a state-update dict when the user cancels the plan or a subtask fails,
+        otherwise the child agent's final message content.
         """
         index = next(i for i, st in enumerate(subtasks) if st["status"] == "pending")
         subtask = subtasks[index]
@@ -222,8 +267,9 @@ def create_planner_agent(
 
         child = agents_by_name.get(agent_name)
         if child is None:
-            content = f"No agent named '{agent_name}' is available to run this task."
-            logging.error(content)
+            reason = f"No agent named '{agent_name}' is available to run this task."
+            logging.error(reason)
+            return _fail_plan(subtasks, results, index, task, agent_name, reason, emit_plan)
         else:
             child_config = _build_child_config(agent_name)
             child_state = await child.agent.aget_state(config=child_config)
@@ -240,7 +286,7 @@ def create_planner_agent(
                     raise
                 except Exception as e:
                     logging.exception(f"Subtask agent '{agent_name}' failed during resume: {e}")
-                    result = {"messages": []}
+                    return _fail_plan(subtasks, results, index, task, agent_name, e, emit_plan)
 
                 # The user declined the confirmation: cancel the whole plan instead of
                 # continuing with the remaining subtasks.
@@ -270,7 +316,7 @@ def create_planner_agent(
                     raise
                 except Exception as e:
                     logging.exception(f"Subtask agent '{agent_name}' failed: {e}")
-                    result = {"messages": []}
+                    return _fail_plan(subtasks, results, index, task, agent_name, e, emit_plan)
 
             # ainvoke() suppresses a GraphInterrupt raised inside the child, returning
             # normally. Re-trigger any new interrupt at the planner level so the client
@@ -280,6 +326,14 @@ def create_planner_agent(
                 langgraph.types.interrupt(child_state.interrupts[0].value)
 
             content = _extract_last_message(result)
+
+        # The child returned without raising, but it may have signalled that it could not
+        # complete the task via the failure marker. Stop the plan instead of marking the
+        # subtask completed and continuing with the remaining subtasks.
+        reason = _subtask_failure_reason(content)
+        if reason is not None:
+            logging.info("Planner subtask for agent '%s' reported failure: %s", agent_name, reason)
+            return _fail_plan(subtasks, results, index, task, agent_name, reason, emit_plan)
 
         subtasks[index]["status"] = "completed"
         results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
@@ -378,18 +432,28 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
+_SUBTASK_FAILURE_INSTRUCTION = (
+    f"\n\nIf you cannot complete this task (missing information, an error, or you lack the "
+    f"capability), respond with a message that begins with '{SUBTASK_FAILED_MARKER}:' "
+    "followed by a short reason. Otherwise, complete the task normally and do not use that "
+    "prefix."
+)
+
+
 def _build_task_message(task: str, previous_results: list[str]) -> str:
     """Build the message sent to a child agent, including prior subtask outcomes.
 
     A subtask may depend on the results of the subtasks that ran before it, so the
-    accumulated results are prepended as context ahead of the current task.
+    accumulated results are prepended as context ahead of the current task. The child is
+    also instructed to signal failure with the ``SUBTASK_FAILED`` marker so the planner
+    can stop the plan instead of continuing on an unsuccessful step.
     """
     if not previous_results:
-        return task
+        return task + _SUBTASK_FAILURE_INSTRUCTION
     joined = "\n\n".join(previous_results)
     return (
         "Results of the previous subtasks in the plan (use them as needed to complete "
-        f"your task):\n{joined}\n\nYour task:\n{task}"
+        f"your task):\n{joined}\n\nYour task:\n{task}" + _SUBTASK_FAILURE_INSTRUCTION
     )
 
 
@@ -467,6 +531,24 @@ def _route_next(state: PlannerState) -> str:
     if len(subtasks) <= 1:
         return "end"
     return "reduce"
+
+
+def _subtask_failure_reason(content: str | list) -> str | None:
+    """Return the failure reason if the child signalled failure, else None.
+
+    Child agents are instructed to begin their reply with the ``SUBTASK_FAILED:`` marker
+    when they cannot complete a task. A prefix match on the stripped content avoids false
+    positives from the marker merely appearing mid-text.
+
+    Message content may be a plain string or a list of typed blocks (e.g. ``text`` and
+    ``reasoning_content``); ``_extract_text`` normalizes both to the concatenated text,
+    dropping reasoning so the marker is detected against the visible reply.
+    """
+    stripped = _extract_text(content).strip()
+    prefix = f"{SUBTASK_FAILED_MARKER}:"
+    if stripped.startswith(prefix):
+        return stripped[len(prefix):].strip() or "The agent reported it could not complete the task."
+    return None
 
 
 def _is_cancelled(result: dict) -> bool:

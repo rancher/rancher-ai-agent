@@ -77,6 +77,10 @@ name of the agent best suited to perform it.
 Rules you MUST follow:
 - Always return at least one subtask. If the request is simple, return exactly one
   subtask that covers the whole request.
+- If the request is complex, break it down into as many subtasks as needed so each one
+  covers a single, self-contained piece of work. Do not bundle unrelated or multi-step
+  work into a single subtask when it can reasonably be split, even if multiple
+  subtasks end up assigned to the same agent.
 - The "agent" field of every subtask MUST be one of the agent names listed above,
   copied exactly (case-sensitive). Do not invent new agent names.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,
@@ -109,15 +113,29 @@ refines or overrides earlier feedback):
 {feedback}
 """
 
+PLANNER_RETRY_SUFFIX = """\
+
+The previous plan attempt failed and execution was stopped early:
+{details}
+
+Treat the user's latest message as new or corrected information. Create a brand-new,
+complete plan that covers the ENTIRE original request from the beginning, with every
+step needed to fully satisfy it. Do not resume from where the previous attempt stopped
+and do not assume any of its steps are still valid.
+"""
+
+PLAN_FAILED_PREFIX = "PLAN FAILED:"
+
 PLAN_FAILED_REPLY = (
     "There was a problem generating a plan for your request. Please try again with a different prompt."
 )
 
 PLAN_SUBTASK_FAILED_REPLY = (
-    'I couldn\'t complete the step "{task}" with the "{agent}" agent: {error}\n\n'
+    PLAN_FAILED_PREFIX + ' I couldn\'t complete the step "{task}": {error}\n\n'
+    "Here is the plan that was being executed:\n{plan}\n\n"
     "I've stopped the plan here instead of continuing with the remaining steps, so the "
     "results stay consistent. Please provide any missing information or adjust your "
-    "request, and I'll try again."
+    "request, and I'll create a new plan."
 )
 
 
@@ -126,7 +144,6 @@ def _fail_plan(
     results: list[str],
     index: int,
     task: str,
-    agent_name: str,
     error: Exception | str,
     emit_plan: bool,
 ) -> dict:
@@ -149,7 +166,9 @@ def _fail_plan(
         "cancelled": True,
         "messages": [
             AIMessage(
-                content=PLAN_SUBTASK_FAILED_REPLY.format(task=task, agent=agent_name, error=error)
+                content=PLAN_SUBTASK_FAILED_REPLY.format(
+                    task=task, error=error, plan=_format_plan(subtasks)
+                )
             )
         ],
     }
@@ -269,7 +288,7 @@ def create_planner_agent(
         if child is None:
             reason = f"No agent named '{agent_name}' is available to run this task."
             logging.error(reason)
-            return _fail_plan(subtasks, results, index, task, agent_name, reason, emit_plan)
+            return _fail_plan(subtasks, results, index, task, reason, emit_plan)
         else:
             child_config = _build_child_config(agent_name)
             child_state = await child.agent.aget_state(config=child_config)
@@ -286,12 +305,12 @@ def create_planner_agent(
                     raise
                 except Exception as e:
                     logging.exception(f"Subtask agent '{agent_name}' failed during resume: {e}")
-                    return _fail_plan(subtasks, results, index, task, agent_name, e, emit_plan)
+                    return _fail_plan(subtasks, results, index, task, e, emit_plan)
 
                 # The user declined the confirmation: cancel the whole plan instead of
                 # continuing with the remaining subtasks.
                 if _is_cancelled(result):
-                    logging.info("Planner subtask for agent '%s' cancelled by the user", agent_name)
+                    logging.debug("Planner subtask for agent '%s' cancelled by the user", agent_name)
                     subtasks[index]["status"] = "cancelled"
                     if emit_plan:
                         dispatch_custom_event(
@@ -316,7 +335,7 @@ def create_planner_agent(
                     raise
                 except Exception as e:
                     logging.exception(f"Subtask agent '{agent_name}' failed: {e}")
-                    return _fail_plan(subtasks, results, index, task, agent_name, e, emit_plan)
+                    return _fail_plan(subtasks, results, index, task, e, emit_plan)
 
             # ainvoke() suppresses a GraphInterrupt raised inside the child, returning
             # normally. Re-trigger any new interrupt at the planner level so the client
@@ -332,8 +351,8 @@ def create_planner_agent(
         # subtask completed and continuing with the remaining subtasks.
         reason = _subtask_failure_reason(content)
         if reason is not None:
-            logging.info("Planner subtask for agent '%s' reported failure: %s", agent_name, reason)
-            return _fail_plan(subtasks, results, index, task, agent_name, reason, emit_plan)
+            logging.debug("Planner subtask for agent '%s' reported failure: %s", agent_name, reason)
+            return _fail_plan(subtasks, results, index, task, reason, emit_plan)
 
         subtasks[index]["status"] = "completed"
         results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
@@ -345,9 +364,17 @@ def create_planner_agent(
         When ``feedback`` is provided, the user rejected one or more previous plans and
         asked for changes; every round of feedback is appended to the prompt, in order,
         so the new plan reflects all of their requests.
+
+        When the user's latest message immediately follows a failed plan, the retry
+        suffix is appended instead, instructing the LLM to build a brand-new, complete
+        plan for the whole request rather than resuming from where the previous attempt
+        stopped.
         """
         request = _last_user_request(state)
         prompt = PLANNER_PROMPT.format(agents=agents_description, request=request)
+        retry_details = _last_plan_failure_details(state)
+        if retry_details:
+            prompt += PLANNER_RETRY_SUFFIX.format(details=retry_details)
         if feedback:
             joined = "\n".join(f"- {item}" for item in feedback)
             prompt += PLANNER_FEEDBACK_SUFFIX.format(feedback=joined)
@@ -374,7 +401,7 @@ def create_planner_agent(
                 # output yields parsed=None. Recover the JSON from the raw message text.
                 candidate = _parse_plan_from_raw(response.get("raw"))
                 if candidate is not None and candidate.subtasks:
-                    logging.info("Planner recovered plan from raw message text.")
+                    logging.debug("Planner recovered plan from raw message text.")
                     plan = candidate
         
         return plan
@@ -455,6 +482,11 @@ def _build_task_message(task: str, previous_results: list[str]) -> str:
         "Results of the previous subtasks in the plan (use them as needed to complete "
         f"your task):\n{joined}\n\nYour task:\n{task}" + _SUBTASK_FAILURE_INSTRUCTION
     )
+
+
+def _format_plan(subtasks: list[dict]) -> str:
+    """Render the plan's subtasks as JSON, matching the ``SubTask`` schema."""
+    return json.dumps(subtasks)
 
 
 #TODO remove?
@@ -566,6 +598,24 @@ def _last_user_request(state: PlannerState) -> str:
         if content and (isinstance(msg, HumanMessage) or getattr(msg, "type", None) == "human"):
             return content
     return ""
+
+
+def _last_plan_failure_details(state: PlannerState) -> str | None:
+    """Return the failed-plan message content if the latest request follows one.
+
+    After a subtask fails, the planner reports a message beginning with the
+    ``PLAN_FAILED_PREFIX`` marker and ends the run. If the message right before the
+    user's latest request is such a message, return its content so the planner can be
+    instructed to build a brand-new, complete plan instead of assuming stale progress
+    from the failed attempt.
+    """
+    messages = state.get("messages", [])
+    if len(messages) < 2:
+        return None
+    text = _extract_text(messages[-2])
+    if text.startswith(PLAN_FAILED_PREFIX):
+        return text
+    return None
 
 
 def _build_child_config(agent_name: str) -> RunnableConfig:

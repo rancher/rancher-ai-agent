@@ -4,6 +4,8 @@ Unit tests for planner helpers that detect and report subtask failures.
 These cover the pure helpers used to fail a plan when a child agent signals that
 it could not complete its subtask, rather than silently marking it completed.
 """
+from unittest.mock import patch
+
 from app.services.agent._constants import SUBTASK_FAILED_MARKER
 from app.services.agent.planner import (
     _build_task_message,
@@ -74,15 +76,16 @@ class TestFailPlan:
         ]
         results: list[str] = []
 
-        update = _fail_plan(
-            subtasks,
-            results,
-            index=0,
-            task="step one",
-            agent_name="a",
-            error="missing information",
-            emit_plan=False,
-        )
+        with patch("app.services.agent.planner.dispatch_custom_event") as dispatch:
+            update = _fail_plan(
+                subtasks,
+                results,
+                index=0,
+                task="step one",
+                agent_name="a",
+                error="missing information",
+                emit_plan=False,
+            )
 
         assert subtasks[0]["status"] == "failed"
         # The remaining subtask is left untouched so the plan stops here.
@@ -93,17 +96,21 @@ class TestFailPlan:
         reply = update["messages"][0].content
         assert "step one" in reply
         assert "missing information" in reply
+        # The failure reply is also emitted as a custom event so the client shows it,
+        # since child output is suppressed (no-stream).
+        dispatch.assert_any_call("planner-message", reply)
 
     def test_accepts_exception_reason(self):
         subtasks = [{"task": "t", "agent": "a", "status": "in_progress"}]
-        update = _fail_plan(
-            subtasks,
-            [],
-            index=0,
-            task="t",
-            agent_name="a",
-            error=ValueError("boom"),
-            emit_plan=False,
-        )
+        with patch("app.services.agent.planner.dispatch_custom_event"):
+            update = _fail_plan(
+                subtasks,
+                [],
+                index=0,
+                task="t",
+                agent_name="a",
+                error=ValueError("boom"),
+                emit_plan=False,
+            )
         assert subtasks[0]["status"] == "failed"
         assert "boom" in update["messages"][0].content

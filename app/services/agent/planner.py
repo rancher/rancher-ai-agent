@@ -10,8 +10,8 @@ node synthesizes the individual results into a single final answer for the user.
 
 import json
 import logging
+import os
 from typing import Annotated, Literal, TypedDict, cast
-
 from pydantic import BaseModel, Field
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
@@ -27,7 +27,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
 from .supervisor import ChildAgent, _extract_last_message
-from ._constants import INTERRUPT_CANCEL_MESSAGE, SUBTASK_FAILED_MARKER
+from ._constants import INTERRUPT_CANCEL_MESSAGE
 from ...constants import INTERRUPT_CANCEL_REPLY
 from .middleware import (
     MessagesHistoryMiddleware,
@@ -59,6 +59,7 @@ class PlannerState(TypedDict):
     subtasks: list[dict]
     results: list[str]
     cancelled: bool
+    feedback: list[str]
 
 
 PLANNER_PROMPT = """\
@@ -76,8 +77,7 @@ Rules you MUST follow:
   subtask that covers the whole request.
 - If the request is complex, break it down into as many subtasks as needed so each one
   covers a single, self-contained piece of work. Do not bundle unrelated or multi-step
-  work into a single subtask when it can reasonably be split, even if multiple
-  subtasks end up assigned to the same agent.
+  work into a single subtask when it can reasonably be split,
 - The "agent" field of every subtask MUST be one of the agent names listed above,
   copied exactly (case-sensitive). Do not invent new agent names.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,
@@ -100,6 +100,29 @@ REDUCER_SYSTEM_PROMPT = """\
 You are the reducer of a planner agent. You are given the original user request and the
 results of each subtask that was executed. Combine them into a single, coherent final
 answer for the user.
+"""
+
+SUBTASK_EVALUATION_SYSTEM_PROMPT = """\
+You are the evaluator of a planner agent. You are given a subtask that was assigned to a
+child agent and the response that agent produced. Judge whether the agent actually
+completed the task. Answer with a single word: "yes" if it completed the task, or "no" if
+it did not. Do not add any other text.
+"""
+
+SUBTASK_EVALUATION_PROMPT = """\
+Did the agent complete the assigned subtask?
+
+Subtask:
+{task}
+
+Agent's response:
+{response}
+
+The task was NOT completed if the agent reports it is missing information, hit an error,
+lacks the capability or permissions, refused, or otherwise did not accomplish what was
+asked. If the agent accomplished the task and produced a useful result, it was completed.
+
+Answer with a single word: "yes" if it completed the task, or "no" if it did not.
 """
 
 PLANNER_FEEDBACK_SUFFIX = """\
@@ -208,56 +231,64 @@ def create_planner_agent(
     )
 
     async def plan_node(state: PlannerState) -> dict:
-        """Generate the list of subtasks from the user's request."""
-        needs_confirmation = True #TODO replace with env var
-        feedback: list[str] = []
+        """Generate the list of subtasks from the user's request.
 
-        while True:
-            plan = await _create_plan(state, feedback)
-            if plan is None or plan.subtasks is None or not plan.subtasks:
-                logging.error("Planner failed to produce a valid plan.")
-                return {
-                    "subtasks": [],
-                    "results": [],
-                    "cancelled": False,
-                    "messages": [AIMessage(content=PLAN_FAILED_REPLY)],
-                }
-            subtasks = [subtask.model_dump() for subtask in plan.subtasks]
-            
-            # With a single subtask, hand off directly to the subagent without exposing the
-            # plan to the client.
-            if len(plan.subtasks) == 1:
-                break
+        The generated plan is written to state so that, when the plan needs user
+        approval, the separate approval node can interrupt and later resume without
+        re-running this node. Re-running the node would call the LLM again and produce a
+        different plan, so the plan shown to the user (``<plan-approval>``) would not
+        match the plan that gets executed (``<plan>``). Any accumulated feedback from
+        rejected plans is read from state so successive rounds of feedback all apply.
+        """
+        feedback = list(state.get("feedback") or [])
 
-            if not needs_confirmation:
-                break
+        plan = await _create_plan(state, feedback)
+        if plan is None or plan.subtasks is None or not plan.subtasks:
+            logging.error("Planner failed to produce a valid plan.")
+            return {
+                "subtasks": [],
+                "results": [],
+                "cancelled": False,
+                "feedback": [],
+                "messages": [AIMessage(content=PLAN_FAILED_REPLY)],
+            }
 
-            response = langgraph.types.interrupt(
-                f"<plan-approval>{json.dumps([st.model_dump() for st in plan.subtasks])}</plan-approval>"
-            )
-            normalized = response.strip().lower() if isinstance(response, str) else response
+        subtasks = [subtask.model_dump() for subtask in plan.subtasks]
+        return {"subtasks": subtasks, "results": [], "cancelled": False, "feedback": feedback}
 
-            if normalized == "yes":
-                break
+    async def approval_node(state: PlannerState) -> dict:
+        """Ask the user to approve the plan that ``plan_node`` produced.
 
-            if normalized == "no":
-                logging.debug("Planner plan was rejected by the user.")
-                return {
-                    "subtasks": [],
-                    "results": [],
-                    "cancelled": True,
-                    "messages": [AIMessage(content="Plan was not approved by the user.")],
-                }
+        This node only interrupts and interprets the user's response; it never
+        regenerates the plan. On resume LangGraph re-runs the node from the top, but the
+        plan already lives in state, so the approved plan (``<plan-approval>``) is exactly
+        the one that gets executed. A "yes" proceeds to execution, a "no" cancels, and any
+        other response is accumulated as feedback and routed back to ``plan_node`` for a
+        fresh plan that the user reviews again.
+        """
+        subtasks = state["subtasks"]
+        response = langgraph.types.interrupt(
+            f"<plan-approval>{json.dumps(subtasks)}</plan-approval>"
+        )
+        normalized = response.strip().lower() if isinstance(response, str) else response
 
-            # Any other response is treated as feedback: accumulate it and regenerate
-            # the plan so successive rounds of feedback all apply, then ask the user to
-            # review the revised version.
-            logging.debug("Planner regenerating plan from user feedback.")
-            feedback.append(response)
+        if normalized == "yes":
+            return {"feedback": []}
 
-            # TODO do we need this? dispatch_custom_event("planner-plan-created",  f"<plan>{json.dumps(subtasks)}</plan>")
-        
-        return {"subtasks": subtasks, "results": [], "cancelled": False}
+        if normalized == "no":
+            logging.debug("Planner plan was rejected by the user.")
+            return {
+                "subtasks": [],
+                "results": [],
+                "cancelled": True,
+                "feedback": [],
+                "messages": [AIMessage(content="Plan was not approved by the user.")],
+            }
+
+        # Any other response is treated as feedback: accumulate it so successive rounds of
+        # feedback all apply, then route back to plan_node to regenerate the plan.
+        logging.debug("Planner regenerating plan from user feedback.")
+        return {"feedback": [*(state.get("feedback") or []), response]}
 
     async def _run_pending_subtask(
         subtasks: list[dict], results: list[str], emit_plan: bool
@@ -344,17 +375,45 @@ def create_planner_agent(
 
             content = _extract_last_message(result)
 
-        # The child returned without raising, but it may have signalled that it could not
-        # complete the task via the failure marker. Stop the plan instead of marking the
-        # subtask completed and continuing with the remaining subtasks.
-        reason = _subtask_failure_reason(content)
-        if reason is not None:
-            logging.debug("Planner subtask for agent '%s' reported failure: %s", agent_name, reason)
+        # The child returned without raising, but it may not have actually completed the
+        # task (missing information, an error, a refusal, ...). Ask the LLM to judge the
+        # child's response so the plan is stopped instead of marking the subtask completed
+        # and continuing with the remaining subtasks.
+        if not await _evaluate_subtask(task, content):
+            logging.debug("Planner subtask for agent '%s' evaluated as failed", agent_name)
+            reason = "The agent did not complete the task."
             return _fail_plan(subtasks, results, index, task, reason, emit_plan)
 
         subtasks[index]["status"] = "completed"
         results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
         return content
+
+    async def _evaluate_subtask(task: str, content: str | list) -> bool:
+        """Return True if the child agent completed the subtask, using the LLM.
+
+        The child's reply is streamed to the client, so a marker-based signal is not
+        reliably detectable. Instead, run a separate, non-streamed LLM call that receives
+        the subtask and the child's response and answers "yes" or "no".
+        """
+        response_text = _extract_text(content).strip()
+        if not response_text:
+            return False
+
+        messages = [
+            SystemMessage(content=SUBTASK_EVALUATION_SYSTEM_PROMPT),
+            HumanMessage(
+                content=SUBTASK_EVALUATION_PROMPT.format(task=task, response=response_text)
+            ),
+        ]
+
+        try:
+            response = await llm.ainvoke(messages, config={"tags": ["no-stream"]})
+        except Exception:  # noqa: BLE001
+            logging.warning("Planner subtask evaluation failed", exc_info=True)
+            return True
+
+        answer = _extract_text(response).strip().lower()
+        return not answer.startswith("no")
 
     async def _create_plan(state: PlannerState, feedback: list[str] | None = None) -> Plan | None:
         """Generate a plan from the user's request using the LLM.
@@ -419,12 +478,10 @@ def create_planner_agent(
         subtasks = state["subtasks"]
         results = list(state.get("results", []))
 
-        single_subtask = len(subtasks) == 1
-
-        # A single-subtask plan is handed off directly to the subagent without exposing
-        # the plan to the client: execute it and exit here, returning its answer as-is;
-        # _route_next sends it to END, skipping the reducer.
-        if single_subtask:
+        # A single-subtask plan is handed off directly to the child agent: run it with no
+        # plan-progress events and return its answer as-is; _route_next then sends the
+        # result straight to END, skipping the reducer.
+        if _is_direct_handoff(subtasks):
             outcome = await _run_pending_subtask(subtasks, results, emit_plan=False)
             if isinstance(outcome, dict):
                 return outcome
@@ -456,39 +513,35 @@ def create_planner_agent(
 
     graph = StateGraph(PlannerState)
     graph.add_node("plan", plan_node)
+    graph.add_node("approval", approval_node)
     graph.add_node("execute", execute_node)
     graph.add_node("reduce", reduce_node)
 
     graph.add_edge(START, "plan")
-    graph.add_conditional_edges("plan", _route_next, {"execute": "execute", "reduce": "reduce", "end": END})
+    graph.add_conditional_edges(
+        "plan", _route_after_plan, {"approval": "approval", "execute": "execute", "end": END}
+    )
+    graph.add_conditional_edges(
+        "approval", _route_after_approval, {"plan": "plan", "execute": "execute", "end": END}
+    )
     graph.add_conditional_edges("execute", _route_next, {"execute": "execute", "reduce": "reduce", "end": END})
     graph.add_edge("reduce", END)
 
     return graph.compile(checkpointer=checkpointer)
 
 
-_SUBTASK_FAILURE_INSTRUCTION = (
-    f"\n\nIf you cannot complete this task (missing information, an error, or you lack the "
-    f"capability), respond with a message that begins with '{SUBTASK_FAILED_MARKER}:' "
-    "followed by a short reason. Otherwise, complete the task normally and do not use that "
-    "prefix."
-)
-
-
 def _build_task_message(task: str, previous_results: list[str]) -> str:
     """Build the message sent to a child agent, including prior subtask outcomes.
 
     A subtask may depend on the results of the subtasks that ran before it, so the
-    accumulated results are prepended as context ahead of the current task. The child is
-    also instructed to signal failure with the ``SUBTASK_FAILED`` marker so the planner
-    can stop the plan instead of continuing on an unsuccessful step.
+    accumulated results are prepended as context ahead of the current task.
     """
     if not previous_results:
-        return task + _SUBTASK_FAILURE_INSTRUCTION
+        return task
     joined = "\n\n".join(previous_results)
     return (
         "Results of the previous subtasks in the plan (use them as needed to complete "
-        f"your task):\n{joined}\n\nYour task:\n{task}" + _SUBTASK_FAILURE_INSTRUCTION
+        f"your task):\n{joined}\n\nYour task:\n{task}"
     )
 
 
@@ -566,29 +619,62 @@ def _route_next(state: PlannerState) -> str:
     subtasks = state.get("subtasks", [])
     if any(st["status"] == "pending" for st in subtasks):
         return "execute"
-    # A single-subtask plan is handed off directly to the subagent, so skip the reducer
-    # and end with the child's answer.
-    if len(subtasks) <= 1:
+    # A single-subtask plan is handed off directly to the child agent, so skip the
+    # reducer and end with the child's answer.
+    if _is_direct_handoff(subtasks):
         return "end"
     return "reduce"
 
 
-def _subtask_failure_reason(content: str | list) -> str | None:
-    """Return the failure reason if the child signalled failure, else None.
+def _route_after_plan(state: PlannerState) -> str:
+    """Route a freshly generated plan to approval, direct execution, or end.
 
-    Child agents are instructed to begin their reply with the ``SUBTASK_FAILED:`` marker
-    when they cannot complete a task. A prefix match on the stripped content avoids false
-    positives from the marker merely appearing mid-text.
-
-    Message content may be a plain string or a list of typed blocks (e.g. ``text`` and
-    ``reasoning_content``); ``_extract_text`` normalizes both to the concatenated text,
-    dropping reasoning so the marker is detected against the visible reply.
+    An empty plan means generation failed: the failure reply is already in state, so end.
+    A single-subtask plan is a plain delegation that is never confirmed with or exposed to
+    the client, so it goes straight to execution. When plan approval is disabled the plan
+    is executed without asking the user. Any larger plan with approval enabled must be
+    approved by the user first.
     """
-    stripped = _extract_text(content).strip()
-    prefix = f"{SUBTASK_FAILED_MARKER}:"
-    if stripped.startswith(prefix):
-        return stripped[len(prefix):].strip() or "The agent reported it could not complete the task."
-    return None
+    subtasks = state.get("subtasks", [])
+    if not subtasks:
+        return "end"
+    if _is_direct_handoff(subtasks) or not _plan_approval_enabled():
+        return "execute"
+    return "approval"
+
+
+def _route_after_approval(state: PlannerState) -> str:
+    """Route the user's approval decision.
+
+    A rejection cancels the run, pending feedback sends the plan back to ``plan_node`` for
+    regeneration, and an approval proceeds to execution of the approved plan.
+    """
+    if state.get("cancelled"):
+        return "end"
+    if state.get("feedback"):
+        return "plan"
+    return "execute"
+
+
+def _is_direct_handoff(subtasks: list) -> bool:
+    """Return True when the plan is a single subtask delegated straight to its agent.
+
+    A one-subtask plan is treated as a plain delegation rather than an orchestrated plan:
+    it is never confirmed with or exposed to the client, emits no plan-progress events,
+    and its child agent's answer is returned as-is without going through the reducer.
+    Centralizing this check keeps the plan, execute, and routing stages in agreement on
+    what counts as a direct hand-off.
+    """
+    return len(subtasks) == 1
+
+
+def _plan_approval_enabled() -> bool:
+    """Return True when the user must approve a multi-subtask plan before it runs.
+
+    Controlled by the ``PLAN_APPROVAL_ENABLED`` environment variable (default disabled),
+    which is surfaced through the chart's ``planApproval.enabled`` value.
+    """
+    return os.environ.get("PLAN_APPROVAL_ENABLED", "false").lower() == "true"
 
 
 def _is_cancelled(result: dict) -> bool:

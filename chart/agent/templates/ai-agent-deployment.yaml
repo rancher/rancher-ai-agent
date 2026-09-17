@@ -170,6 +170,8 @@ spec:
             value: "{{ .Values.llmMock.enabled }}"
           - name: LLM_MOCK_URL
             value: "{{ .Values.llmMock.url }}"
+          - name: PLAN_APPROVAL_ENABLED
+            value: "{{ .Values.planApproval.enabled }}"
           - name: RBAC_ENABLED
             value: "{{ .Values.aiAgent.rbac.enabled }}"
           {{- if .Values.proxy.httpProxy }}

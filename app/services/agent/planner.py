@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.callbacks.manager import dispatch_custom_event
 import langgraph.types
@@ -677,10 +677,10 @@ def _plan_approval_enabled() -> bool:
 
 
 def _is_cancelled(result: dict) -> bool:
-    """Return True if a child agent result contains the user-cancellation marker."""
+    """Return True if the last ToolMessage in a child agent result is the cancellation marker."""
     for msg in reversed(result.get("messages", [])):
-        if getattr(msg, "content", None) == INTERRUPT_CANCEL_MESSAGE:
-            return True
+        if isinstance(msg, ToolMessage):
+            return msg.content == INTERRUPT_CANCEL_MESSAGE
     return False
 
 

@@ -180,7 +180,10 @@ def _fail_plan(
     """
     subtasks[index]["status"] = "failed"
     if emit_plan:
-        dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
+        dispatch_custom_event(
+            "planner-plan-created",
+            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+        )
     return {
         "subtasks": subtasks,
         "results": results,
@@ -268,7 +271,7 @@ def create_planner_agent(
         """
         subtasks = state["subtasks"]
         response = langgraph.types.interrupt(
-            f"<plan-approval>{json.dumps(subtasks)}</plan-approval>"
+            f"<plan>{json.dumps({'tasks': subtasks, 'approval': True})}</plan>"
         )
         normalized = response.strip().lower() if isinstance(response, str) else response
 
@@ -343,7 +346,8 @@ def create_planner_agent(
                     subtasks[index]["status"] = "cancelled"
                     if emit_plan:
                         dispatch_custom_event(
-                            "planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>"
+                            "planner-plan-created",
+                            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
                         )
                     return {
                         "subtasks": subtasks,
@@ -354,7 +358,10 @@ def create_planner_agent(
             else:
                 subtasks[index]["status"] = "in_progress"
                 if emit_plan:
-                    dispatch_custom_event("planner-plan-created", f"<plan>{json.dumps(subtasks)}</plan>")
+                    dispatch_custom_event(
+                        "planner-plan-created",
+                        f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+                    )
                 try:
                     result = await child.agent.ainvoke(
                         {"messages": [HumanMessage(content=_build_task_message(task, results))]},
@@ -363,6 +370,9 @@ def create_planner_agent(
                 except GraphBubbleUp:
                     raise
                 except Exception as e:
+                    if _is_direct_handoff(subtasks):
+                        raise e  # Let the exception bubble up so the error is displayed to the user.
+
                     logging.exception(f"Subtask agent '{agent_name}' failed: {e}")
                     return _fail_plan(subtasks, results, index, task, e, emit_plan)
 
@@ -496,7 +506,10 @@ def create_planner_agent(
             return outcome
 
         # The child agent notifies that it has finished its subtask.
-        dispatch_custom_event("planner-plan-finished", f"<plan>{json.dumps(subtasks)}</plan>")
+        dispatch_custom_event(
+            "planner-plan-finished",
+            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+        )
         return {"subtasks": subtasks, "results": results}
 
     async def reduce_node(state: PlannerState) -> dict:
@@ -548,20 +561,6 @@ def _build_task_message(task: str, previous_results: list[str]) -> str:
 def _format_plan(subtasks: list[dict]) -> str:
     """Render the plan's subtasks as JSON, matching the ``SubTask`` schema."""
     return json.dumps(subtasks)
-
-
-#TODO remove?
-def _describe_agent(child: ChildAgent) -> str:
-    """Render an agent's name, description, and available tools for the planner prompt."""
-    description = child.config.description or "Specialized agent"
-    lines = [f"- {child.config.name}: {description}"]
-    if child.tools:
-        tool_lines = "\n".join(
-            f"    - {tool.name}: {tool.description or 'No description'}"
-            for tool in child.tools
-        )
-        lines.append(f"  Tools:\n{tool_lines}")
-    return "\n".join(lines)
 
 
 def _extract_text(raw: object) -> str:

@@ -170,6 +170,8 @@ spec:
             value: "{{ .Values.llmMock.enabled }}"
           - name: LLM_MOCK_URL
             value: "{{ .Values.llmMock.url }}"
+          - name: PLAN_ENABLED
+            value: "{{ .Values.plan.enabled }}"
           - name: PLAN_APPROVAL_ENABLED
             value: "{{ .Values.planApproval.enabled }}"
           - name: RBAC_ENABLED

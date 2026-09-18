@@ -80,7 +80,11 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
         logging.warning("Only one child agent connected successfully. Using it directly instead of a supervisor.")
         return child_agents[0].agent, agents_metadata
 
-    graph = create_planner_agent(llm, child_agents, checkpointer)
+    graph = (
+        create_planner_agent(llm, child_agents, checkpointer)
+        if os.environ.get("PLAN_ENABLED", "false").lower() == "true"
+        else create_supervisor_agent(llm, child_agents, checkpointer)
+    )
     supervisor = SupervisorGraph(
         graph=graph,
         child_agents={ca.config.name: ca for ca in child_agents},

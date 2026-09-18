@@ -23,7 +23,7 @@ import langgraph.types
 from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from .loader import AgentConfig
 from .system_prompts import SUPERVISOR_PROMPT
 from .middleware import (
@@ -43,9 +43,11 @@ class ChildAgent:
     Attributes:
         config: Agent configuration with name, description, and other metadata
         agent: The compiled LangGraph agent that handles the actual work
+        tools: The tools available to this child agent
     """
     config: AgentConfig
     agent: CompiledStateGraph
+    tools: list[BaseTool] = field(default_factory=list)
     needs_oauth2: bool = False
 
 

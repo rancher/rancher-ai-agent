@@ -25,6 +25,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph.state import Checkpointer, CompiledStateGraph
 
 NAMESPACE = "cattle-ai-agent-system"
+USER_AGENT = "rancher-ai-agent"
 
 async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
@@ -217,7 +218,9 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
         - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
         - Respects INSECURE_SKIP_TLS environment variable to disable TLS certificate verification
         - For BASIC authentication, encodes credentials in the Authorization header
-        - For NONE authentication, creates client with no additional headers
+        - For NONE authentication, creates client with no authentication headers
+        - Always sends a ``User-Agent`` header identifying the agent, unless the
+          configured authentication headers already provide one
     """
     headers = {}
 
@@ -268,6 +271,9 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
 
     else:
         mcp_url = agent_config.mcp_url
+
+    # Identify the agent to the MCP server, unless the header is already set explicitly.
+    headers.setdefault("User-Agent", USER_AGENT)
 
     client_config: dict = {
         "url": mcp_url,

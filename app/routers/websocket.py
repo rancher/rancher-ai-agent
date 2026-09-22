@@ -525,6 +525,7 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
     state = await agent.aget_state(config=config)
     
     if state.interrupts:
+        _restore_ui_tools_metadata(config, state)
         return Command(resume=ws_request.prompt)
 
     input_messages = [
@@ -541,3 +542,26 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
     return {
         "messages": input_messages,
     }
+
+
+def _restore_ui_tools_metadata(config: dict, state) -> None:
+    """Restore ``request_metadata.ui_tools`` from the interrupted turn on resume.
+
+    When the client answers a human-validation interrupt (e.g. ``"yes"``) it usually
+    omits the original ``tools`` payload, so ``_build_config`` rebuilds
+    ``request_metadata.ui_tools`` as empty. Any agent invoked later in the same turn
+    (e.g. a second agent in a multi-agent run) would then receive no UI tools config,
+    producing an empty confirmation preview. This restores the UI tools from the last
+    HumanMessage of the interrupted turn when the client did not resend them.
+    """
+    request_metadata = config.setdefault("configurable", {}).setdefault("request_metadata", {})
+    if request_metadata.get("ui_tools"):
+        return
+
+    for msg in reversed(state.values.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            previous = (getattr(msg, "additional_kwargs", {}) or {}).get("request_metadata", {})
+            previous_ui_tools = previous.get("ui_tools")
+            if previous_ui_tools:
+                request_metadata["ui_tools"] = previous_ui_tools
+            break

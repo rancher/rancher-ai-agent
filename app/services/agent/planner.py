@@ -60,6 +60,7 @@ class PlannerState(TypedDict):
     results: list[str]
     cancelled: bool
     feedback: list[str]
+    retry: bool
 
 
 PLANNER_PROMPT = """\
@@ -239,7 +240,7 @@ def create_planner_agent(
             if failure_action_result is not None:
                 return failure_action_result
 
-        plan = await _create_plan(llm, agents_description, state, feedback, previous_plan_failure_message)
+        plan, retry = await _create_plan(llm, agents_description, state, feedback, previous_plan_failure_message)
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
             return {
@@ -251,7 +252,7 @@ def create_planner_agent(
             }
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
-        return {"subtasks": subtasks, "results": [], "cancelled": False, "feedback": feedback}
+        return {"subtasks": subtasks, "results": [], "cancelled": False, "feedback": feedback, "retry": retry}
 
     async def approval_node(state: PlannerState) -> dict:
         """Ask the user to approve the plan that ``plan_node`` produced.
@@ -499,7 +500,7 @@ async def _create_plan(
     state: PlannerState,
     feedback: list[str] | None = None,
     previous_plan_failure_message: str | None = None,
-) -> Plan | None:
+) -> tuple[Plan | None, bool]:
     """Generate a plan from the user's request using the LLM.
 
     When ``feedback`` is provided, the user rejected one or more previous plans and
@@ -520,11 +521,11 @@ async def _create_plan(
             # Re-run the plan that just failed: keep the existing subtasks and only
             # reset the failed ones to pending so execution resumes from where it
             # stopped, instead of asking the LLM for a brand-new plan.
-            return _retry_failed_subtasks(state)
+            return _retry_failed_subtasks(state), True
         if normalized_request == RESTART_PLAN_REQUEST.lower():
             # Restart the whole plan from the beginning: reset every subtask to
             # pending instead of asking the LLM for a brand-new plan.
-            return _retry_all_subtasks(state)
+            return _retry_all_subtasks(state), True
 
     if previous_plan_failure_message or feedback:
         # Label the request so it is not confused with the appended failure/feedback
@@ -568,7 +569,7 @@ async def _create_plan(
                 logging.debug("Planner recovered plan from raw message text.")
                 plan = candidate
 
-    return plan
+    return plan, False
 
 
 async def _handle_failure_actions(
@@ -761,7 +762,7 @@ def _route_after_plan(state: PlannerState) -> str:
     subtasks = state.get("subtasks", [])
     if not subtasks:
         return "end"
-    if _is_direct_handoff(subtasks) or not _plan_approval_enabled() or state.get("cancelled"):
+    if _is_direct_handoff(subtasks) or not _plan_approval_enabled() or state.get("retry"):
         return "execute"
     return "approval"
 

@@ -366,8 +366,10 @@ async def _run_pending_subtask(
     """Run the next pending subtask in its assigned child agent.
 
     Handles human-in-the-loop interrupts: if a child agent pauses for confirmation
-    or to ask the user for more data, the interrupt is surfaced at the planner level
-    and the child is resumed once the user responds. On completion the subtask is
+    or to ask the user for more data, the subtask is left ``in_progress`` and the node
+    returns so the graph routes back to execute. The next run surfaces the interrupt at
+    the planner level (at most one planner interrupt per node run) and resumes the child
+    once the user responds. On completion the subtask is
     marked completed and its result is appended to ``results``. When ``emit_plan`` is
     True, plan-progress events are dispatched to the client.
 
@@ -375,10 +377,10 @@ async def _run_pending_subtask(
     continuing with the remaining subtasks: the failure is reported to the user via
     ``_fail_plan``.
 
-    Returns a state-update dict when the user cancels the plan or a subtask fails,
-    otherwise the child agent's final message content.
+    Returns a state-update dict when the user cancels the plan, a subtask fails, or the
+    child is paused on an interrupt, otherwise the child agent's final message content.
     """
-    index = next(i for i, st in enumerate(subtasks) if st["status"] == "pending")
+    index = _next_subtask_index(subtasks)
     subtask = subtasks[index]
     agent_name = subtask["agent"]
     task = subtask["task"]
@@ -444,11 +446,14 @@ async def _run_pending_subtask(
                 return _fail_plan(subtasks, results, index, task, e, emit_plan)
 
         # ainvoke() suppresses a GraphInterrupt raised inside the child, returning
-        # normally. Re-trigger any new interrupt at the planner level so the client
-        # receives the confirmation prompt; the node re-runs on resume.
+        # normally. If the child paused on a new interrupt, finish this node run with the
+        # subtask still in progress and route back to execute: the next run surfaces the
+        # interrupt from the resume branch above with a fresh resume index. Calling
+        # interrupt() a second time here would be matched to a stale resume value on
+        # replay, so a third interrupt would silently be skipped.
         child_state = await child.agent.aget_state(config=child_config)
         if child_state and child_state.interrupts:
-            langgraph.types.interrupt(child_state.interrupts[0].value)
+            return {"subtasks": subtasks, "results": results}
 
         content = _extract_last_message(result)
 
@@ -736,12 +741,22 @@ def _parse_plan_from_raw(raw: object) -> Plan | None:
         return None
 
 
+def _next_subtask_index(subtasks: list[dict]) -> int:
+    """Return the in-progress subtask (child paused on an interrupt), else the first pending one."""
+    for status in ("in_progress", "pending"):
+        for i, st in enumerate(subtasks):
+            if st["status"] == status:
+                return i
+    raise ValueError("No in-progress or pending subtask to run.")
+
+
 def _route_next(state: PlannerState) -> str:
-    """Route to execute while pending subtasks remain, otherwise reduce."""
+    """Route to execute while in-progress or pending subtasks remain, otherwise reduce."""
     if state.get("cancelled"):
         return "end"
     subtasks = state.get("subtasks", [])
-    if any(st["status"] == "pending" for st in subtasks):
+    # An in-progress subtask has a child paused on an interrupt that must be resumed.
+    if any(st["status"] in ("in_progress", "pending") for st in subtasks):
         return "execute"
     # A single-subtask plan is handed off directly to the child agent, so skip the
     # reducer and end with the child's answer.

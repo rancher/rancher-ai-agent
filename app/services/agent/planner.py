@@ -26,7 +26,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
-from .supervisor import ChildAgent, _extract_last_message
+from .supervisor import ChildAgent, _AgentCallCounter, _build_agent_metadata, _extract_last_message
 from ._constants import INTERRUPT_CANCEL_MESSAGE
 from ...constants import INTERRUPT_CANCEL_REPLY
 from .middleware import (
@@ -199,6 +199,7 @@ def create_planner_agent(
     agents_description = "\n".join(
         f"- {child.config.name}: {child.config.description}" for child in child_agents
     )
+    call_counter = _AgentCallCounter()
 
     # TODO check middleware here!
     reducer_agent = create_agent(
@@ -292,7 +293,7 @@ def create_planner_agent(
         # plan-progress events and return its answer as-is; _route_next then sends the
         # result straight to END, skipping the reducer.
         if _is_direct_handoff(subtasks):
-            outcome = await _run_pending_subtask(llm, agents_by_name, subtasks, results, emit_plan=False)
+            outcome = await _run_pending_subtask(llm, agents_by_name, subtasks, results, call_counter, emit_plan=False)
             if isinstance(outcome, dict):
                 return outcome
             return {
@@ -301,7 +302,7 @@ def create_planner_agent(
                 "messages": [AIMessage(content=outcome)],
             }
 
-        outcome = await _run_pending_subtask(llm, agents_by_name, subtasks, results, emit_plan=True)
+        outcome = await _run_pending_subtask(llm, agents_by_name, subtasks, results, call_counter, emit_plan=True)
         if isinstance(outcome, dict):
             return outcome
 
@@ -356,6 +357,7 @@ async def _run_pending_subtask(
     agents_by_name: dict[str, ChildAgent],
     subtasks: list[dict],
     results: list[str],
+    call_counter: _AgentCallCounter,
     emit_plan: bool,
 ) -> dict | str:
     """Run the next pending subtask in its assigned child agent.
@@ -462,6 +464,17 @@ async def _run_pending_subtask(
         logging.debug("Planner subtask for agent '%s' evaluated as failed", agent_name)
         reason = "The agent did not complete the task."
         return _fail_plan(subtasks, results, index, task, reason, emit_plan)
+
+    # Recommend switching to single-agent selection if the same agent completes 5
+    # consecutive subtasks in a row.
+    agent_selected_count = call_counter.record(agent_name)
+    if agent_selected_count >= 5:
+        recommended_field = f', "recommended": "{agent_name}"'
+        dispatch_custom_event(
+            "subagent_choice_event",
+            _build_agent_metadata(agent_name, "auto", recommended_field),
+        )
+        call_counter.count = 0
 
     subtasks[index]["status"] = "completed"
     results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")

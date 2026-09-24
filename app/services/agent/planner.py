@@ -155,19 +155,14 @@ accordingly:
 
 PLAN_FAILED_PREFIX = "PLAN FAILED:"
 
-# User-facing option, sent back as the request, to re-run the failed subtask using the
-# existing plan instead of asking the LLM to generate a brand-new one.
+# These four options are surfaced to the client as the failed subtask's "actions" and,
+# if the user picks one, sent straight back as the next request: _create_plan and
+# _handle_failure_actions match on their exact text to trigger the corresponding
+# recovery path (retry, restart, request details, cancel) without asking the LLM to
+# generate a brand-new plan.
 RETRY_SUBTASK_REQUEST = "Retry executing the failed subtask"
-
-# User-facing option, sent back as the request, to restart the entire plan from its
-# first subtask using the existing plan instead of asking the LLM to generate a
-# brand-new one.
 RESTART_PLAN_REQUEST = "Restart the execution of the entire plan"
-
-# User-facing option, sent back as the request, to ask for more details about why the subtask failed.
 REQUEST_FAILURE_DETAILS = "Request more details about the failure"
-
-# User-facing option, sent back as the request, to cancel the current plan.
 CANCEL_PLAN_REQUEST = "Cancel the plan"
 
 PLAN_CANCELLED_REPLY = (
@@ -623,6 +618,12 @@ def _fail_plan(
     child agent signalled failure via the marker or no agent was available).
     """
     subtasks[index]["status"] = "failed"
+    subtasks[index]["actions"] = [
+        RETRY_SUBTASK_REQUEST,
+        RESTART_PLAN_REQUEST,
+        REQUEST_FAILURE_DETAILS,
+        CANCEL_PLAN_REQUEST,
+    ]
     if emit_plan:
         dispatch_custom_event(
             "planner-plan-created",

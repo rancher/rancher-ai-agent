@@ -391,7 +391,9 @@ async def _run_pending_subtask(
         logging.error(reason)
         return _fail_plan(subtasks, results, index, task, reason, emit_plan)
     else:
-        child_config = _build_child_config(agent_name)
+        # Children running one step of a multi-subtask plan must only return their result,
+        # without offering follow-ups; a direct hand-off talks to the user as usual.
+        child_config = _build_child_config(agent_name, planner_subtask=not _is_direct_handoff(subtasks))
         child_state = await child.agent.aget_state(config=child_config)
 
         if child_state and child_state.interrupts:
@@ -851,8 +853,12 @@ def _last_plan_failure_details(state: PlannerState) -> str | None:
     return None
 
 
-def _build_child_config(agent_name: str) -> RunnableConfig:
-    """Build a namespaced run-config so each child agent checkpoints independently."""
+def _build_child_config(agent_name: str, planner_subtask: bool = False) -> RunnableConfig:
+    """Build a namespaced run-config so each child agent checkpoints independently.
+
+    When ``planner_subtask`` is True the child is flagged as running a planner subtask,
+    so its system prompt is extended to reply only with the final result.
+    """
     parent_configurable = ensure_config().get("configurable", {})
     parent_thread_id = parent_configurable.get("thread_id", "")
     if not parent_thread_id:
@@ -861,4 +867,6 @@ def _build_child_config(agent_name: str) -> RunnableConfig:
     child_configurable = {
         "thread_id": f"{parent_thread_id}::planner::{agent_name}",
     }
+    if planner_subtask:
+        child_configurable["planner_subtask"] = True
     return RunnableConfig(configurable=child_configurable, callbacks=[])

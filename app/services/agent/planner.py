@@ -28,7 +28,6 @@ from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
 from .supervisor import ChildAgent, _AgentCallCounter, _build_agent_metadata, _extract_last_message
 from ._constants import INTERRUPT_CANCEL_MESSAGE
-from ...constants import INTERRUPT_CANCEL_REPLY
 from .middleware import (
     MessagesHistoryMiddleware,
     inject_additional_kwargs_middleware,
@@ -159,6 +158,25 @@ accordingly:
   request.
 """
 
+PLANNER_CANCEL_SUFFIX = """\
+
+---
+The previous plan attempt was cancelled by the user and execution was stopped early:
+{details}
+
+Treat the new user message above as the user's chosen way to recover, and produce a plan
+accordingly:
+- If the user wants to retry the step that was cancelled, produce a plan that reattempts
+  that cancelled step (incorporating any new or corrected information the user provided),
+  followed by the remaining steps needed to satisfy the original request.
+- If the user wants to start from the beginning, produce a plan that re-runs the ENTIRE
+  original request from the first step, without assuming any step of the previous attempt
+  is still valid.
+- If the user wants to create a new plan, treat their message as new or corrected
+  information and produce a brand-new, complete plan that covers the entire original
+  request.
+"""
+
 PLAN_FAILED_PREFIX = "PLAN FAILED:"
 
 # These four options are surfaced to the client as the failed subtask's "actions" and,
@@ -184,6 +202,16 @@ PLAN_SUBTASK_FAILED_REPLY = (
     "I've stopped the plan here instead of continuing with the remaining steps, so the "
     "results stay consistent. Please provide any missing information or adjust your "
     "request, and I'll create a new plan."
+)
+
+PLAN_CANCELLED_PREFIX = "PLAN CANCELLED:"
+
+PLAN_SUBTASK_CANCELLED_REPLY = (
+    PLAN_CANCELLED_PREFIX + ' You cancelled the step "{task}".\n\n'
+    "Here is the plan that was being executed:\n{plan}\n\n"
+    "I've stopped the plan here instead of continuing with the remaining steps, so the "
+    "results stay consistent. Let me know if you'd like to retry it, restart the plan, or "
+    "adjust your request, and I'll create a new plan."
 )
 
 def create_planner_agent(
@@ -250,7 +278,16 @@ def create_planner_agent(
             if failure_action_result is not None:
                 return failure_action_result
 
-        plan, retry = await _create_plan(llm, agents_description, state, feedback, previous_plan_failure_message)
+        previous_plan_cancellation_message = _last_plan_cancellation_details(state)
+
+        plan, retry = await _create_plan(
+            llm,
+            agents_description,
+            state,
+            feedback,
+            previous_plan_failure_message,
+            previous_plan_cancellation_message,
+        )
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
             return {
@@ -449,18 +486,7 @@ async def _run_pending_subtask(
             # continuing with the remaining subtasks.
             if _is_cancelled(result):
                 logging.debug("Planner subtask for agent '%s' cancelled by the user", agent_name)
-                subtasks[index]["status"] = "cancelled"
-                if emit_plan:
-                    dispatch_custom_event(
-                        "planner-plan-created",
-                        f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
-                    )
-                return {
-                    "subtasks": subtasks,
-                    "results": results,
-                    "cancelled": True,
-                    "messages": [AIMessage(content=INTERRUPT_CANCEL_REPLY)],
-                }
+                return _cancel_plan(subtasks, results, index, task, emit_plan)
         else:
             if user_reply is not None:
                 # The subtask is already in progress: forward the user's answer.
@@ -576,6 +602,7 @@ async def _create_plan(
     state: PlannerState,
     feedback: list[str] | None = None,
     previous_plan_failure_message: str | None = None,
+    previous_plan_cancellation_message: str | None = None,
 ) -> tuple[Plan | None, bool]:
     """Generate a plan from the user's request using the LLM.
 
@@ -591,24 +618,26 @@ async def _create_plan(
     request = _last_user_request(state)
 
     # Check harcoded messages from quick actions
-    if previous_plan_failure_message:
+    if previous_plan_failure_message or previous_plan_cancellation_message:
         normalized_request = request.lower()
         if normalized_request == RETRY_SUBTASK_REQUEST.lower():
-            # Re-run the plan that just failed: keep the existing subtasks and only
-            # reset the failed ones to pending so execution resumes from where it
-            # stopped, instead of asking the LLM for a brand-new plan.
+            # Re-run the plan that just stopped: keep the existing subtasks and only
+            # reset the failed/cancelled ones to pending so execution resumes from where
+            # it stopped, instead of asking the LLM for a brand-new plan.
             return _retry_failed_subtasks(state), True
         if normalized_request == RESTART_PLAN_REQUEST.lower():
             # Restart the whole plan from the beginning: reset every subtask to
             # pending instead of asking the LLM for a brand-new plan.
             return _retry_all_subtasks(state), True
 
-    if previous_plan_failure_message or feedback:
-        # Label the request so it is not confused with the appended failure/feedback
-        # context that follows it.
+    if previous_plan_failure_message or previous_plan_cancellation_message or feedback:
+        # Label the request so it is not confused with the appended failure/cancellation/
+        # feedback context that follows it.
         human_content = f"New user message:\n{request}"
         if previous_plan_failure_message:
             human_content += PLANNER_RETRY_SUFFIX.format(details=previous_plan_failure_message)
+        if previous_plan_cancellation_message:
+            human_content += PLANNER_CANCEL_SUFFIX.format(details=previous_plan_cancellation_message)
         if feedback:
             joined = "\n".join(f"- {item}" for item in feedback)
             human_content += PLANNER_FEEDBACK_SUFFIX.format(feedback=joined)
@@ -716,6 +745,43 @@ def _fail_plan(
         ],
     }
 
+def _cancel_plan(
+    subtasks: list[dict],
+    results: list[str],
+    index: int,
+    task: str,
+    emit_plan: bool,
+) -> dict:
+    """Stop the plan after the user cancels a subtask and report it to the user.
+
+    Mirrors ``_fail_plan``: marks the cancelled subtask, offers the retry/restart recovery
+    actions, emits a plan-progress event when running a multi-subtask plan, and returns a
+    state update that routes the graph to END (via ``cancelled``) with a user-facing
+    explanation instead of continuing with the remaining subtasks.
+    """
+    subtasks[index]["status"] = "cancelled"
+    subtasks[index]["actions"] = [
+        RETRY_SUBTASK_REQUEST,
+        RESTART_PLAN_REQUEST,
+    ]
+    if emit_plan:
+        dispatch_custom_event(
+            "planner-plan-created",
+            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+        )
+    return {
+        "subtasks": subtasks,
+        "results": results,
+        "cancelled": True,
+        "messages": [
+            AIMessage(
+                content=PLAN_SUBTASK_CANCELLED_REPLY.format(
+                    task=task, plan=_format_plan(subtasks)
+                )
+            )
+        ],
+    }
+
 def _build_task_message(task: str, previous_results: list[str]) -> str:
     """Build the message sent to a child agent, including prior subtask outcomes.
 
@@ -737,18 +803,18 @@ def _format_plan(subtasks: list[dict]) -> str:
 
 
 def _retry_failed_subtasks(state: PlannerState) -> Plan | None:
-    """Rebuild the previous plan with its failed subtasks reset to pending.
+    """Rebuild the previous plan with its failed or cancelled subtasks reset to pending.
 
-    Used when the user asks to retry the failed subtask: the existing plan is reused as-is
-    and only the ``failed`` subtasks are set back to ``pending`` so execution resumes from
-    where it stopped, instead of generating a brand-new plan. Returns ``None`` when there
-    is no plan to retry.
+    Used when the user asks to retry the subtask that stopped the plan: the existing plan
+    is reused as-is and only the ``failed``/``cancelled`` subtasks are set back to
+    ``pending`` so execution resumes from where it stopped, instead of generating a
+    brand-new plan. Returns ``None`` when there is no plan to retry.
     """
     subtasks = state.get("subtasks") or []
     if not subtasks:
         return None
     retried = [
-        {**st, "status": "pending" if st.get("status") == "failed" else st.get("status")}
+        {**st, "status": "pending" if st.get("status") in ("failed", "cancelled") else st.get("status")}
         for st in subtasks
     ]
     return Plan(subtasks=[SubTask(**st) for st in retried])
@@ -930,6 +996,24 @@ def _last_plan_failure_details(state: PlannerState) -> str | None:
         return None
     text = _extract_text(messages[-2])
     if text.startswith(PLAN_FAILED_PREFIX):
+        return text
+    return None
+
+
+def _last_plan_cancellation_details(state: PlannerState) -> str | None:
+    """Return the cancelled-plan message content if the latest request follows one.
+
+    Mirrors ``_last_plan_failure_details``: after the user cancels a subtask, the planner
+    reports a message beginning with the ``PLAN_CANCELLED_PREFIX`` marker and ends the run.
+    If the message right before the user's latest request is such a message, return its
+    content so the planner can be instructed to build a brand-new, complete plan instead of
+    assuming stale progress from the cancelled attempt.
+    """
+    messages = state.get("messages", [])
+    if len(messages) < 2:
+        return None
+    text = _extract_text(messages[-2])
+    if text.startswith(PLAN_CANCELLED_PREFIX):
         return text
     return None
 

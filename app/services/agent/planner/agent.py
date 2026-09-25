@@ -16,22 +16,40 @@ from pydantic import BaseModel, Field
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-from langchain_core.runnables.config import RunnableConfig, ensure_config
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
 import langgraph.types
-from langgraph.errors import GraphBubbleUp
-from langgraph.types import Command
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
-from .supervisor import ChildAgent, _AgentCallCounter, _build_agent_metadata, _extract_last_message
-from ._constants import INTERRUPT_CANCEL_MESSAGE
-from .middleware import (
+from ..supervisor import ChildAgent, _AgentCallCounter
+from ..middleware import (
     MessagesHistoryMiddleware,
     inject_additional_kwargs_middleware,
     ui_tools_middleware,
+)
+from .prompts import (
+    CANCEL_PLAN_REQUEST,
+    PLAN_CANCELLED_PREFIX,
+    PLAN_CANCELLED_REPLY,
+    PLAN_FAILED_PREFIX,
+    PLAN_FAILED_REPLY,
+    PLANNER_CANCEL_SUFFIX,
+    PLANNER_FEEDBACK_SUFFIX,
+    PLANNER_PROMPT,
+    PLANNER_RETRY_SUFFIX,
+    REDUCER_PROMPT,
+    REDUCER_SYSTEM_PROMPT,
+    REQUEST_FAILURE_DETAILS,
+    RESTART_PLAN_REQUEST,
+    RETRY_SUBTASK_REQUEST,
+)
+from .subtasks import (
+    _build_child_config,
+    _extract_text,
+    _is_direct_handoff,
+    _run_pending_subtask,
 )
 
 
@@ -64,155 +82,6 @@ class PlannerState(TypedDict):
     awaiting_input: bool
 
 
-PLANNER_PROMPT = """\
-You are a planning agent. Break the user's request into an ordered list of subtasks.
-Assign each subtask to exactly one of the available agents (use the agent name).
-
-Available agents:
-{agents}
-
-Return a plan where each subtask has a clear, self-contained task description and the
-name of the agent best suited to perform it.
-
-Rules you MUST follow:
-- Always return at least one subtask. If the request is simple, return exactly one
-  subtask that covers the whole request.
-- If the request is complex, break it down into as many subtasks as needed so each one
-  covers a single, self-contained piece of work. Do not bundle unrelated or multi-step
-  work into a single subtask when it can reasonably be split,
-- The "agent" field of every subtask MUST be one of the agent names listed above,
-  copied exactly (case-sensitive). Do not invent new agent names.
-- Respond with a single, valid JSON object only. Do not add explanations, comments,
-  markdown code fences, or any text before or after the JSON.
-"""
-
-REDUCER_PROMPT = """\
-You are summarizing the outcome of a multi-step plan for the user.
-
-Original request:
-{request}
-
-Results of each subtask:
-{results}
-
-Combine these into a single, coherent final answer for the user.
-"""
-
-REDUCER_SYSTEM_PROMPT = """\
-You are the reducer of a planner agent. You are given the original user request and the
-results of each subtask that was executed. Combine them into a single, coherent final
-answer for the user.
-"""
-
-SUBTASK_EVALUATION_SYSTEM_PROMPT = """\
-You are the evaluator of a planner agent. You are given a subtask that was assigned to a
-child agent and the response that agent produced. Judge whether the agent actually
-completed the task. Answer with a single word: "yes" if it completed the task, "input" if
-it is asking the user for information it needs to continue, or "no" if it did not complete
-the task. Do not add any other text.
-"""
-
-SUBTASK_EVALUATION_PROMPT = """\
-Did the agent complete the assigned subtask?
-
-Subtask:
-{task}
-
-Agent's response:
-{response}
-
-If the agent is asking the user a question or requesting information or a decision it
-needs in order to continue (e.g. a missing name or value), it is waiting for user input.
-The task was NOT completed if the agent hit an error, lacks the capability or permissions,
-refused, or otherwise did not accomplish what was asked. If the agent accomplished the task
-and produced a useful result, it was completed.
-
-Answer with a single word: "yes" if it completed the task, "input" if it is waiting for
-user input, or "no" if it did not complete the task.
-"""
-
-PLANNER_FEEDBACK_SUFFIX = """\
-
-The user reviewed previous versions of this plan and requested changes. Produce a new
-plan that takes ALL of the following feedback into account, in order (later feedback
-refines or overrides earlier feedback):
-{feedback}
-"""
-
-PLANNER_RETRY_SUFFIX = """\
-
----
-The previous plan attempt failed and execution was stopped early:
-{details}
-
-Treat the new user message above as the user's chosen way to recover, and produce a plan
-accordingly:
-- If the user wants to retry the step that failed, produce a plan that reattempts that
-  failed step (incorporating any new or corrected information the user provided), followed
-  by the remaining steps needed to satisfy the original request.
-- If the user wants to start from the beginning, produce a plan that re-runs the ENTIRE
-  original request from the first step, without assuming any step of the previous attempt
-  is still valid.
-- If the user wants to create a new plan, treat their message as new or corrected
-  information and produce a brand-new, complete plan that covers the entire original
-  request.
-"""
-
-PLANNER_CANCEL_SUFFIX = """\
-
----
-The previous plan attempt was cancelled by the user and execution was stopped early:
-{details}
-
-Treat the new user message above as the user's chosen way to recover, and produce a plan
-accordingly:
-- If the user wants to retry the step that was cancelled, produce a plan that reattempts
-  that cancelled step (incorporating any new or corrected information the user provided),
-  followed by the remaining steps needed to satisfy the original request.
-- If the user wants to start from the beginning, produce a plan that re-runs the ENTIRE
-  original request from the first step, without assuming any step of the previous attempt
-  is still valid.
-- If the user wants to create a new plan, treat their message as new or corrected
-  information and produce a brand-new, complete plan that covers the entire original
-  request.
-"""
-
-PLAN_FAILED_PREFIX = "PLAN FAILED:"
-
-# These four options are surfaced to the client as the failed subtask's "actions" and,
-# if the user picks one, sent straight back as the next request: _create_plan and
-# _handle_failure_actions match on their exact text to trigger the corresponding
-# recovery path (retry, restart, request details, cancel) without asking the LLM to
-# generate a brand-new plan.
-RETRY_SUBTASK_REQUEST = "Retry executing the failed subtask"
-RESTART_PLAN_REQUEST = "Restart the execution of the entire plan"
-REQUEST_FAILURE_DETAILS = "Request more details about the failure"
-CANCEL_PLAN_REQUEST = "Cancel the plan"
-
-PLAN_CANCELLED_REPLY = (
-    "The current plan has been cancelled as per your request."
-)
-PLAN_FAILED_REPLY = (
-    "There was a problem generating a plan for your request. Please try again with a different prompt."
-)
-
-PLAN_SUBTASK_FAILED_REPLY = (
-    PLAN_FAILED_PREFIX + ' I couldn\'t complete the step "{task}": {error}\n\n'
-    "Here is the plan that was being executed:\n{plan}\n\n"
-    "I've stopped the plan here instead of continuing with the remaining steps, so the "
-    "results stay consistent. Please provide any missing information or adjust your "
-    "request, and I'll create a new plan."
-)
-
-PLAN_CANCELLED_PREFIX = "PLAN CANCELLED:"
-
-PLAN_SUBTASK_CANCELLED_REPLY = (
-    PLAN_CANCELLED_PREFIX + ' You cancelled the step "{task}".\n\n'
-    "Here is the plan that was being executed:\n{plan}\n\n"
-    "I've stopped the plan here instead of continuing with the remaining steps, so the "
-    "results stay consistent. Let me know if you'd like to retry it, restart the plan, or "
-    "adjust your request, and I'll create a new plan."
-)
 
 def create_planner_agent(
     llm: BaseChatModel,
@@ -422,180 +291,6 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
-async def _run_pending_subtask(
-    llm: BaseChatModel,
-    agents_by_name: dict[str, ChildAgent],
-    subtasks: list[dict],
-    results: list[str],
-    call_counter: _AgentCallCounter,
-    emit_plan: bool,
-    user_reply: str | None = None,
-) -> dict | str:
-    """Run the next pending subtask in its assigned child agent.
-
-    If the child previously asked the user for more information, ``user_reply`` holds
-    the user's answer and is sent to the child (whose thread already holds the task and
-    its question) instead of the task message.
-
-    Handles human-in-the-loop interrupts: if a child agent pauses for confirmation
-    or to ask the user for more data, the subtask is left ``in_progress`` and the node
-    returns so the graph routes back to execute. The next run surfaces the interrupt at
-    the planner level (at most one planner interrupt per node run) and resumes the child
-    once the user responds. On completion the subtask is
-    marked completed and its result is appended to ``results``. When ``emit_plan`` is
-    True, plan-progress events are dispatched to the client.
-
-    If the child agent raises an error the plan is stopped rather than silently
-    continuing with the remaining subtasks: the failure is reported to the user via
-    ``_fail_plan``.
-
-    Returns a state-update dict when the user cancels the plan, a subtask fails, or the
-    child is paused on an interrupt, otherwise the child agent's final message content.
-    """
-    index = _next_subtask_index(subtasks)
-    subtask = subtasks[index]
-    agent_name = subtask["agent"]
-    task = subtask["task"]
-
-    child = agents_by_name.get(agent_name)
-    if child is None:
-        reason = f"No agent named '{agent_name}' is available to run this task."
-        logging.error(reason)
-        return _fail_plan(subtasks, results, index, task, reason, emit_plan)
-    else:
-        # Children running one step of a multi-subtask plan must only return their result,
-        # without offering follow-ups; a direct hand-off talks to the user as usual.
-        child_config = _build_child_config(agent_name, planner_subtask=not _is_direct_handoff(subtasks))
-        child_state = await child.agent.aget_state(config=child_config)
-
-        if child_state and child_state.interrupts:
-            # The child is paused on a previous interrupt. Surface it at the planner
-            # level to collect the user's decision, then resume the child.
-            resume_value = langgraph.types.interrupt(child_state.interrupts[0].value)
-            try:
-                result = await child.agent.ainvoke(Command(resume=resume_value), config=child_config)
-            except GraphBubbleUp:
-                # LangGraph internal signal (e.g. a new interrupt) must propagate so
-                # the planner runtime can handle it.
-                raise
-            except Exception as e:
-                logging.exception(f"Subtask agent '{agent_name}' failed during resume: {e}")
-                return _fail_plan(subtasks, results, index, task, e, emit_plan)
-
-            # The user declined the confirmation: cancel the whole plan instead of
-            # continuing with the remaining subtasks.
-            if _is_cancelled(result):
-                logging.debug("Planner subtask for agent '%s' cancelled by the user", agent_name)
-                return _cancel_plan(subtasks, results, index, task, emit_plan)
-        else:
-            if user_reply is not None:
-                # The subtask is already in progress: forward the user's answer.
-                message = user_reply
-            else:
-                message = _build_task_message(task, results)
-                subtasks[index]["status"] = "in_progress"
-                if emit_plan:
-                    dispatch_custom_event(
-                        "planner-plan-created",
-                        f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
-                    )
-            try:
-                result = await child.agent.ainvoke(
-                    {"messages": [HumanMessage(content=message)]},
-                    config=child_config,
-                )
-            except GraphBubbleUp:
-                raise
-            except Exception as e:
-                if _is_direct_handoff(subtasks):
-                    raise e  # Let the exception bubble up so the error is displayed to the user.
-
-                logging.exception(f"Subtask agent '{agent_name}' failed: {e}")
-                return _fail_plan(subtasks, results, index, task, e, emit_plan)
-
-        # ainvoke() suppresses a GraphInterrupt raised inside the child, returning
-        # normally. If the child paused on a new interrupt, finish this node run with the
-        # subtask still in progress and route back to execute: the next run surfaces the
-        # interrupt from the resume branch above with a fresh resume index. Calling
-        # interrupt() a second time here would be matched to a stale resume value on
-        # replay, so a third interrupt would silently be skipped.
-        child_state = await child.agent.aget_state(config=child_config)
-        if child_state and child_state.interrupts:
-            return {"subtasks": subtasks, "results": results}
-
-        content = _extract_last_message(result)
-
-    # The child returned without raising, but it may not have actually completed the
-    # task (missing information, an error, a refusal, ...). Ask the LLM to judge the
-    # child's response so the plan is stopped instead of marking the subtask completed
-    # and continuing with the remaining subtasks. If the child is asking the user for more
-    # information, pause the plan with the subtask still in progress: the user's next
-    # message is forwarded to the child as its answer.
-    evaluation = await _evaluate_subtask(llm, task, content)
-    if evaluation == "needs_input":
-        logging.debug("Planner subtask for agent '%s' is waiting for user input", agent_name)
-        return {
-            "subtasks": subtasks,
-            "results": results,
-            "awaiting_input": True,
-            "messages": [AIMessage(content=content)],
-        }
-    if evaluation == "failed":
-        logging.debug("Planner subtask for agent '%s' evaluated as failed", agent_name)
-        reason = "The agent did not complete the task."
-        return _fail_plan(subtasks, results, index, task, reason, emit_plan)
-
-    # Recommend switching to single-agent selection if the same agent completes 5
-    # consecutive subtasks in a row.
-    agent_selected_count = call_counter.record(agent_name)
-    if agent_selected_count >= 5:
-        recommended_field = f', "recommended": "{agent_name}"'
-        dispatch_custom_event(
-            "subagent_choice_event",
-            _build_agent_metadata(agent_name, "auto", recommended_field),
-        )
-        call_counter.count = 0
-
-    subtasks[index]["status"] = "completed"
-    results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
-    return content
-
-
-async def _evaluate_subtask(
-    llm: BaseChatModel, task: str, content: str | list
-) -> Literal["completed", "needs_input", "failed"]:
-    """Judge, using the LLM, whether the child agent completed the subtask.
-
-    The child's reply is streamed to the client, so a marker-based signal is not
-    reliably detectable. Instead, run a separate, non-streamed LLM call that receives
-    the subtask and the child's response and answers "yes", "input" (the child is asking
-    the user for more information) or "no".
-    """
-    response_text = _extract_text(content).strip()
-    if not response_text:
-        return "failed"
-
-    messages = [
-        SystemMessage(content=SUBTASK_EVALUATION_SYSTEM_PROMPT),
-        HumanMessage(
-            content=SUBTASK_EVALUATION_PROMPT.format(task=task, response=response_text)
-        ),
-    ]
-
-    try:
-        response = await llm.ainvoke(messages, config={"tags": ["no-stream"]})
-    except Exception:  # noqa: BLE001
-        logging.warning("Planner subtask evaluation failed", exc_info=True)
-        return "completed"
-
-    answer = _extract_text(response).strip().lower()
-    if answer.startswith("input"):
-        return "needs_input"
-    if answer.startswith("no"):
-        return "failed"
-    return "completed"
-
-
 async def _create_plan(
     llm: BaseChatModel,
     agents_description: str,
@@ -702,105 +397,6 @@ async def _handle_failure_actions(
         }
     return None
 
-def _fail_plan(
-    subtasks: list[dict],
-    results: list[str],
-    index: int,
-    task: str,
-    error: Exception | str,
-    emit_plan: bool,
-) -> dict:
-    """Stop the plan after a subtask fails and report the failure to the user.
-
-    Marks the failed subtask, emits a plan-progress event when running a multi-subtask
-    plan, and returns a state update that routes the graph to END (via ``cancelled``)
-    with a user-facing explanation instead of silently marking the subtask completed and
-    continuing with the remaining subtasks.
-
-    ``error`` may be the exception that was raised or a plain reason string (e.g. when the
-    child agent signalled failure via the marker or no agent was available).
-    """
-    subtasks[index]["status"] = "failed"
-    subtasks[index]["actions"] = [
-        RETRY_SUBTASK_REQUEST,
-        RESTART_PLAN_REQUEST,
-        REQUEST_FAILURE_DETAILS,
-        CANCEL_PLAN_REQUEST,
-    ]
-    if emit_plan:
-        dispatch_custom_event(
-            "planner-plan-created",
-            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
-        )
-    return {
-        "subtasks": subtasks,
-        "results": results,
-        "cancelled": True,
-        "messages": [
-            AIMessage(
-                content=PLAN_SUBTASK_FAILED_REPLY.format(
-                    task=task, error=error, plan=_format_plan(subtasks)
-                )
-            )
-        ],
-    }
-
-def _cancel_plan(
-    subtasks: list[dict],
-    results: list[str],
-    index: int,
-    task: str,
-    emit_plan: bool,
-) -> dict:
-    """Stop the plan after the user cancels a subtask and report it to the user.
-
-    Mirrors ``_fail_plan``: marks the cancelled subtask, offers the retry/restart recovery
-    actions, emits a plan-progress event when running a multi-subtask plan, and returns a
-    state update that routes the graph to END (via ``cancelled``) with a user-facing
-    explanation instead of continuing with the remaining subtasks.
-    """
-    subtasks[index]["status"] = "cancelled"
-    subtasks[index]["actions"] = [
-        RETRY_SUBTASK_REQUEST,
-        RESTART_PLAN_REQUEST,
-    ]
-    if emit_plan:
-        dispatch_custom_event(
-            "planner-plan-created",
-            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
-        )
-    return {
-        "subtasks": subtasks,
-        "results": results,
-        "cancelled": True,
-        "messages": [
-            AIMessage(
-                content=PLAN_SUBTASK_CANCELLED_REPLY.format(
-                    task=task, plan=_format_plan(subtasks)
-                )
-            )
-        ],
-    }
-
-def _build_task_message(task: str, previous_results: list[str]) -> str:
-    """Build the message sent to a child agent, including prior subtask outcomes.
-
-    A subtask may depend on the results of the subtasks that ran before it, so the
-    accumulated results are prepended as context ahead of the current task.
-    """
-    if not previous_results:
-        return task
-    joined = "\n\n".join(previous_results)
-    return (
-        "Results of the previous subtasks in the plan (use them as needed to complete "
-        f"your task):\n{joined}\n\nYour task:\n{task}"
-    )
-
-
-def _format_plan(subtasks: list[dict]) -> str:
-    """Render the plan's subtasks as JSON, matching the ``SubTask`` schema."""
-    return json.dumps(subtasks)
-
 
 def _retry_failed_subtasks(state: PlannerState) -> Plan | None:
     """Rebuild the previous plan with its failed or cancelled subtasks reset to pending.
@@ -836,24 +432,6 @@ def _retry_all_subtasks(state: PlannerState) -> Plan | None:
     ]
     return Plan(subtasks=[SubTask(**st) for st in retried])
 
-def _extract_text(raw: object) -> str:
-    """Concatenate the textual content of an AIMessage, ignoring reasoning blocks.
-    Message content can be a plain string or a list of typed blocks (e.g. ``text`` and
-    ``reasoning_content``). Only ``text`` blocks are kept.
-    """
-    content = getattr(raw, "content", raw)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-            elif isinstance(block, str):
-                parts.append(block)
-        return "".join(parts)
-    return ""
-
 
 def _parse_plan_from_raw(raw: object) -> Plan | None:
     """Best-effort recovery of a Plan from a raw message when tool-calling parsing fails.
@@ -882,15 +460,6 @@ def _parse_plan_from_raw(raw: object) -> Plan | None:
     except Exception:  # noqa: BLE001 - validation failure just means no usable plan
         logging.warning("Planner recovered JSON did not match Plan schema: %r", data)
         return None
-
-
-def _next_subtask_index(subtasks: list[dict]) -> int:
-    """Return the in-progress subtask (child paused on an interrupt), else the first pending one."""
-    for status in ("in_progress", "pending"):
-        for i, st in enumerate(subtasks):
-            if st["status"] == status:
-                return i
-    raise ValueError("No in-progress or pending subtask to run.")
 
 
 def _route_next(state: PlannerState) -> str:
@@ -944,18 +513,6 @@ def _route_after_approval(state: PlannerState) -> str:
     return "execute"
 
 
-def _is_direct_handoff(subtasks: list) -> bool:
-    """Return True when the plan is a single subtask delegated straight to its agent.
-
-    A one-subtask plan is treated as a plain delegation rather than an orchestrated plan:
-    it is never confirmed with or exposed to the client, emits no plan-progress events,
-    and its child agent's answer is returned as-is without going through the reducer.
-    Centralizing this check keeps the plan, execute, and routing stages in agreement on
-    what counts as a direct hand-off.
-    """
-    return len(subtasks) == 1
-
-
 def _plan_approval_enabled() -> bool:
     """Return True when the user must approve a multi-subtask plan before it runs.
 
@@ -963,14 +520,6 @@ def _plan_approval_enabled() -> bool:
     which is surfaced through the chart's ``planApproval.enabled`` value.
     """
     return os.environ.get("PLAN_APPROVAL_ENABLED", "false").lower() == "true"
-
-
-def _is_cancelled(result: dict) -> bool:
-    """Return True if the last ToolMessage in a child agent result is the cancellation marker."""
-    for msg in reversed(result.get("messages", [])):
-        if isinstance(msg, ToolMessage):
-            return msg.content == INTERRUPT_CANCEL_MESSAGE
-    return False
 
 
 def _last_user_request(state: PlannerState) -> str:
@@ -1016,22 +565,3 @@ def _last_plan_cancellation_details(state: PlannerState) -> str | None:
     if text.startswith(PLAN_CANCELLED_PREFIX):
         return text
     return None
-
-
-def _build_child_config(agent_name: str, planner_subtask: bool = False) -> RunnableConfig:
-    """Build a namespaced run-config so each child agent checkpoints independently.
-
-    When ``planner_subtask`` is True the child is flagged as running a planner subtask,
-    so its system prompt is extended to reply only with the final result.
-    """
-    parent_configurable = ensure_config().get("configurable", {})
-    parent_thread_id = parent_configurable.get("thread_id", "")
-    if not parent_thread_id:
-        raise ValueError("thread_id is required in configurable but was not provided")
-
-    child_configurable = {
-        "thread_id": f"{parent_thread_id}::planner::{agent_name}",
-    }
-    if planner_subtask:
-        child_configurable["planner_subtask"] = True
-    return RunnableConfig(configurable=child_configurable, callbacks=[])

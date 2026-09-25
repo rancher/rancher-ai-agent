@@ -12,29 +12,14 @@ from pydantic import ValidationError
 
 from app.constants import INTERRUPT_CANCEL_REPLY
 from app.services.agent._constants import INTERRUPT_CANCEL_MESSAGE
-from app.services.agent.planner import (
-    CANCEL_PLAN_REQUEST,
-    PLAN_CANCELLED_REPLY,
-    PLAN_FAILED_PREFIX,
-    REQUEST_FAILURE_DETAILS,
-    RESTART_PLAN_REQUEST,
-    RETRY_SUBTASK_REQUEST,
+from app.services.agent.planner.agent import (
     Plan,
     PlannerState,
     SubTask,
-    _build_child_config,
-    _build_task_message,
     _create_plan,
-    _evaluate_subtask,
-    _extract_text,
-    _fail_plan,
-    _format_plan,
     _handle_failure_actions,
-    _is_cancelled,
-    _is_direct_handoff,
     _last_plan_failure_details,
     _last_user_request,
-    _next_subtask_index,
     _parse_plan_from_raw,
     _plan_approval_enabled,
     _retry_all_subtasks,
@@ -42,8 +27,27 @@ from app.services.agent.planner import (
     _route_after_approval,
     _route_after_plan,
     _route_next,
-    _run_pending_subtask,
     create_planner_agent,
+)
+from app.services.agent.planner.prompts import (
+    CANCEL_PLAN_REQUEST,
+    PLAN_CANCELLED_REPLY,
+    PLAN_FAILED_PREFIX,
+    REQUEST_FAILURE_DETAILS,
+    RESTART_PLAN_REQUEST,
+    RETRY_SUBTASK_REQUEST,
+)
+from app.services.agent.planner.subtasks import (
+    _build_child_config,
+    _build_task_message,
+    _evaluate_subtask,
+    _extract_text,
+    _fail_plan,
+    _format_plan,
+    _is_cancelled,
+    _is_direct_handoff,
+    _next_subtask_index,
+    _run_pending_subtask,
 )
 from app.services.agent.supervisor import ChildAgent, _AgentCallCounter
 
@@ -144,7 +148,7 @@ class TestFailureReporting:
         ]
         results = ["an earlier result"]
 
-        with patch("app.services.agent.planner.dispatch_custom_event") as dispatch:
+        with patch("app.services.agent.planner.subtasks.dispatch_custom_event") as dispatch:
             update = _fail_plan(
                 subtasks,
                 results,
@@ -169,7 +173,7 @@ class TestFailureReporting:
     def test_fail_plan_emits_updated_plan_when_requested(self):
         subtasks = [{"task": "step", "agent": "a", "status": "in_progress"}]
 
-        with patch("app.services.agent.planner.dispatch_custom_event") as dispatch:
+        with patch("app.services.agent.planner.subtasks.dispatch_custom_event") as dispatch:
             _fail_plan(subtasks, [], 0, "step", "failed", emit_plan=True)
 
         event_name, payload = dispatch.call_args.args
@@ -348,7 +352,7 @@ class TestMessageStateHelpers:
 class TestChildConfiguration:
     def test_build_child_config_namespaces_thread_and_drops_parent_callbacks(self):
         with patch(
-            "app.services.agent.planner.ensure_config",
+            "app.services.agent.planner.subtasks.ensure_config",
             return_value={
                 "configurable": {"thread_id": "parent", "request_id": "request"},
                 "callbacks": ["parent callback"],
@@ -360,7 +364,7 @@ class TestChildConfiguration:
         assert config.get("callbacks") == []
 
     def test_build_child_config_flags_planner_subtask(self):
-        with patch("app.services.agent.planner.ensure_config", return_value=PARENT_CONFIG):
+        with patch("app.services.agent.planner.subtasks.ensure_config", return_value=PARENT_CONFIG):
             config = _build_child_config("rancher", planner_subtask=True)
 
         assert config.get("configurable") == {
@@ -369,7 +373,7 @@ class TestChildConfiguration:
         }
 
     def test_build_child_config_requires_parent_thread_id(self):
-        with patch("app.services.agent.planner.ensure_config", return_value={"configurable": {}}):
+        with patch("app.services.agent.planner.subtasks.ensure_config", return_value={"configurable": {}}):
             with pytest.raises(ValueError, match="thread_id is required"):
                 _build_child_config("rancher")
 
@@ -562,12 +566,12 @@ class TestEvaluateSubtask:
 class TestRunPendingSubtask:
     @pytest.fixture(autouse=True)
     def parent_config(self):
-        with patch("app.services.agent.planner.ensure_config", return_value=PARENT_CONFIG):
+        with patch("app.services.agent.planner.subtasks.ensure_config", return_value=PARENT_CONFIG):
             yield
 
     @pytest.fixture
     def dispatch(self):
-        with patch("app.services.agent.planner.dispatch_custom_event") as dispatch:
+        with patch("app.services.agent.planner.subtasks.dispatch_custom_event") as dispatch:
             yield dispatch
 
     @staticmethod
@@ -872,7 +876,7 @@ class TestAwaitingUserInput:
         )
         config = {"configurable": {"thread_id": "t"}}
 
-        with patch("app.services.agent.planner.dispatch_custom_event"):
+        with patch("app.services.agent.planner.subtasks.dispatch_custom_event"):
             state = await graph.ainvoke(
                 {"messages": [HumanMessage(content="create a namespace and a pod")]}, config
             )

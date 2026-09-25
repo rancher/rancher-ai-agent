@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from app.constants import INTERRUPT_CANCEL_REPLY
@@ -42,6 +43,7 @@ from app.services.agent.planner import (
     _route_after_plan,
     _route_next,
     _run_pending_subtask,
+    create_planner_agent,
 )
 from app.services.agent.supervisor import ChildAgent, _AgentCallCounter
 
@@ -204,6 +206,17 @@ class TestRouting:
         )
         assert _route_next(state) == "execute"
 
+    def test_route_next_ends_while_awaiting_input(self):
+        state = cast(
+            PlannerState,
+            {
+                "cancelled": False,
+                "awaiting_input": True,
+                "subtasks": [{"status": "in_progress"}, {"status": "pending"}],
+            },
+        )
+        assert _route_next(state) == "end"
+
     def test_route_after_plan_ends_on_empty_plan(self):
         assert _route_after_plan(cast(PlannerState, {"subtasks": []})) == "end"
 
@@ -217,6 +230,14 @@ class TestRouting:
         state = cast(
             PlannerState,
             {"subtasks": [{"status": "pending"}, {"status": "pending"}], "retry": True},
+        )
+        assert _route_after_plan(state) == "execute"
+
+    def test_route_after_plan_skips_approval_when_awaiting_input(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
+        state = cast(
+            PlannerState,
+            {"subtasks": [{"status": "in_progress"}, {"status": "pending"}], "awaiting_input": True},
         )
         assert _route_after_plan(state) == "execute"
 
@@ -507,18 +528,25 @@ class TestEvaluateSubtask:
     async def test_empty_response_fails_without_llm_call(self):
         llm = _mock_llm()
 
-        assert await _evaluate_subtask(llm, "task", "   ") is False
+        assert await _evaluate_subtask(llm, "task", "   ") == "failed"
         llm.ainvoke.assert_not_called()
 
     @pytest.mark.parametrize(
         ("answer", "expected"),
-        [("yes", True), ("Yes.", True), ("no", False), ("No, it did not.", False)],
+        [
+            ("yes", "completed"),
+            ("Yes.", "completed"),
+            ("no", "failed"),
+            ("No, it did not.", "failed"),
+            ("input", "needs_input"),
+            ("Input.", "needs_input"),
+        ],
     )
     @pytest.mark.asyncio
     async def test_interprets_llm_answer(self, answer, expected):
         llm = _mock_llm(response=AIMessage(content=answer))
 
-        assert await _evaluate_subtask(llm, "list clusters", "Here are the clusters") is expected
+        assert await _evaluate_subtask(llm, "list clusters", "Here are the clusters") == expected
         prompt = llm.ainvoke.call_args.args[0][1].content
         assert "list clusters" in prompt
         assert "Here are the clusters" in prompt
@@ -528,7 +556,7 @@ class TestEvaluateSubtask:
         llm = _mock_llm()
         llm.ainvoke.side_effect = RuntimeError("unavailable")
 
-        assert await _evaluate_subtask(llm, "task", "response") is True
+        assert await _evaluate_subtask(llm, "task", "response") == "completed"
 
 
 class TestRunPendingSubtask:
@@ -709,6 +737,64 @@ class TestRunPendingSubtask:
         assert "did not complete the task" in outcome["messages"][0].content
 
     @pytest.mark.asyncio
+    async def test_child_asking_for_input_pauses_plan(self, dispatch):
+        question = "What is the name of the namespace?"
+        child = _mock_child("rancher", {"messages": [AIMessage(content=question)]})
+        subtasks = self._plan("rancher", "rancher")
+        results: list[str] = []
+
+        outcome = await _run_pending_subtask(
+            _mock_llm(response=AIMessage(content="input")),
+            {"rancher": child}, subtasks, results, _AgentCallCounter(), emit_plan=True,
+        )
+
+        assert isinstance(outcome, dict)
+        assert outcome["awaiting_input"] is True
+        assert "cancelled" not in outcome
+        assert outcome["messages"][0].content == question
+        assert subtasks[0]["status"] == "in_progress"
+        assert "actions" not in subtasks[0]
+        assert results == []
+        # Only the in-progress plan is emitted; no failed plan follows.
+        dispatch.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forwards_user_reply_to_waiting_child(self, dispatch):
+        child = _mock_child("rancher", {"messages": [AIMessage(content="Namespace test-ns created")]})
+        subtasks = self._plan("rancher", "rancher")
+        subtasks[0]["status"] = "in_progress"
+        results: list[str] = []
+
+        outcome = await _run_pending_subtask(
+            _mock_llm(response=AIMessage(content="yes")),
+            {"rancher": child}, subtasks, results, _AgentCallCounter(), emit_plan=True,
+            user_reply="test-ns",
+        )
+
+        assert outcome == "Namespace test-ns created"
+        sent = child.agent.ainvoke.call_args.args[0]["messages"]
+        assert len(sent) == 1 and sent[0].content == "test-ns"
+        assert subtasks[0]["status"] == "completed"
+        assert results == ["Task: task 0\nAgent: rancher\nResult: Namespace test-ns created"]
+        # The subtask was already shown as in progress, so it is not emitted again.
+        dispatch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_direct_handoff_child_asking_for_input_pauses(self, dispatch):
+        child = _mock_child("rancher", {"messages": [AIMessage(content="Which cluster?")]})
+        subtasks = self._plan("rancher")
+
+        outcome = await _run_pending_subtask(
+            _mock_llm(response=AIMessage(content="input")),
+            {"rancher": child}, subtasks, [], _AgentCallCounter(), emit_plan=False,
+        )
+
+        assert isinstance(outcome, dict)
+        assert outcome["awaiting_input"] is True
+        assert subtasks[0]["status"] == "in_progress"
+        dispatch.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_recommends_agent_after_five_consecutive_subtasks(self, dispatch):
         counter = _AgentCallCounter()
         counter.record("rancher")
@@ -725,3 +811,87 @@ class TestRunPendingSubtask:
         assert event_name == "subagent_choice_event"
         assert '"recommended": "rancher"' in payload
         assert counter.count == 0
+
+
+class TestAwaitingUserInput:
+    """End-to-end planner graph runs where a child asks the user for more information."""
+
+    @staticmethod
+    def _graph(plan: Plan, evaluations: list[str], child_replies: list[str]):
+        llm = _mock_llm(
+            structured_response={"raw": None, "parsed": plan, "parsing_error": None},
+        )
+        llm.ainvoke.side_effect = [AIMessage(content=answer) for answer in evaluations]
+        config = MagicMock()
+        config.name = "rancher"
+        config.description = "Rancher agent"
+        agent = MagicMock()
+        agent.ainvoke = AsyncMock(
+            side_effect=[{"messages": [AIMessage(content=reply)]} for reply in child_replies]
+        )
+        agent.aget_state = AsyncMock(return_value=SimpleNamespace(interrupts=[]))
+        graph = create_planner_agent(llm, [ChildAgent(config=config, agent=agent)], InMemorySaver())
+        return graph, llm, agent
+
+    @pytest.mark.asyncio
+    async def test_direct_handoff_resumes_child_with_user_answer(self):
+        plan = Plan(subtasks=[SubTask(task="Create a namespace.", agent="rancher")])
+        graph, llm, agent = self._graph(
+            plan, evaluations=["input", "yes"], child_replies=["What is the name?", "Namespace test-ns created"]
+        )
+        config = {"configurable": {"thread_id": "t"}}
+
+        state = await graph.ainvoke({"messages": [HumanMessage(content="create a namespace")]}, config)
+
+        assert state["awaiting_input"] is True
+        assert state["subtasks"][0]["status"] == "in_progress"
+        assert state["messages"][-1].content == "What is the name?"
+
+        state = await graph.ainvoke({"messages": [HumanMessage(content="test-ns")]}, config)
+
+        assert state["awaiting_input"] is False
+        assert state["subtasks"][0]["status"] == "completed"
+        assert state["messages"][-1].content == "Namespace test-ns created"
+        # The answer is forwarded to the child instead of generating a new plan.
+        llm.with_structured_output.return_value.ainvoke.assert_awaited_once()
+        assert agent.ainvoke.call_args.args[0]["messages"][0].content == "test-ns"
+
+    @pytest.mark.asyncio
+    async def test_plan_continues_with_next_subtask_after_user_answer(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "false")
+        plan = Plan(
+            subtasks=[
+                SubTask(task="Create a namespace.", agent="rancher"),
+                SubTask(task="Create a pod in the namespace.", agent="rancher"),
+            ]
+        )
+        graph, llm, agent = self._graph(
+            plan,
+            evaluations=["input", "yes", "input"],
+            child_replies=["What is the name?", "Namespace test-ns created", "Which image?"],
+        )
+        config = {"configurable": {"thread_id": "t"}}
+
+        with patch("app.services.agent.planner.dispatch_custom_event"):
+            state = await graph.ainvoke(
+                {"messages": [HumanMessage(content="create a namespace and a pod")]}, config
+            )
+
+            assert state["awaiting_input"] is True
+            assert [st["status"] for st in state["subtasks"]] == ["in_progress", "pending"]
+            assert state["results"] == []
+
+            state = await graph.ainvoke({"messages": [HumanMessage(content="test-ns")]}, config)
+
+        # The first subtask completes with the user's answer, then the second one runs
+        # and pauses on its own question.
+        assert state["awaiting_input"] is True
+        assert [st["status"] for st in state["subtasks"]] == ["completed", "in_progress"]
+        assert state["results"] == [
+            "Task: Create a namespace.\nAgent: rancher\nResult: Namespace test-ns created"
+        ]
+        sent = [call.args[0]["messages"][0].content for call in agent.ainvoke.call_args_list]
+        assert sent[1] == "test-ns"
+        assert "Namespace test-ns created" in sent[2]
+        assert "Create a pod in the namespace." in sent[2]
+        llm.with_structured_output.return_value.ainvoke.assert_awaited_once()

@@ -62,6 +62,7 @@ class PlannerState(TypedDict):
     cancelled: bool
     feedback: list[str]
     retry: bool
+    awaiting_input: bool
 
 
 PLANNER_PROMPT = """\
@@ -107,8 +108,9 @@ answer for the user.
 SUBTASK_EVALUATION_SYSTEM_PROMPT = """\
 You are the evaluator of a planner agent. You are given a subtask that was assigned to a
 child agent and the response that agent produced. Judge whether the agent actually
-completed the task. Answer with a single word: "yes" if it completed the task, or "no" if
-it did not. Do not add any other text.
+completed the task. Answer with a single word: "yes" if it completed the task, "input" if
+it is asking the user for information it needs to continue, or "no" if it did not complete
+the task. Do not add any other text.
 """
 
 SUBTASK_EVALUATION_PROMPT = """\
@@ -120,11 +122,14 @@ Subtask:
 Agent's response:
 {response}
 
-The task was NOT completed if the agent reports it is missing information, hit an error,
-lacks the capability or permissions, refused, or otherwise did not accomplish what was
-asked. If the agent accomplished the task and produced a useful result, it was completed.
+If the agent is asking the user a question or requesting information or a decision it
+needs in order to continue (e.g. a missing name or value), it is waiting for user input.
+The task was NOT completed if the agent hit an error, lacks the capability or permissions,
+refused, or otherwise did not accomplish what was asked. If the agent accomplished the task
+and produced a useful result, it was completed.
 
-Answer with a single word: "yes" if it completed the task, or "no" if it did not.
+Answer with a single word: "yes" if it completed the task, "input" if it is waiting for
+user input, or "no" if it did not complete the task.
 """
 
 PLANNER_FEEDBACK_SUFFIX = """\
@@ -230,6 +235,14 @@ def create_planner_agent(
         feedback = list(state.get("feedback") or [])
 
         request = _last_user_request(state)
+
+        # A subtask asked the user for more information: the new message is the user's
+        # answer, so keep the current plan and let execute_node forward it to the child.
+        if state.get("awaiting_input") and any(
+            st["status"] == "in_progress" for st in state.get("subtasks") or []
+        ):
+            return {"messages_history": [HumanMessage(content=request)]}
+
         previous_plan_failure_message = _last_plan_failure_details(state)
 
         if previous_plan_failure_message:
@@ -296,30 +309,37 @@ def create_planner_agent(
         """Run the next pending subtask in its assigned child agent."""
         subtasks = state["subtasks"]
         results = list(state.get("results", []))
+        # When the child asked for more information, the latest user message is its answer.
+        user_reply = _last_user_request(state) if state.get("awaiting_input") else None
 
         # A single-subtask plan is handed off directly to the child agent: run it with no
         # plan-progress events and return its answer as-is; _route_next then sends the
         # result straight to END, skipping the reducer.
         if _is_direct_handoff(subtasks):
-            outcome = await _run_pending_subtask(llm, agents_by_name, subtasks, results, call_counter, emit_plan=False)
+            outcome = await _run_pending_subtask(
+                llm, agents_by_name, subtasks, results, call_counter, emit_plan=False, user_reply=user_reply
+            )
             if isinstance(outcome, dict):
-                return outcome
+                return {"awaiting_input": False, **outcome}
             return {
                 "subtasks": subtasks,
                 "results": results,
+                "awaiting_input": False,
                 "messages": [AIMessage(content=outcome)],
             }
 
-        outcome = await _run_pending_subtask(llm, agents_by_name, subtasks, results, call_counter, emit_plan=True)
+        outcome = await _run_pending_subtask(
+            llm, agents_by_name, subtasks, results, call_counter, emit_plan=True, user_reply=user_reply
+        )
         if isinstance(outcome, dict):
-            return outcome
+            return {"awaiting_input": False, **outcome}
 
         # The child agent notifies that it has finished its subtask.
         dispatch_custom_event(
             "planner-plan-finished",
             f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
         )
-        return {"subtasks": subtasks, "results": results}
+        return {"subtasks": subtasks, "results": results, "awaiting_input": False}
 
     async def reduce_node(state: PlannerState) -> dict:
         """Combine all subtask results into a single final answer."""
@@ -372,8 +392,13 @@ async def _run_pending_subtask(
     results: list[str],
     call_counter: _AgentCallCounter,
     emit_plan: bool,
+    user_reply: str | None = None,
 ) -> dict | str:
     """Run the next pending subtask in its assigned child agent.
+
+    If the child previously asked the user for more information, ``user_reply`` holds
+    the user's answer and is sent to the child (whose thread already holds the task and
+    its question) instead of the task message.
 
     Handles human-in-the-loop interrupts: if a child agent pauses for confirmation
     or to ask the user for more data, the subtask is left ``in_progress`` and the node
@@ -437,15 +462,20 @@ async def _run_pending_subtask(
                     "messages": [AIMessage(content=INTERRUPT_CANCEL_REPLY)],
                 }
         else:
-            subtasks[index]["status"] = "in_progress"
-            if emit_plan:
-                dispatch_custom_event(
-                    "planner-plan-created",
-                    f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
-                )
+            if user_reply is not None:
+                # The subtask is already in progress: forward the user's answer.
+                message = user_reply
+            else:
+                message = _build_task_message(task, results)
+                subtasks[index]["status"] = "in_progress"
+                if emit_plan:
+                    dispatch_custom_event(
+                        "planner-plan-created",
+                        f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+                    )
             try:
                 result = await child.agent.ainvoke(
-                    {"messages": [HumanMessage(content=_build_task_message(task, results))]},
+                    {"messages": [HumanMessage(content=message)]},
                     config=child_config,
                 )
             except GraphBubbleUp:
@@ -472,8 +502,19 @@ async def _run_pending_subtask(
     # The child returned without raising, but it may not have actually completed the
     # task (missing information, an error, a refusal, ...). Ask the LLM to judge the
     # child's response so the plan is stopped instead of marking the subtask completed
-    # and continuing with the remaining subtasks.
-    if not await _evaluate_subtask(llm, task, content):
+    # and continuing with the remaining subtasks. If the child is asking the user for more
+    # information, pause the plan with the subtask still in progress: the user's next
+    # message is forwarded to the child as its answer.
+    evaluation = await _evaluate_subtask(llm, task, content)
+    if evaluation == "needs_input":
+        logging.debug("Planner subtask for agent '%s' is waiting for user input", agent_name)
+        return {
+            "subtasks": subtasks,
+            "results": results,
+            "awaiting_input": True,
+            "messages": [AIMessage(content=content)],
+        }
+    if evaluation == "failed":
         logging.debug("Planner subtask for agent '%s' evaluated as failed", agent_name)
         reason = "The agent did not complete the task."
         return _fail_plan(subtasks, results, index, task, reason, emit_plan)
@@ -494,16 +535,19 @@ async def _run_pending_subtask(
     return content
 
 
-async def _evaluate_subtask(llm: BaseChatModel, task: str, content: str | list) -> bool:
-    """Return True if the child agent completed the subtask, using the LLM.
+async def _evaluate_subtask(
+    llm: BaseChatModel, task: str, content: str | list
+) -> Literal["completed", "needs_input", "failed"]:
+    """Judge, using the LLM, whether the child agent completed the subtask.
 
     The child's reply is streamed to the client, so a marker-based signal is not
     reliably detectable. Instead, run a separate, non-streamed LLM call that receives
-    the subtask and the child's response and answers "yes" or "no".
+    the subtask and the child's response and answers "yes", "input" (the child is asking
+    the user for more information) or "no".
     """
     response_text = _extract_text(content).strip()
     if not response_text:
-        return False
+        return "failed"
 
     messages = [
         SystemMessage(content=SUBTASK_EVALUATION_SYSTEM_PROMPT),
@@ -516,10 +560,14 @@ async def _evaluate_subtask(llm: BaseChatModel, task: str, content: str | list) 
         response = await llm.ainvoke(messages, config={"tags": ["no-stream"]})
     except Exception:  # noqa: BLE001
         logging.warning("Planner subtask evaluation failed", exc_info=True)
-        return True
+        return "completed"
 
     answer = _extract_text(response).strip().lower()
-    return not answer.startswith("no")
+    if answer.startswith("input"):
+        return "needs_input"
+    if answer.startswith("no"):
+        return "failed"
+    return "completed"
 
 
 async def _create_plan(
@@ -783,6 +831,9 @@ def _route_next(state: PlannerState) -> str:
     """Route to execute while in-progress or pending subtasks remain, otherwise reduce."""
     if state.get("cancelled"):
         return "end"
+    # The child asked the user for more information: end the run and wait for the answer.
+    if state.get("awaiting_input"):
+        return "end"
     subtasks = state.get("subtasks", [])
     # An in-progress subtask has a child paused on an interrupt that must be resumed.
     if any(st["status"] in ("in_progress", "pending") for st in subtasks):
@@ -806,6 +857,9 @@ def _route_after_plan(state: PlannerState) -> str:
     subtasks = state.get("subtasks", [])
     if not subtasks:
         return "end"
+    # The user answered a subtask's question: resume the plan that is already running.
+    if state.get("awaiting_input"):
+        return "execute"
     if _is_direct_handoff(subtasks) or not _plan_approval_enabled() or state.get("retry"):
         return "execute"
     return "approval"

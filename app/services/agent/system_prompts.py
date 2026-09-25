@@ -42,6 +42,7 @@ PLANNER_SUBTASK_INSTRUCTIONS = """
 * You are executing one step of a larger plan; your reply is consumed by the planner, not read by the user directly.
 * Reply ONLY with the final result of your task.
 * Do NOT offer follow-up actions or ask questions such as "Would you like me to ...?", "Do you want me to ...?", or "Let me know if ...".
+* If information required to complete your task is missing (e.g. a resource name), ask the user for it directly instead of guessing.
 """
 
 SUPERVISOR_PROMPT = IDENTITY_PREAMBLE + """

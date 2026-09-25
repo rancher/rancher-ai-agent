@@ -16,8 +16,9 @@ from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
-from langchain.agents.middleware import SummarizationMiddleware
+from langgraph.graph.state import CompiledStateGraph, Checkpointer
+from langchain.agents.middleware import AgentMiddleware, SummarizationMiddleware
+from langchain.agents.middleware.todo import TodoListMiddleware
 from langchain.messages import  HumanMessage, ToolMessage
 import langgraph.types
 from langgraph.errors import GraphBubbleUp
@@ -25,15 +26,24 @@ from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
 from .loader import AgentConfig
-from .system_prompts import SUPERVISOR_PROMPT
+from .system_prompts import (
+    SUPERVISOR_PROMPT,
+    SUPERVISOR_TODO_MANDATE,
+    MANDATORY_TODOS_SYSTEM_PROMPT,
+    MANDATORY_TODOS_TOOL_DESCRIPTION,
+)
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
     MessagesHistoryMiddleware,
     cancel_human_validation_middleware,
     inject_additional_kwargs_middleware,
+    plan_approval_enabled,
+    plan_approval_middleware,
+    plan_enabled,
     ui_tools_middleware
 )
 from ._constants import NeedsOauth2
+
 
 @dataclass
 class ChildAgent:
@@ -137,19 +147,53 @@ def create_supervisor_agent(
         [t.name for t in agent_tools],
     )
 
+
+    # Planning (TodoListMiddleware) is opt-out via PLAN_ENABLED. Plan approval is opt-in via
+    # PLAN_APPROVAL_ENABLED and only meaningful when planning is enabled. When approval is
+    # enabled, we also mandate that the agent always plans with write_todos (custom
+    # TodoListMiddleware prompts + a supervisor-prompt reminder) so the plan-approval
+    # interrupt reliably fires. When disabled, TodoListMiddleware keeps its default
+    # (optional) prompts and the plan approval middleware is not registered.
+    todos_enabled = plan_enabled()
+    plan_approval = todos_enabled and plan_approval_enabled()
+
+    todo_middleware = None
+    system_prompt = SUPERVISOR_PROMPT
+    if todos_enabled:
+        if plan_approval:
+            todo_middleware = TodoListMiddleware(
+                system_prompt=MANDATORY_TODOS_SYSTEM_PROMPT,
+                tool_description=MANDATORY_TODOS_TOOL_DESCRIPTION,
+            )
+            system_prompt = SUPERVISOR_PROMPT + SUPERVISOR_TODO_MANDATE
+        else:
+            todo_middleware = TodoListMiddleware()
+
+    middleware: list[AgentMiddleware] = [
+        MessagesHistoryMiddleware(),
+        cancel_human_validation_middleware(),
+        inject_additional_kwargs_middleware(),
+        ui_tools_middleware(llm),
+    ]
+    if todo_middleware is not None:
+        middleware.append(todo_middleware)
+    if plan_approval:
+        middleware.append(plan_approval_middleware())
+    middleware.append(
+        SummarizationMiddleware(
+            model=llm,
+            trigger=[("messages", 30), ("tokens", 30000)],
+            keep=("messages", 15),
+        )
+    )
+
     return create_agent(
-        llm,
+        model=llm,
         tools=agent_tools,
-        system_prompt=SUPERVISOR_PROMPT,
+        system_prompt=system_prompt,
         checkpointer=checkpointer,
         name="supervisor",
-        middleware=[
-            MessagesHistoryMiddleware(),
-            cancel_human_validation_middleware(),
-            inject_additional_kwargs_middleware(),
-            ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
-        ],
+        middleware=middleware,
     )
 
 def _build_child_config(agent_name: str) -> RunnableConfig:
@@ -293,6 +337,11 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
             raise NeedsOauth2(child_agent.config)
 
         child_config = _build_child_config(agent_name)
+        # Suppress the child's own token stream from reaching the client. The supervisor
+        # synthesizes the final answer; leaking the child's raw output (and its custom
+        # events) here would corrupt the stream, including any confirmation prompt the
+        # child re-triggers. Applied to both the fresh and resume invocations below.
+        child_config["tags"] = ["no-stream"]
         child_state = await child_agent.agent.aget_state(config=child_config)
         interrupt_ui_tools: list[dict] = []
 
@@ -323,8 +372,6 @@ def _create_agent_tool(child_agent: ChildAgent, call_counter: _AgentCallCounter)
                         metadata["ui_tools"] = interrupt_ui_tools
                     return INTERRUPT_CANCEL_MESSAGE, metadata
         else:
-            child_config["tags"] = ["no-stream"]
-            
             _dispatch_subagent_event("processing-subagent-start", agent_name, query)
             try:
                 result = await child_agent.agent.ainvoke(

@@ -333,11 +333,15 @@ class MemoryManager:
             elif message.type == 'ai' and message.content != "":
                 request_metadata = message.additional_kwargs.get("request_metadata", {})
 
+                # Some AI messages carry an internal, LLM-facing content (e.g. the plan
+                # cancellation guidance) but should be shown to the user with a simpler
+                # ``display_message``. Prefer it when present.
+                display_text = message.additional_kwargs.get("display_message") or str(message.text)
                 rows.append({
                     "chatId": chat_id,
                     "role": "agent",
                     "agent": request_metadata.get("agent", None),
-                    "message": (message.additional_kwargs.get("mcp_response") or "") + str(message.text),
+                    "message": (message.additional_kwargs.get("mcp_response") or "") + display_text,
                     "tools": message.additional_kwargs.get("ui_tools", []),
                     "tags": request_metadata.get("tags", []),
                     "createdAt": message.additional_kwargs.get("created_at"),

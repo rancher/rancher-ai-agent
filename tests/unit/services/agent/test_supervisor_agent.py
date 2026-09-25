@@ -118,7 +118,7 @@ def test_create_supervisor_agent_registers_expected_middleware(mock_create_agent
     assert "SummarizationMiddleware" in middleware_types
 
     # Decorator-based middleware are plain functions, check count
-    assert len(middleware) == 5
+    assert len(middleware) == 7
 
 
 # ============================================================================

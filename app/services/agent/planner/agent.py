@@ -11,6 +11,9 @@ node synthesizes the individual results into a single final answer for the user.
 import json
 import logging
 import os
+import langgraph.types
+
+from datetime import datetime
 from typing import Annotated, Literal, TypedDict, cast
 from pydantic import BaseModel, Field
 from langchain.agents import create_agent
@@ -18,7 +21,6 @@ from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
-import langgraph.types
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
@@ -174,7 +176,11 @@ def create_planner_agent(
             "cancelled": False, 
             "feedback": feedback, 
             "retry": retry, 
-            "messages_history": [HumanMessage(content=request)],
+            "messages_history": [HumanMessage(
+                content=request,  
+                additional_kwargs={
+                    "created_at": datetime.now().isoformat()
+                })],
         }
 
     async def approval_node(state: PlannerState) -> dict:
@@ -232,6 +238,7 @@ def create_planner_agent(
                 "results": results,
                 "awaiting_input": False,
                 "messages": [AIMessage(content=outcome)],
+                "messages_history": [AIMessage(content=outcome)],
             }
 
         outcome = await _run_pending_subtask(

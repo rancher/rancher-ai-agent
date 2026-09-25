@@ -1,27 +1,21 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
-from app.services.agent.child import CHILD_TOOL_USE_INSTRUCTIONS as _CHILD_TOOL_USE_INSTRUCTIONS
 from app.services.agent.supervisor import SUPERVISOR_PROMPT
-from app.services.agent.system_prompts import SEQUENTIAL_TOOL_CALLS
-
-# Child agents build their system prompt as: system_prompt + CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
-CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
 from app.services.llm import LLMManager
-from app.services.memory import StorageType
-from langchain_core.language_models import FakeMessagesListChatModel
-from mcp.server.fastmcp import FastMCP
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
-from _pytest.monkeypatch import MonkeyPatch
-from langchain_core.language_models.base import LanguageModelInput
-from langchain_core.tools import BaseTool
-from langchain_core.messages import AIMessageChunk
-from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from unittest.mock import AsyncMock
 
-import time
-import multiprocessing
-import requests
+from tests.integration.common import (
+    CHILD_TOOL_USE_INSTRUCTIONS,
+    FakeMessagesListChatModelWithTools,
+    add,
+    collect_messages,
+    multiply,
+    setup_agent_environment,
+    start_mock_mcp_servers,
+)
+
 import pytest
 
 # Agent names used in the multi-agent configuration
@@ -31,168 +25,12 @@ CALCULATOR_AGENT_NAME = "calculator-agent"
 MATH_AGENT_PROMPT = "You are a math agent that can add numbers."
 CALCULATOR_AGENT_PROMPT = "You are a calculator agent that can multiply numbers."
 
-mock_mcp_1 = FastMCP("mock1")
-mock_mcp_2 = FastMCP("mock2")
-
-
-@mock_mcp_1.tool()
-def add(a: int, b: int) -> str:
-    """Add two numbers"""
-    return f"sum is {a + b}"
-
-
-@mock_mcp_2.tool()
-def multiply(a: int, b: int) -> str:
-    """Multiply two numbers"""
-    return f"product is {a * b}"
-
-
-def run_mock_mcp_1():
-    """Runs the first mock MCP server on port 8001."""
-    import uvicorn
-    uvicorn.run(mock_mcp_1.streamable_http_app(), host="0.0.0.0", port=8001, log_level="error")
-
-
-def run_mock_mcp_2():
-    """Runs the second mock MCP server on port 8002."""
-    import uvicorn
-    uvicorn.run(mock_mcp_2.streamable_http_app(), host="0.0.0.0", port=8002, log_level="error")
-
-
 client = TestClient(app)
-
-
-class FakeMessagesListChatModelWithTools(FakeMessagesListChatModel):
-    """
-    A fake chat model that extends FakeMessagesListChatModel to support tool binding
-    and capture the messages sent to the LLM for inspection in tests.
-    
-    In the supervisor multi-agent setup:
-    - The supervisor's model node uses ainvoke -> _astream -> _stream (async path)
-    - The child agent's call_model_node uses invoke -> _generate (sync path)
-    
-    Both paths share the same response index (self.i) ensuring consistent ordering.
-    
-    Note: We capture calls in invoke (for child agent sync calls) and _stream
-    (for supervisor async calls). We use a flag to prevent double-counting when
-    invoke internally routes through _stream due to v2 streaming protocol.
-    """
-    tools: list[BaseTool] = None
-    all_calls: list[LanguageModelInput] = []
-    _in_invoke: bool = False
-
-    def bind_tools(self, tools, **kwargs):
-        self.tools = tools
-        return self
-    
-    def invoke(self, input, config=None, *, stop=None, **kwargs):
-        # Capture the input messages before invoking the parent method.
-        messages_send_to_llm = remove_message_ids(input)
-        self.all_calls.append(messages_send_to_llm)
-        # Set flag to prevent _stream from double-capturing
-        self._in_invoke = True
-        try:
-            return super().invoke(input, config, stop=stop, **kwargs)
-        finally:
-            self._in_invoke = False
-    
-    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
-        """Override _stream to yield chunks from the response.
-        
-        This is called by the supervisor's model node (via ainvoke -> _astream -> _stream).
-        When called from within invoke (v2 streaming protocol), we skip capturing
-        since invoke already captured the messages.
-        """
-        if not self._in_invoke:
-            messages_send_to_llm = remove_message_ids(messages)
-            self.all_calls.append(messages_send_to_llm)
-        
-        if self.i < len(self.responses):
-            response = self.responses[self.i]
-            self.i += 1
-            
-            chunk = AIMessageChunk(
-                content=response.content if hasattr(response, 'content') else "",
-                tool_calls=response.tool_calls if hasattr(response, 'tool_calls') else [],
-                id=response.id if hasattr(response, 'id') else None
-            )
-            yield ChatGenerationChunk(message=chunk)
-
-
-def remove_message_ids(messages: list[BaseMessage]) -> list[BaseMessage]:
-    """
-    Creates a new list of BaseMessage objects with the 'id' field removed
-    from each message.
-    """
-    new_messages = []
-    
-    for message in messages:
-        if isinstance(message, BaseMessage):
-            new_message = message.model_copy(update={
-                "id": None,
-                "name": None,
-                "additional_kwargs": {},
-                "response_metadata": {}
-            })
-        else:
-            new_message = message
-        
-        new_messages.append(new_message)
-        
-    return new_messages
-
-
-def collect_messages(websocket, num_prompts: int) -> list[str]:
-    """
-    Collect messages from websocket until we get the expected final message markers.
-    
-    Each prompt results in one complete message wrapped in <message>...</message>.
-    """
-    messages = []
-    
-    for _ in range(num_prompts):
-        msg = ""
-        while not msg.endswith("</message>"):
-            msg += websocket.receive_text()
-        messages.append(msg)
-    
-    return messages
-
-
-@pytest.fixture(scope="module")
-def module_monkeypatch(request):
-    """
-    A module-scoped version of the monkeypatch fixture.
-    This fixture ensures that patches persist for the duration of the module,
-    and cleanup happens only once at the end of the module.
-    """
-    mpatch = MonkeyPatch()
-
-    yield mpatch
-
-    mpatch.undo()
 
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_mock_mcp_servers(module_monkeypatch):
     """Sets up and tears down multiple mock MCP servers for the duration of the test module."""
-    module_monkeypatch.setenv("INSECURE_SKIP_TLS", "true")
-
-    class MockMemoryManager:
-        def __init__(self):
-            self.storage_type = StorageType.IN_MEMORY
-        
-        def get_checkpointer(self):
-            from langgraph.checkpoint.memory import MemorySaver
-            return MemorySaver()
-
-    app.memory_manager = MockMemoryManager()
-    
-    module_monkeypatch.setattr("app.routers.websocket.get_user_id_from_token", AsyncMock(return_value="test-user-id"))
-    # RBAC is covered by unit tests; disable it here so build_agent doesn't reach
-    # the Rancher/K8s API (SubjectAccessReview) during these flow tests.
-    module_monkeypatch.setattr("app.services.agent.factory.rbac_enabled", lambda: False)
-
     # Create multiple agent configs for multi-agent setup
     mock_agent_config_1 = AgentConfig(
         name=MATH_AGENT_NAME,
@@ -211,32 +49,17 @@ def setup_mock_mcp_servers(module_monkeypatch):
         mcp_url="http://localhost:8002/mcp",
         authentication=AuthenticationType.NONE,
     )
-    
-    module_monkeypatch.setattr(
-        "app.services.agent.factory.load_agent_configs", 
-        lambda: [mock_agent_config_1, mock_agent_config_2]
-    )
+    setup_agent_environment(module_monkeypatch, [mock_agent_config_1, mock_agent_config_2])
 
-    # Start both MCP servers
-    process_1 = multiprocessing.Process(target=run_mock_mcp_1)
-    process_2 = multiprocessing.Process(target=run_mock_mcp_2)
-    process_1.start()
-    process_2.start()
+    processes = start_mock_mcp_servers({
+        8001: ("mock1", [add]),
+        8002: ("mock2", [multiply]),
+    })
 
-    # Wait for both mock servers to be available before running tests.
-    for port in [8001, 8002]:
-        mcp_server_available = False
-        while not mcp_server_available:
-            try:
-                requests.get(f"http://localhost:{port}/mcp")
-                mcp_server_available = True
-            except requests.exceptions.ConnectionError:
-                time.sleep(0.1)
-       
-    yield (process_1, process_2)
+    yield processes
 
-    process_1.terminate()
-    process_2.terminate()
+    for process in processes:
+        process.terminate()
 
 
 def test_single_prompt():

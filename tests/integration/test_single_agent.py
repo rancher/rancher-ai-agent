@@ -1,98 +1,44 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agent.loader import RANCHER_AGENT_PROMPT, AgentConfig, AuthenticationType
-from app.services.agent.child import CHILD_TOOL_USE_INSTRUCTIONS as _CHILD_TOOL_USE_INSTRUCTIONS
-from app.services.agent.system_prompts import IDENTITY_PREAMBLE, SEQUENTIAL_TOOL_CALLS
-
-# Child agents build their system prompt as: system_prompt + CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
-CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
+from app.services.agent.system_prompts import IDENTITY_PREAMBLE
 from app.services.llm import LLMManager
-from app.services.memory import StorageType
-from mcp.server.fastmcp import FastMCP
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
-from _pytest.monkeypatch import MonkeyPatch
 from unittest.mock import AsyncMock
 
-from tests.integration.test_multi_agent import FakeMessagesListChatModelWithTools
+from tests.integration.common import (
+    CHILD_TOOL_USE_INSTRUCTIONS,
+    FakeMessagesListChatModelWithTools,
+    add,
+    setup_agent_environment,
+    start_mock_mcp_servers,
+)
 
-import time
-import multiprocessing
-import requests
 import pytest
 
-mock_mcp = FastMCP("mock")
-
-
-@mock_mcp.tool()
-def add(a: int, b: int) -> str:
-    """Add two numbers"""
-    return f"sum is {a + b}"
-
-def run_mock_mcp():
-    """Runs the mock MCP server."""
-    mock_mcp.run(transport="streamable-http")
+MOCK_MCP_PORT = 8005
 
 client = TestClient(app)
-
-@pytest.fixture(scope="module")
-def module_monkeypatch(request):
-    """
-    A module-scoped version of the monkeypatch fixture.
-    This fixture ensures that patches persist for the duration of the module,
-    and cleanup happens only once at the end of the module.
-    """
-    mpatch = MonkeyPatch()
-
-    yield mpatch
-
-    mpatch.undo()
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_mock_mcp_server(module_monkeypatch):
     """Sets up and tears down a mock MCP server for the duration of the test module."""
-    module_monkeypatch.setenv("INSECURE_SKIP_TLS", "true")
-
-    class MockMemoryManager:
-        def __init__(self):
-            self.storage_type = StorageType.IN_MEMORY
-        
-        def get_checkpointer(self):
-            from langgraph.checkpoint.memory import MemorySaver
-            return MemorySaver()
-
-    app.memory_manager = MockMemoryManager()
-    
-    module_monkeypatch.setattr("app.routers.websocket.get_user_id_from_token", AsyncMock(return_value="test-user-id"))
-    # RBAC is covered by unit tests; disable it here so build_agent doesn't reach
-    # the Rancher/K8s API (SubjectAccessReview) during these flow tests.
-    module_monkeypatch.setattr("app.services.agent.factory.rbac_enabled", lambda: False)
-
     mock_agent_config = AgentConfig(
         name="test-agent",
         displayName="Test Agent",
         description="Test agent for integration tests",
         system_prompt=RANCHER_AGENT_PROMPT,
-        mcp_url="http://localhost:8000/mcp",
+        mcp_url=f"http://localhost:{MOCK_MCP_PORT}/mcp",
         authentication=AuthenticationType.NONE,
     )
-    module_monkeypatch.setattr("app.services.agent.factory.load_agent_configs", lambda: [mock_agent_config])
+    setup_agent_environment(module_monkeypatch, [mock_agent_config])
 
-    process = multiprocessing.Process(target=run_mock_mcp)
-    process.start()
+    processes = start_mock_mcp_servers({MOCK_MCP_PORT: ("mock", [add])})
 
-    # Wait for the mock server to be available before running tests.
-    mcp_server_available = False
+    yield processes
 
-    while not mcp_server_available:
-        try:
-            requests.get("http://localhost:8000/mcp")
-            mcp_server_available = True
-        except requests.exceptions.ConnectionError:
-            time.sleep(0.1)
-       
-    yield process
-
-    process.terminate()
+    for process in processes:
+        process.terminate()
 
 def test_websocket_single_prompt():
     """Tests a single prompt-response interaction."""
@@ -372,7 +318,7 @@ def test_websocket_with_ui_tools():
             displayName="Test Agent",
             description="Test agent for integration tests",
             system_prompt=RANCHER_AGENT_PROMPT,
-            mcp_url="http://localhost:8000/mcp",
+            mcp_url=f"http://localhost:{MOCK_MCP_PORT}/mcp",
             authentication=AuthenticationType.NONE,
             ui_tools_selectors=["show-yaml"]  # Enable UI tools
         )

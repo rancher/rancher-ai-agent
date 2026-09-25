@@ -56,6 +56,7 @@ class PlannerState(TypedDict):
     """State shared across the planner graph nodes."""
 
     messages: Annotated[list, add_messages]
+    messages_history: Annotated[list, add_messages]
     subtasks: list[dict]
     results: list[str]
     cancelled: bool
@@ -248,7 +249,14 @@ def create_planner_agent(
             }
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
-        return {"subtasks": subtasks, "results": [], "cancelled": False, "feedback": feedback, "retry": retry}
+        return {
+            "subtasks": subtasks, 
+            "results": [], 
+            "cancelled": False, 
+            "feedback": feedback, 
+            "retry": retry, 
+            "messages_history": [HumanMessage(content=request)],
+        }
 
     async def approval_node(state: PlannerState) -> dict:
         """Ask the user to approve the plan that ``plan_node`` produced.
@@ -323,7 +331,12 @@ def create_planner_agent(
             {"messages": [HumanMessage(content=prompt)]},
             config=config,
         )
-        return {"messages": [result["messages"][-1]], "subtasks":[], "results": []}
+        return {
+            "messages": [result["messages"][-1]], 
+            "subtasks":[], 
+            "results": [],
+            "messages_history": [result["messages"][-1]]
+        }
 
     graph = StateGraph(PlannerState)
     # "plan" node: Analyzes the user's request and generates a list of sequential subtasks,

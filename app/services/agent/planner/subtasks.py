@@ -152,7 +152,12 @@ async def _run_pending_subtask(
         }
     if evaluation == "failed":
         logging.debug("Planner subtask for agent '%s' evaluated as failed", agent_name)
+        # Keep the child's own explanation so later turns (failure details, retry
+        # planning) can see why the subtask actually failed.
         reason = "The agent did not complete the task."
+        response_text = _extract_text(content).strip()
+        if response_text:
+            reason += f" Agent response: {response_text}"
         return _fail_plan(subtasks, results, index, task, reason, emit_plan)
 
     # Recommend switching to single-agent selection if the same agent completes 5

@@ -752,6 +752,7 @@ class TestRunPendingSubtask:
         assert subtasks[0]["status"] == "failed"
         assert results == []
         assert "did not complete the task" in outcome["messages"][0].content
+        assert "I need a cluster name" in outcome["messages"][0].content
 
     @pytest.mark.asyncio
     async def test_child_asking_for_input_pauses_plan(self, dispatch):

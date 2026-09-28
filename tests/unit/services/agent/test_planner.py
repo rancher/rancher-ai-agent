@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from app.constants import INTERRUPT_CANCEL_REPLY
 from app.services.agent._constants import INTERRUPT_CANCEL_MESSAGE
 from app.services.agent.planner.agent import (
     Plan,
@@ -32,6 +31,7 @@ from app.services.agent.planner.agent import (
 from app.services.agent.planner.prompts import (
     CANCEL_PLAN_REQUEST,
     PLAN_CANCELLED_REPLY,
+    PLAN_CANCELLED_PREFIX,
     PLAN_FAILED_PREFIX,
     REQUEST_FAILURE_DETAILS,
     RESTART_PLAN_REQUEST,
@@ -190,7 +190,7 @@ class TestRouting:
         [
             ({"cancelled": True, "subtasks": []}, "end"),
             ({"cancelled": False, "subtasks": [{"status": "pending"}]}, "execute"),
-            ({"cancelled": False, "subtasks": [{"status": "completed"}]}, "end"),
+            ({"cancelled": False, "subtasks": [{"status": "completed"}]}, "ui_tools"),
             (
                 {
                     "cancelled": False,
@@ -715,8 +715,10 @@ class TestRunPendingSubtask:
 
         assert isinstance(outcome, dict)
         assert outcome["cancelled"] is True
-        assert outcome["messages"][0].content == INTERRUPT_CANCEL_REPLY
+        assert outcome["messages"][0].content.startswith(PLAN_CANCELLED_PREFIX)
+        assert "task 0" in outcome["messages"][0].content
         assert subtasks[0]["status"] == "cancelled"
+        assert subtasks[0]["actions"] == [RETRY_SUBTASK_REQUEST, RESTART_PLAN_REQUEST]
         dispatch.assert_called_once()
 
     @pytest.mark.asyncio

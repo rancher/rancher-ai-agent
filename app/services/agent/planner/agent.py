@@ -15,22 +15,19 @@ import langgraph.types
 
 from datetime import datetime
 from typing import Annotated, Literal, TypedDict, cast
+from uuid import uuid4
 from pydantic import BaseModel, Field
-from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
+from langgraph.config import get_config
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
 from ..supervisor import ChildAgent, _AgentCallCounter
-from ..middleware import (
-    MessagesHistoryMiddleware,
-    inject_additional_kwargs_middleware,
-    ui_tools_middleware,
-)
+from ..middleware import _dispatch_ui_tools_event
 from .prompts import (
     CANCEL_PLAN_REQUEST,
     PLAN_CANCELLED_PREFIX,
@@ -48,7 +45,6 @@ from .prompts import (
     RETRY_SUBTASK_REQUEST,
 )
 from .subtasks import (
-    _build_child_config,
     _extract_text,
     _is_direct_handoff,
     _run_pending_subtask,
@@ -106,20 +102,44 @@ def create_planner_agent(
     )
     call_counter = _AgentCallCounter()
 
-    # TODO check middleware here!
-    reducer_agent = create_agent(
-        llm,
-        tools=[],
-        system_prompt=REDUCER_SYSTEM_PROMPT,
-        checkpointer=checkpointer,
-        name="planner-reducer",
-        middleware=[
-            MessagesHistoryMiddleware(),
-            inject_additional_kwargs_middleware(),
-            ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
-        ],
+    # Summarizes the planner's own ``messages`` channel, which holds every turn (direct
+    # handoffs, reduced answers, failures and cancellations), not only reducer runs.
+    summarizer = SummarizationMiddleware(
+        model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)
     )
+
+    async def ui_tools_node(state: PlannerState) -> dict:
+        """Select UI tools for the turn's final answer and attach them to it.
+
+        Only reached for a single-subtask handoff or a reduced plan, never for failures,
+        cancellations or rejected plans. Runs before ``summarize`` so the stored reply in
+        ``messages`` and ``messages_history`` already carries its ``ui_tools``.
+        """
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        if not isinstance(last_message, AIMessage):
+            return {}
+
+        config = get_config()
+        ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
+        if not ui_tools_list or not config.get("configurable", {}).get("request_id"):
+            return {}
+
+        # Same id as the stored reply, so add_messages replaces it in both channels.
+        updated = last_message.model_copy(
+            update={"additional_kwargs": {**last_message.additional_kwargs, "ui_tools": ui_tools_list}}
+        )
+        return {"messages": [updated], "messages_history": [updated]}
+
+    async def summarize_node(state: PlannerState) -> dict:
+        """Summarize older planner messages once the conversation grows too long.
+
+        Runs at the end of every turn, after the reply has been produced, so summarizing
+        never delays the response. Turns paused on an interrupt skip it until they finish.
+        The latest request and reply are always kept verbatim; ``messages_history`` is
+        left untouched so the full conversation is still available to the UI.
+        """
+        return await summarizer.abefore_model(state, None) or {}
 
     async def plan_node(state: PlannerState) -> dict:
         """Generate the list of subtasks from the user's request.
@@ -226,19 +246,20 @@ def create_planner_agent(
 
         # A single-subtask plan is handed off directly to the child agent: run it with no
         # plan-progress events and return its answer as-is; _route_next then sends the
-        # result straight to END, skipping the reducer.
+        # result to UI-tools selection, skipping the reducer.
         if _is_direct_handoff(subtasks):
             outcome = await _run_pending_subtask(
                 llm, agents_by_name, subtasks, results, call_counter, emit_plan=False, user_reply=user_reply
             )
             if isinstance(outcome, dict):
                 return {"awaiting_input": False, **outcome}
+            reply = AIMessage(content=outcome, id=str(uuid4()))
             return {
                 "subtasks": subtasks,
                 "results": results,
                 "awaiting_input": False,
-                "messages": [AIMessage(content=outcome)],
-                "messages_history": [AIMessage(content=outcome)],
+                "messages": [reply],
+                "messages_history": [reply],
             }
 
         outcome = await _run_pending_subtask(
@@ -259,16 +280,21 @@ def create_planner_agent(
         request = _last_user_request(state)
         joined = "\n\n".join(state.get("results", [])) or "No subtasks were executed."
         prompt = REDUCER_PROMPT.format(request=request, results=joined)
-        config = _build_child_config("reducer")
-        result = await reducer_agent.ainvoke(
-            {"messages": [HumanMessage(content=prompt)]},
-            config=config,
-        )
+        # The reducer is stateless: it gets the (summarized) planner conversation as
+        # context, without the current request which is already part of the prompt.
+        # It inherits the planner's config, so its answer is streamed to the client.
+        reply = await llm.ainvoke([
+            SystemMessage(content=REDUCER_SYSTEM_PROMPT),
+            *state.get("messages", [])[:-1],
+            HumanMessage(content=prompt),
+        ])
+        # One message (one id) in both channels so ui_tools_node can update it in each.
+        reply.id = reply.id or str(uuid4())
         return {
-            "messages": [result["messages"][-1]], 
-            "subtasks":[], 
+            "messages": [reply],
+            "subtasks": [],
             "results": [],
-            "messages_history": [result["messages"][-1]]
+            "messages_history": [reply],
         }
 
     graph = StateGraph(PlannerState)
@@ -284,16 +310,28 @@ def create_planner_agent(
     # "reduce" node: Synthesizes the results of all executed subtasks
     # into a final summarized answer for the user.
     graph.add_node("reduce", reduce_node)
+    # "ui_tools" node: Selects UI tools for the final answer of a direct handoff or a
+    # reduced plan and attaches them to the reply.
+    graph.add_node("ui_tools", ui_tools_node)
+    # "summarize" node: Runs once the turn's reply is ready and compresses older planner
+    # messages into a summary when the conversation exceeds the summarization trigger.
+    graph.add_node("summarize", summarize_node)
 
     graph.add_edge(START, "plan")
     graph.add_conditional_edges(
-        "plan", _route_after_plan, {"approval": "approval", "execute": "execute", "end": END}
+        "plan", _route_after_plan, {"approval": "approval", "execute": "execute", "end": "summarize"}
     )
     graph.add_conditional_edges(
-        "approval", _route_after_approval, {"plan": "plan", "execute": "execute", "end": END}
+        "approval", _route_after_approval, {"plan": "plan", "execute": "execute", "end": "summarize"}
     )
-    graph.add_conditional_edges("execute", _route_next, {"execute": "execute", "reduce": "reduce", "end": END})
-    graph.add_edge("reduce", END)
+    graph.add_conditional_edges(
+        "execute",
+        _route_next,
+        {"execute": "execute", "reduce": "reduce", "ui_tools": "ui_tools", "end": "summarize"},
+    )
+    graph.add_edge("reduce", "ui_tools")
+    graph.add_edge("ui_tools", "summarize")
+    graph.add_edge("summarize", END)
 
     return graph.compile(checkpointer=checkpointer)
 
@@ -470,7 +508,11 @@ def _parse_plan_from_raw(raw: object) -> Plan | None:
 
 
 def _route_next(state: PlannerState) -> str:
-    """Route to execute while in-progress or pending subtasks remain, otherwise reduce."""
+    """Route to execute while in-progress or pending subtasks remain, otherwise reduce.
+
+    A finished single-subtask plan goes straight to UI-tools selection. Cancelled or
+    failed plans and turns waiting for user input end without selecting UI tools.
+    """
     if state.get("cancelled"):
         return "end"
     # The child asked the user for more information: end the run and wait for the answer.
@@ -481,9 +523,9 @@ def _route_next(state: PlannerState) -> str:
     if any(st["status"] in ("in_progress", "pending") for st in subtasks):
         return "execute"
     # A single-subtask plan is handed off directly to the child agent, so skip the
-    # reducer and end with the child's answer.
+    # reducer and select UI tools for the child's answer.
     if _is_direct_handoff(subtasks):
-        return "end"
+        return "ui_tools"
     return "reduce"
 
 
@@ -530,9 +572,15 @@ def _plan_approval_enabled() -> bool:
 
 
 def _last_user_request(state: PlannerState) -> str:
-    """Return the content of the most recent human message."""
+    """Return the content of the most recent human message.
+
+    The summary inserted by the summarization middleware is a human message too, so it
+    is skipped to never be mistaken for the user's request.
+    """
     for msg in reversed(state.get("messages", [])):
         content = getattr(msg, "content", None)
+        if getattr(msg, "additional_kwargs", {}).get("lc_source") == "summarization":
+            continue
         if content and (isinstance(msg, HumanMessage) or getattr(msg, "type", None) == "human"):
             return content
     return ""

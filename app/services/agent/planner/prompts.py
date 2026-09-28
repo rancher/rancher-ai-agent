@@ -42,8 +42,10 @@ answer for the user.
 
 SUBTASK_EVALUATION_SYSTEM_PROMPT = """\
 You are the evaluator of a planner agent. You are given a subtask that was assigned to a
-child agent and the response that agent produced. Judge whether the agent actually
-completed the task. Answer with a single word: "yes" if it completed the task, "input" if
+child agent and the response that agent produced. You may also be given the results of
+earlier subtasks of the same plan as background context: those were already completed by
+other agents and are NOT part of what you are judging. Judge only whether the agent
+actually completed the current subtask. Answer with a single word: "yes" if it completed the task, "input" if
 it is asking the user for information it needs to continue, or "no" if it did not complete
 the task. Do not add any other text.
 """
@@ -51,11 +53,15 @@ the task. Do not add any other text.
 SUBTASK_EVALUATION_PROMPT = """\
 Did the agent complete the assigned subtask?
 
-Subtask:
+{previous_results}Subtask to evaluate:
 {task}
 
 Agent's response:
 {response}
+
+Judge only the subtask above. Results of previous subtasks, if any, are context that the
+subtask may reference (e.g. resource names found earlier); the agent was not asked to redo
+them and they must not be evaluated.
 
 If the agent is asking the user a question or requesting information or a decision it
 needs in order to continue (e.g. a missing name or value), it is waiting for user input.
@@ -65,6 +71,13 @@ and produced a useful result, it was completed.
 
 Answer with a single word: "yes" if it completed the task, "input" if it is waiting for
 user input, or "no" if it did not complete the task.
+"""
+
+SUBTASK_EVALUATION_PREVIOUS_RESULTS = """\
+Context: results of previous subtasks in the plan, already completed by other agents (for
+reference only, NOT part of the subtask to evaluate):
+{results}
+
 """
 
 PLANNER_FEEDBACK_SUFFIX = """\

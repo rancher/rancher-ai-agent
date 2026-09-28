@@ -1,6 +1,6 @@
 module github.com/rancher/rancher-ai-agent/crd-generation
 
-go 1.26.0
+go 1.27.0
 
 require k8s.io/apimachinery v0.36.4
 

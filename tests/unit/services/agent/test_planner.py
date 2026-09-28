@@ -556,6 +556,19 @@ class TestEvaluateSubtask:
         assert "Here are the clusters" in prompt
 
     @pytest.mark.asyncio
+    async def test_previous_results_are_context_not_task(self):
+        llm = _mock_llm(response=AIMessage(content="yes"))
+        previous = ["Task: list pods\nAgent: rancher\nResult: pod-a, pod-b"]
+
+        assert await _evaluate_subtask(llm, "describe pod-a", "pod-a is running", previous) == "completed"
+        prompt = llm.ainvoke.call_args.args[0][1].content
+        context, task_section = prompt.split("Subtask to evaluate:")
+        assert "Context: results of previous subtasks" in context
+        assert "pod-a, pod-b" in context
+        assert "pod-a, pod-b" not in task_section
+        assert "describe pod-a" in task_section
+
+    @pytest.mark.asyncio
     async def test_assumes_completed_when_evaluation_fails(self):
         llm = _mock_llm()
         llm.ainvoke.side_effect = RuntimeError("unavailable")

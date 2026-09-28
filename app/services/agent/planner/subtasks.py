@@ -26,6 +26,7 @@ from .prompts import (
     REQUEST_FAILURE_DETAILS,
     RESTART_PLAN_REQUEST,
     RETRY_SUBTASK_REQUEST,
+    SUBTASK_EVALUATION_PREVIOUS_RESULTS,
     SUBTASK_EVALUATION_PROMPT,
     SUBTASK_EVALUATION_SYSTEM_PROMPT,
 )
@@ -140,7 +141,7 @@ async def _run_pending_subtask(
     # and continuing with the remaining subtasks. If the child is asking the user for more
     # information, pause the plan with the subtask still in progress: the user's next
     # message is forwarded to the child as its answer.
-    evaluation = await _evaluate_subtask(llm, task, content)
+    evaluation = await _evaluate_subtask(llm, task, content, results)
     if evaluation == "needs_input":
         logging.debug("Planner subtask for agent '%s' is waiting for user input", agent_name)
         return {
@@ -171,7 +172,10 @@ async def _run_pending_subtask(
 
 
 async def _evaluate_subtask(
-    llm: BaseChatModel, task: str, content: str | list
+    llm: BaseChatModel,
+    task: str,
+    content: str | list,
+    previous_results: list[str] | None = None,
 ) -> Literal["completed", "needs_input", "failed"]:
     """Judge, using the LLM, whether the child agent completed the subtask.
 
@@ -179,15 +183,26 @@ async def _evaluate_subtask(
     reliably detectable. Instead, run a separate, non-streamed LLM call that receives
     the subtask and the child's response and answers "yes", "input" (the child is asking
     the user for more information) or "no".
+
+    ``previous_results`` are the outcomes of the subtasks that ran before this one. They
+    are given as context only (the subtask may reference them), kept separate from the
+    subtask so the evaluator does not judge them as part of it.
     """
     response_text = _extract_text(content).strip()
     if not response_text:
         return "failed"
 
+    context = (
+        SUBTASK_EVALUATION_PREVIOUS_RESULTS.format(results="\n\n".join(previous_results))
+        if previous_results
+        else ""
+    )
     messages = [
         SystemMessage(content=SUBTASK_EVALUATION_SYSTEM_PROMPT),
         HumanMessage(
-            content=SUBTASK_EVALUATION_PROMPT.format(task=task, response=response_text)
+            content=SUBTASK_EVALUATION_PROMPT.format(
+                previous_results=context, task=task, response=response_text
+            )
         ),
     ]
 

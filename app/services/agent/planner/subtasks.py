@@ -136,13 +136,6 @@ async def _run_pending_subtask(
 
         content = _extract_last_message(result)
 
-    # A direct hand-off is a plain delegation: the child's answer is returned as-is
-    # without judging it, so skip evaluation entirely.
-    if _is_direct_handoff(subtasks):
-        subtasks[index]["status"] = "completed"
-        results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
-        return content
-
     # The child returned without raising, but it may not have actually completed the
     # task (missing information, an error, a refusal, ...). Ask the LLM to judge the
     # child's response so the plan is stopped instead of marking the subtask completed

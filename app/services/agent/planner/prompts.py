@@ -18,6 +18,10 @@ Rules you MUST follow:
   work into a single subtask when it can reasonably be split,
 - The "agent" field of every subtask MUST be one of the agent names listed above,
   copied exactly (case-sensitive). Do not invent new agent names.
+- The user's request may end with a list of parameters (e.g. "cluster", "namespace")
+  provided as "key:value" pairs separated by ";". When a subtask needs one of these
+  parameters to be carried out, include it explicitly in that subtask's task
+  description. 
 - Respond with a single, valid JSON object only. Do not add explanations, comments,
   markdown code fences, or any text before or after the JSON.
 """

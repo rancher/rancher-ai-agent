@@ -46,6 +46,7 @@ from .prompts import (
 )
 from .subtasks import (
     _extract_text,
+    _format_plan_event,
     _is_direct_handoff,
     _run_pending_subtask,
 )
@@ -107,39 +108,6 @@ def create_planner_agent(
     summarizer = SummarizationMiddleware(
         model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)
     )
-
-    async def ui_tools_node(state: PlannerState) -> dict:
-        """Select UI tools for the turn's final answer and attach them to it.
-
-        Only reached for a single-subtask handoff or a reduced plan, never for failures,
-        cancellations or rejected plans. Runs before ``summarize`` so the stored reply in
-        ``messages`` and ``messages_history`` already carries its ``ui_tools``.
-        """
-        messages = state.get("messages", [])
-        last_message = messages[-1] if messages else None
-        if not isinstance(last_message, AIMessage):
-            return {}
-
-        config = get_config()
-        ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
-        if not ui_tools_list or not config.get("configurable", {}).get("request_id"):
-            return {}
-
-        # Same id as the stored reply, so add_messages replaces it in both channels.
-        updated = last_message.model_copy(
-            update={"additional_kwargs": {**last_message.additional_kwargs, "ui_tools": ui_tools_list}}
-        )
-        return {"messages": [updated], "messages_history": [updated]}
-
-    async def summarize_node(state: PlannerState) -> dict:
-        """Summarize older planner messages once the conversation grows too long.
-
-        Runs at the end of every turn, after the reply has been produced, so summarizing
-        never delays the response. Turns paused on an interrupt skip it until they finish.
-        The latest request and reply are always kept verbatim; ``messages_history`` is
-        left untouched so the full conversation is still available to the UI.
-        """
-        return await summarizer.abefore_model(state, None) or {}
 
     async def plan_node(state: PlannerState) -> dict:
         """Generate the list of subtasks from the user's request.
@@ -215,7 +183,7 @@ def create_planner_agent(
         """
         subtasks = state["subtasks"]
         response = langgraph.types.interrupt(
-            f"<plan>{json.dumps({'tasks': subtasks, 'approval': True})}</plan>"
+            _format_plan_event(subtasks, approval=True)
         )
         normalized = response.strip().lower() if isinstance(response, str) else response
 
@@ -271,7 +239,7 @@ def create_planner_agent(
         # The child agent notifies that it has finished its subtask.
         dispatch_custom_event(
             "planner-plan-finished",
-            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+            _format_plan_event(subtasks, approval=False),
         )
         return {"subtasks": subtasks, "results": results, "awaiting_input": False}
 
@@ -296,6 +264,40 @@ def create_planner_agent(
             "results": [],
             "messages_history": [reply],
         }
+
+    async def ui_tools_node(state: PlannerState) -> dict:
+        """Select UI tools for the turn's final answer and attach them to it.
+
+        Only reached for a single-subtask handoff or a reduced plan, never for failures,
+        cancellations or rejected plans. Runs before ``summarize`` so the stored reply in
+        ``messages`` and ``messages_history`` already carries its ``ui_tools``.
+        """
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        if not isinstance(last_message, AIMessage):
+            return {}
+
+        config = get_config()
+        ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
+        if not ui_tools_list or not config.get("configurable", {}).get("request_id"):
+            return {}
+
+        # Same id as the stored reply, so add_messages replaces it in both channels.
+        updated = last_message.model_copy(
+            update={"additional_kwargs": {**last_message.additional_kwargs, "ui_tools": ui_tools_list}}
+        )
+        return {"messages": [updated], "messages_history": [updated]}
+
+    async def summarize_node(state: PlannerState) -> dict:
+        """Summarize older planner messages once the conversation grows too long.
+
+        Runs at the end of every turn, after the reply has been produced, so summarizing
+        never delays the response. Turns paused on an interrupt skip it until they finish.
+        The latest request and reply are always kept verbatim; ``messages_history`` is
+        left untouched so the full conversation is still available to the UI.
+        """
+        return await summarizer.abefore_model(state, None) or {}
+
 
     graph = StateGraph(PlannerState)
     # "plan" node: Analyzes the user's request and generates a list of sequential subtasks,

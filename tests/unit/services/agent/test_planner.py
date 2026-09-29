@@ -47,6 +47,7 @@ from app.services.agent.planner.subtasks import (
     _is_cancelled,
     _is_direct_handoff,
     _next_subtask_index,
+    _plan_status,
     _run_pending_subtask,
 )
 from app.services.agent.supervisor import ChildAgent, _AgentCallCounter
@@ -181,6 +182,7 @@ class TestFailureReporting:
         assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>")) == {
             "tasks": subtasks,
             "approval": False,
+            "status": "failed",
         }
 
 
@@ -283,6 +285,20 @@ class TestRouting:
     def test_next_subtask_index_raises_when_nothing_to_run(self):
         with pytest.raises(ValueError):
             _next_subtask_index([{"status": "completed"}, {"status": "failed"}])
+
+    @pytest.mark.parametrize(
+        ("statuses", "expected"),
+        [
+            (["pending", "pending"], "pending"),
+            (["completed", "in_progress"], "in_progress"),
+            (["completed", "pending"], "in_progress"),
+            (["completed", "completed"], "completed"),
+            (["completed", "failed", "pending"], "failed"),
+            (["completed", "cancelled", "pending"], "cancelled"),
+        ],
+    )
+    def test_plan_status_is_derived_from_subtasks(self, statuses, expected):
+        assert _plan_status([{"status": s} for s in statuses]) == expected
 
 
 class TestRetryHelpers:

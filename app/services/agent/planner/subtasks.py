@@ -107,7 +107,7 @@ async def _run_pending_subtask(
                 if emit_plan:
                     dispatch_custom_event(
                         "planner-plan-created",
-                        f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+                        _format_plan_event(subtasks, approval=False),
                     )
             try:
                 result = await child.agent.ainvoke(
@@ -253,7 +253,7 @@ def _fail_plan(
     if emit_plan:
         dispatch_custom_event(
             "planner-plan-created",
-            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+            _format_plan_event(subtasks, approval=False),
         )
     return {
         "subtasks": subtasks,
@@ -291,7 +291,7 @@ def _cancel_plan(
     if emit_plan:
         dispatch_custom_event(
             "planner-plan-created",
-            f"<plan>{json.dumps({'tasks': subtasks, 'approval': False})}</plan>",
+            _format_plan_event(subtasks, approval=False),
         )
     return {
         "subtasks": subtasks,
@@ -325,6 +325,26 @@ def _build_task_message(task: str, previous_results: list[str]) -> str:
 def _format_plan(subtasks: list[dict]) -> str:
     """Render the plan's subtasks as JSON, matching the ``SubTask`` schema."""
     return json.dumps(subtasks)
+
+
+def _plan_status(subtasks: list[dict]) -> str:
+    """Derive the overall plan status from the statuses of its subtasks."""
+    statuses = [st.get("status", "pending") for st in subtasks]
+    if "failed" in statuses:
+        return "failed"
+    if "cancelled" in statuses:
+        return "cancelled"
+    if statuses and all(s == "completed" for s in statuses):
+        return "completed"
+    if all(s == "pending" for s in statuses):
+        return "pending"
+    return "in_progress"
+
+
+def _format_plan_event(subtasks: list[dict], approval: bool) -> str:
+    """Render the ``<plan>`` payload streamed to the client for plan-progress events."""
+    payload = {"tasks": subtasks, "approval": approval, "status": _plan_status(subtasks)}
+    return f"<plan>{json.dumps(payload)}</plan>"
 
 
 def _next_subtask_index(subtasks: list[dict]) -> int:

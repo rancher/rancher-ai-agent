@@ -128,7 +128,7 @@ def create_planner_agent(
         if state.get("awaiting_input") and any(
             st["status"] == "in_progress" for st in state.get("subtasks") or []
         ):
-            return {"messages_history": [HumanMessage(content=request)]}
+            return {}
 
         previous_plan_failure_message = _last_plan_failure_details(state)
 
@@ -158,6 +158,13 @@ def create_planner_agent(
             }
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
+        additional_kwargs = {"created_at": datetime.now().isoformat()}
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        request_metadata = getattr(last_message, "additional_kwargs", {}).get("request_metadata")
+        if request_metadata is not None:
+            additional_kwargs["request_metadata"] = request_metadata
+
         return {
             "subtasks": subtasks, 
             "results": [], 
@@ -166,9 +173,7 @@ def create_planner_agent(
             "retry": retry, 
             "messages_history": [HumanMessage(
                 content=request,  
-                additional_kwargs={
-                    "created_at": datetime.now().isoformat()
-                })],
+                additional_kwargs=additional_kwargs)],
         }
 
     async def approval_node(state: PlannerState) -> dict:
@@ -198,6 +203,7 @@ def create_planner_agent(
                 "cancelled": True,
                 "feedback": [],
                 "messages": [AIMessage(content="Plan was not approved by the user.")],
+                "messages_history": [AIMessage(content="Plan was not approved by the user.", additional_kwargs={"created_at": datetime.now().isoformat()})],
             }
 
         # Any other response is treated as feedback: accumulate it so successive rounds of
@@ -221,7 +227,12 @@ def create_planner_agent(
             )
             if isinstance(outcome, dict):
                 return {"awaiting_input": False, **outcome}
-            reply = AIMessage(content=outcome, id=str(uuid4()))
+            reply = AIMessage(
+                content=outcome, 
+                id=str(uuid4()),  
+                additional_kwargs = {"created_at": datetime.now().isoformat()
+            }
+)
             return {
                 "subtasks": subtasks,
                 "results": results,
@@ -258,6 +269,8 @@ def create_planner_agent(
         ])
         # One message (one id) in both channels so ui_tools_node can update it in each.
         reply.id = reply.id or str(uuid4())
+        reply.additional_kwargs = {"created_at": datetime.now().isoformat()}
+
         return {
             "messages": [reply],
             "subtasks": [],

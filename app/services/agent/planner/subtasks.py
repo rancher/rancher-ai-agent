@@ -9,6 +9,7 @@ or is cancelled.
 import json
 import logging
 from typing import Literal
+from datetime import datetime
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.runnables.config import RunnableConfig, ensure_config
@@ -134,6 +135,13 @@ async def _run_pending_subtask(
             return {"subtasks": subtasks, "results": results}
 
         content = _extract_last_message(result)
+
+    # A direct hand-off is a plain delegation: the child's answer is returned as-is
+    # without judging it, so skip evaluation entirely.
+    if _is_direct_handoff(subtasks):
+        subtasks[index]["status"] = "completed"
+        results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
+        return content
 
     # The child returned without raising, but it may not have actually completed the
     # task (missing information, an error, a refusal, ...). Ask the LLM to judge the
@@ -266,6 +274,12 @@ def _fail_plan(
                 )
             )
         ],
+        "messages_history": [
+            AIMessage(
+                content="Plan failed: " + str(error),
+                additional_kwargs={"created_at": datetime.now().isoformat()}
+            )
+        ]
     }
 
 
@@ -304,6 +318,12 @@ def _cancel_plan(
                 )
             )
         ],
+        "messages_history": [
+            AIMessage(
+                content="Plan was canceled by the user.",
+                additional_kwargs={"created_at": datetime.now().isoformat()}
+            )
+        ]
     }
 
 

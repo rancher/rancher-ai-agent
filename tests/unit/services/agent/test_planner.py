@@ -370,13 +370,17 @@ class TestChildConfiguration:
         with patch(
             "app.services.agent.planner.subtasks.ensure_config",
             return_value={
-                "configurable": {"thread_id": "parent", "request_id": "request"},
+                "configurable": {"thread_id": "parent", "request_id": "request", "unrelated": "dropped"},
                 "callbacks": ["parent callback"],
             },
         ):
             config = _build_child_config("rancher")
 
-        assert config.get("configurable") == {"thread_id": "parent::planner::rancher"}
+        # Only the thread id (namespaced) and the request-scoped keys are propagated.
+        assert config.get("configurable") == {
+            "thread_id": "parent::planner::rancher",
+            "request_id": "request",
+        }
         assert config.get("callbacks") == []
 
     def test_build_child_config_flags_planner_subtask(self):

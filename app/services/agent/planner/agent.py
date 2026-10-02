@@ -155,6 +155,9 @@ def create_planner_agent(
                 "cancelled": False,
                 "feedback": [],
                 "messages": [AIMessage(content=PLAN_FAILED_REPLY)],
+                "messages_history": [HumanMessage(
+                    content=PLAN_FAILED_REPLY, 
+                    additional_kwargs={"created_at": datetime.now().isoformat()})]
             }
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]

@@ -168,9 +168,14 @@ def create_planner_agent(
         if request_metadata is not None:
             additional_kwargs["request_metadata"] = request_metadata
 
+        # Retrying only the failed step resumes the existing plan, so the results of the
+        # subtasks that already completed must survive to feed the retried step and the
+        # reducer. A restart or a brand-new plan starts over with no results.
+        resume_results = retry and request.lower() == RETRY_SUBTASK_REQUEST.lower()
+
         return {
-            "subtasks": subtasks, 
-            "results": [], 
+            "subtasks": subtasks,
+            "results": list(state.get("results") or []) if resume_results else [],
             "cancelled": False, 
             "feedback": feedback, 
             "retry": retry, 

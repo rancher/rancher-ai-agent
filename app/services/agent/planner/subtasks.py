@@ -19,7 +19,7 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command
 
 from ..supervisor import ChildAgent, _AgentCallCounter, _build_agent_metadata, _extract_last_message
-from .._constants import INTERRUPT_CANCEL_MESSAGE
+from .._constants import INTERRUPT_CANCEL_MESSAGE, NeedsOauth2
 from .prompts import (
     CANCEL_PLAN_REQUEST,
     PLAN_SUBTASK_CANCELLED_REPLY,
@@ -74,6 +74,12 @@ async def _run_pending_subtask(
         logging.error(reason)
         return _fail_plan(subtasks, results, index, task, reason, emit_plan)
     else:
+        # The child was built without tools because its MCP connection requires OAuth2:
+        # surface it so the websocket starts the authentication flow instead of running the
+        # step without the required tools.
+        if child.needs_oauth2:
+            raise NeedsOauth2(child.config)
+
         # Children running one step of a multi-subtask plan must only return their result,
         # without offering follow-ups; a direct hand-off talks to the user as usual.
         child_config = _build_child_config(agent_name, planner_subtask=not _is_direct_handoff(subtasks))

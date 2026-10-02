@@ -63,5 +63,9 @@ seLinux:
 llmMock:
   enabled: false
   url: ""
+plan:
+  enabled: false
+planApproval:
+  enabled: false
 log:
   level: info

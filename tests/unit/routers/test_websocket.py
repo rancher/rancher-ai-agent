@@ -552,6 +552,62 @@ class TestBuildInputData:
         assert result.resume == "yes, proceed"
 
     @pytest.mark.asyncio
+    async def test_resume_restores_ui_tools_from_interrupted_turn(self):
+        """On resume, ui_tools omitted by the confirmation message are restored
+        from the interrupted turn's HumanMessage so later agents still get them."""
+        from langchain_core.messages import HumanMessage
+
+        original_ui_tools = {"name": "show-yaml", "tools": ["show-yaml-diff"]}
+        human_message = HumanMessage(
+            content="update the deployment",
+            additional_kwargs={"request_metadata": {"ui_tools": original_ui_tools}},
+        )
+
+        agent = MagicMock()
+        state = MagicMock()
+        state.interrupts = [MagicMock()]
+        state.values = {"messages": [human_message]}
+        agent.aget_state = AsyncMock(return_value=state)
+
+        # Resume message omits tools, so request_metadata.ui_tools is empty.
+        config = {"configurable": {"request_id": "r1", "request_metadata": {"ui_tools": {}}}}
+        ws_request = WebSocketRequest(
+            prompt="yes", user_input="yes", context={},
+            tags=[], labels={}, agent="", ui_tools={}
+        )
+
+        result = await _build_input_data(agent, config, ws_request)
+        assert isinstance(result, Command)
+        assert config["configurable"]["request_metadata"]["ui_tools"] == original_ui_tools
+
+    @pytest.mark.asyncio
+    async def test_resume_keeps_client_supplied_ui_tools(self):
+        """If the client resends tools on resume, they are not overwritten."""
+        from langchain_core.messages import HumanMessage
+
+        client_ui_tools = {"name": "client-tool"}
+        human_message = HumanMessage(
+            content="update the deployment",
+            additional_kwargs={"request_metadata": {"ui_tools": {"name": "old-tool"}}},
+        )
+
+        agent = MagicMock()
+        state = MagicMock()
+        state.interrupts = [MagicMock()]
+        state.values = {"messages": [human_message]}
+        agent.aget_state = AsyncMock(return_value=state)
+
+        config = {"configurable": {"request_id": "r1", "request_metadata": {"ui_tools": client_ui_tools}}}
+        ws_request = WebSocketRequest(
+            prompt="yes", user_input="yes", context={},
+            tags=[], labels={}, agent="", ui_tools=client_ui_tools
+        )
+
+        result = await _build_input_data(agent, config, ws_request)
+        assert isinstance(result, Command)
+        assert config["configurable"]["request_metadata"]["ui_tools"] == client_ui_tools
+
+    @pytest.mark.asyncio
     async def test_message_includes_request_metadata(self):
         agent = MagicMock()
         state = MagicMock()

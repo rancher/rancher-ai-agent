@@ -6,6 +6,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
@@ -474,11 +475,19 @@ class TestCreatePlan:
         assert retry is False
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_llm_fails(self):
+    async def test_returns_none_when_llm_output_is_unparsable(self):
         llm = _mock_llm()
-        llm.with_structured_output.return_value.ainvoke.side_effect = RuntimeError("bad output")
+        llm.with_structured_output.return_value.ainvoke.side_effect = OutputParserException("bad output")
 
         assert await _create_plan(llm, "", self._state("list clusters")) == (None, False)
+
+    @pytest.mark.asyncio
+    async def test_propagates_llm_errors(self):
+        llm = _mock_llm()
+        llm.with_structured_output.return_value.ainvoke.side_effect = RuntimeError("invalid token")
+
+        with pytest.raises(RuntimeError, match="invalid token"):
+            await _create_plan(llm, "", self._state("list clusters"))
 
     @pytest.mark.asyncio
     async def test_returns_none_when_nothing_is_parseable(self):

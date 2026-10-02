@@ -16,8 +16,9 @@ import langgraph.types
 from datetime import datetime
 from typing import Annotated, Literal, TypedDict, cast
 from uuid import uuid4
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from langchain.agents.middleware import SummarizationMiddleware
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.callbacks.manager import dispatch_custom_event
@@ -417,7 +418,9 @@ async def _create_plan(
         response = await llm.with_structured_output(
             Plan, include_raw=True
         ).ainvoke(messages, config={"tags": ["no-stream"]})
-    except Exception:  # noqa: BLE001 - small models can emit unparsable output
+    except (OutputParserException, ValidationError):
+        # Small models can emit unparsable output. Any other error (e.g. an invalid or
+        # expired LLM token) must propagate so the websocket reports it to the user.
         logging.warning("Planner structured output failed", exc_info=True)
         response = None
 

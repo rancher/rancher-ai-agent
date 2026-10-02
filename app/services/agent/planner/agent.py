@@ -67,6 +67,9 @@ class Plan(BaseModel):
     """The full plan produced by the planner: an ordered list of subtasks."""
 
     subtasks: list[SubTask] = Field(description="Ordered list of subtasks to execute.")
+    reply: str | None = Field(
+        default=None, description="Direct answer to the user when no subtasks are needed."
+    )
 
 
 class PlannerState(TypedDict):
@@ -148,6 +151,31 @@ def create_planner_agent(
             previous_plan_failure_message,
             previous_plan_cancellation_message,
         )
+        additional_kwargs = {"created_at": datetime.now().isoformat()}
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        request_metadata = getattr(last_message, "additional_kwargs", {}).get("request_metadata")
+        if request_metadata is not None:
+            additional_kwargs["request_metadata"] = request_metadata
+
+        # No child agent is needed (e.g. a greeting): answer with the planner's own reply.
+        if plan is not None and not plan.subtasks and plan.reply:
+            # The planner call is tagged no-stream, so send the reply to the client explicitly.
+            dispatch_custom_event("planner-direct-reply", plan.reply)
+            reply = AIMessage(
+                content=plan.reply,
+                id=str(uuid4()),
+                additional_kwargs={"created_at": datetime.now().isoformat()},
+            )
+            return {
+                "subtasks": [],
+                "results": [],
+                "cancelled": False,
+                "feedback": [],
+                "messages": [reply],
+                "messages_history": [reply],
+            }
+
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
             return {
@@ -162,12 +190,6 @@ def create_planner_agent(
             }
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
-        additional_kwargs = {"created_at": datetime.now().isoformat()}
-        messages = state.get("messages", [])
-        last_message = messages[-1] if messages else None
-        request_metadata = getattr(last_message, "additional_kwargs", {}).get("request_metadata")
-        if request_metadata is not None:
-            additional_kwargs["request_metadata"] = request_metadata
 
         # Retrying only the failed step resumes the existing plan, so the results of the
         # subtasks that already completed must survive to feed the retried step and the
@@ -408,8 +430,11 @@ async def _create_plan(
     else:
         human_content = request
 
+    # Earlier (summarized) conversation as context; the current request is the last
+    # message and is sent below, possibly with failure/cancellation/feedback context.
     messages = [
         SystemMessage(content=PLANNER_PROMPT.format(agents=agents_description)),
+        *state.get("messages", [])[:-1],
         HumanMessage(content=human_content),
     ]
 
@@ -429,14 +454,14 @@ async def _create_plan(
         # "parsing_error": Exception|None}.
         response = cast(dict, response)
         candidate = response.get("parsed")
-        if isinstance(candidate, Plan) and candidate.subtasks:
+        if isinstance(candidate, Plan) and (candidate.subtasks or candidate.reply):
             plan = candidate
         else:
             # Some models (e.g. gpt-oss-20b on bedrock_converse) emit the plan as
             # plain text/JSON instead of a tool call, so tool-call-based structured
             # output yields parsed=None. Recover the JSON from the raw message text.
             candidate = _parse_plan_from_raw(response.get("raw"))
-            if candidate is not None and candidate.subtasks:
+            if candidate is not None and (candidate.subtasks or candidate.reply):
                 logging.debug("Planner recovered plan from raw message text.")
                 plan = candidate
 

@@ -157,6 +157,13 @@ def create_planner_agent(
         request_metadata = getattr(last_message, "additional_kwargs", {}).get("request_metadata")
         if request_metadata is not None:
             additional_kwargs["request_metadata"] = request_metadata
+        # Reuse the input message (same id) so other graphs on this thread, which match
+        # history entries by id, don't append it again.
+        request_message = (
+            last_message
+            if isinstance(last_message, HumanMessage)
+            else HumanMessage(content=request, additional_kwargs=additional_kwargs)
+        )
 
         # No child agent is needed (e.g. a greeting): answer with the planner's own reply.
         if plan is not None and not plan.subtasks and plan.reply:
@@ -173,7 +180,7 @@ def create_planner_agent(
                 "cancelled": False,
                 "feedback": [],
                 "messages": [reply],
-                "messages_history": [reply],
+                "messages_history": [request_message, reply],
             }
 
         if plan is None or plan.subtasks is None or not plan.subtasks:
@@ -202,9 +209,7 @@ def create_planner_agent(
             "cancelled": False, 
             "feedback": feedback, 
             "retry": retry, 
-            "messages_history": [HumanMessage(
-                content=request,  
-                additional_kwargs=additional_kwargs)],
+            "messages_history": [request_message],
         }
 
     async def approval_node(state: PlannerState) -> dict:

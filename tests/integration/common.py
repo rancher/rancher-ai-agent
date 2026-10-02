@@ -24,6 +24,9 @@ from app.services.memory import StorageType
 # Child agents build their system prompt as: system_prompt + CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
 CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CALLS
 
+# Maximum time (seconds) to wait for each mock MCP server to start accepting connections.
+MOCK_MCP_STARTUP_TIMEOUT = 30
+
 
 def add(a: int, b: int) -> str:
     """Add two numbers"""
@@ -59,14 +62,31 @@ def start_mock_mcp_servers(servers: dict[int, tuple[str, list[Callable]]]) -> li
         process.start()
 
     # Wait for the mock servers to be available before running tests.
-    for port in servers:
-        mcp_server_available = False
-        while not mcp_server_available:
-            try:
-                requests.get(f"http://localhost:{port}/mcp")
-                mcp_server_available = True
-            except requests.exceptions.ConnectionError:
-                time.sleep(0.1)
+    try:
+        for (port, (name, _)), process in zip(servers.items(), processes):
+            deadline = time.monotonic() + MOCK_MCP_STARTUP_TIMEOUT
+            while True:
+                if not process.is_alive():
+                    raise RuntimeError(
+                        f"Mock MCP server '{name}' on port {port} exited during startup "
+                        f"with exit code {process.exitcode} (is the port already in use?)"
+                    )
+                try:
+                    requests.get(f"http://localhost:{port}/mcp", timeout=1)
+                    break
+                except requests.exceptions.RequestException:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"Mock MCP server '{name}' on port {port} was not available "
+                            f"after {MOCK_MCP_STARTUP_TIMEOUT}s"
+                        )
+                    time.sleep(0.1)
+    except BaseException:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+        raise
 
     return processes
 

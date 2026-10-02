@@ -49,7 +49,10 @@ def serve_mock_mcp(name: str, port: int, tools: list[Callable]):
     uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=port, log_level="error")
 
 
-def start_mock_mcp_servers(servers: dict[int, tuple[str, list[Callable]]]) -> list[multiprocessing.Process]:
+def start_mock_mcp_servers(
+    servers: dict[int, tuple[str, list[Callable]]],
+    startup_timeout: float = 30,
+) -> list[multiprocessing.Process]:
     """Starts one mock MCP server per port and waits until all of them are available."""
     processes = [
         multiprocessing.Process(target=serve_mock_mcp, args=(name, port, tools))
@@ -59,14 +62,25 @@ def start_mock_mcp_servers(servers: dict[int, tuple[str, list[Callable]]]) -> li
         process.start()
 
     # Wait for the mock servers to be available before running tests.
-    for port in servers:
-        mcp_server_available = False
-        while not mcp_server_available:
+    deadline = time.monotonic() + startup_timeout
+    for port, process in zip(servers, processes):
+        while True:
+            if process.exitcode is not None:
+                raise RuntimeError(
+                    f"Mock MCP server on port {port} exited with code {process.exitcode} before becoming available."
+                )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Timed out after {startup_timeout}s waiting for mock MCP server on port {port}."
+                )
+
             try:
-                requests.get(f"http://localhost:{port}/mcp")
-                mcp_server_available = True
-            except requests.exceptions.ConnectionError:
-                time.sleep(0.1)
+                requests.get(f"http://localhost:{port}/mcp", timeout=min(1, remaining))
+                break
+            except requests.exceptions.RequestException:
+                time.sleep(min(0.1, remaining))
 
     return processes
 

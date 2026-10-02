@@ -419,8 +419,13 @@ def _build_child_config(agent_name: str, planner_subtask: bool = False) -> Runna
     if not parent_thread_id:
         raise ValueError("thread_id is required in configurable but was not provided")
 
-    child_configurable = {
+    child_configurable: dict = {
         "thread_id": f"{parent_thread_id}::planner::{agent_name}",
+        **{
+            key: parent_configurable[key]
+            for key in ("request_id", "request_metadata", "user_id")
+            if key in parent_configurable
+        },
     }
     if planner_subtask:
         child_configurable["planner_subtask"] = True

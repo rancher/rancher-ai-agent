@@ -77,6 +77,12 @@ The task was NOT completed if the agent hit an error, lacks the capability or pe
 refused, or otherwise did not accomplish what was asked. If the agent accomplished the task
 and produced a useful result, it was completed.
 
+If the subtask was to create a resource and the agent reports that a resource with that
+name already exists, treat the subtask as completed ("yes"): the desired resource is
+already present, so there is nothing left to do. Do not mark it as failed or as waiting
+for input just because the existing resource's name differs from what was requested or the
+agent offered to use a different name.
+
 Answer with a single word: "yes" if it completed the task, "input" if it is waiting for
 user input, or "no" if it did not complete the task.
 """

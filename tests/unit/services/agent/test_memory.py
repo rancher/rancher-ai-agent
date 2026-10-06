@@ -279,6 +279,7 @@ async def test_message_types_have_correct_fields():
     assert "tools" in agent_msg, "AI message should have tools"
     assert len(agent_msg["tools"]) == 1, "AI message should have 1 tool"
     assert agent_msg["tools"][0]["toolName"] == "log_viewer", "AI message should preserve tool info"
+    assert agent_msg["stopped"] is False, "AI message should not be flagged as stopped"
     # Fields AI should NOT have
     assert "context" not in agent_msg, "AI message should NOT have context from user request"
     assert "labels" not in agent_msg, "AI message should NOT have labels from user request"
@@ -300,3 +301,38 @@ async def test_message_types_have_correct_fields():
     assert "context" not in interrupt_msg, "Tool message should NOT have context"
     assert "labels" not in interrupt_msg, "Tool message should NOT have labels"
     assert "tags" not in interrupt_msg, "Tool message should NOT have tags"
+
+@pytest.mark.asyncio
+async def test_fetch_messages_includes_stopped_ai_message():
+    """A stopped AIMessage is returned flagged as stopped, even with empty content."""
+    from langchain_core.messages import AIMessage
+
+    mock_checkpointer = MagicMock()
+    checkpoint_tuple = MagicMock()
+
+    stopped_msg = MagicMock(spec=AIMessage)
+    stopped_msg.type = "ai"
+    stopped_msg.content = ""
+    stopped_msg.text = ""
+    stopped_msg.additional_kwargs = {
+        "stopped": True,
+        "created_at": "2024-01-01T00:00:01Z",
+        "request_metadata": {"agent": "kubernetes-agent", "tags": []},
+    }
+
+    checkpoint_tuple.checkpoint = {
+        "channel_values": {
+            "messages_history": [stopped_msg],
+        }
+    }
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)
+
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+
+    messages = await manager.fetch_messages("chat1", "user1", {})
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "agent"
+    assert messages[0]["message"] == ""
+    assert messages[0]["stopped"] is True

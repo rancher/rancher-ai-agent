@@ -165,7 +165,7 @@ class MemoryManager:
             if not chat_id or not user_id:
                 continue
 
-            if "::child::" in chat_id: # skip child threads
+            if "::child::" in chat_id or "::planner::" in chat_id: # skip child and plan threads
                 continue
 
             if self._is_empty_chat(checkpoint_tuple):

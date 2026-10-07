@@ -941,6 +941,12 @@ components:
         GENERIC_OPENAI_API_KEY:
           type: string
           description: API key for a generic OpenAI-compatible provider
+        PLAN_ENABLED:
+          type: string
+          description: Whether planning is enabled for the agent
+        PLAN_APPROVAL_ENABLED:
+          type: string
+          description: Whether plan approval is required before execution
       example:
         ACTIVE_LLM: openai
         OPENAI_API_KEY: sk-...

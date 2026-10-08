@@ -1,6 +1,6 @@
 import pytest
 import json
-
+import asyncio
 from app.routers.websocket import (
     websocket_endpoint,
     build_chat_metadata,
@@ -12,14 +12,20 @@ from app.routers.websocket import (
     _resolve_target_agent,
     _build_input_data,
     _patch_tool_result,
+    _call_agent,
+    _record_stopped_in_history,
+    _stream_agent_events,
     WebSocketRequest,
 )
+from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_REPLY
+from app.services.agent._constants import NeedsOauth2
 from app.services.agent.supervisor import SupervisorGraph
 from app.services.oauth2.models import OAuth2Canceled
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from langgraph.types import Command
+from langchain_core.messages import AIMessage, HumanMessage
 
 
 class MockWebSocket:
@@ -725,3 +731,214 @@ class TestResolveTargetAgentOAuth2:
         # Should have sent auth-error
         auth_error_sent = any("<auth-error>" in str(call) for call in websocket.send_text.call_args_list)
         assert auth_error_sent
+
+
+# --- Tests for _call_agent stop functionality ---
+
+def _make_stream_agent(events, stall_after=None):
+    """
+    Build a mock agent whose ``astream_events`` yields the given events.
+
+    Args:
+        events: List of event dicts to yield.
+        stall_after: If set, after yielding this many events the generator awaits
+            a long sleep, simulating an in-flight/long-running execution that can
+            be cancelled.
+    """
+    agent = MagicMock()
+
+    async def _astream_events(input_data, config=None, stream_mode=None):
+        for i, event in enumerate(events):
+            yield event
+            if stall_after is not None and i + 1 >= stall_after:
+                await asyncio.sleep(60)
+
+    agent.astream_events = _astream_events
+    agent.aget_state = AsyncMock(return_value=MagicMock(values={"messages": []}))
+    agent.aupdate_state = AsyncMock()
+    return agent
+
+
+def _text_event(text):
+    chunk = MagicMock()
+    chunk.content = text
+    return {"event": "on_chat_model_stream", "data": {"chunk": chunk}, "tags": [], "metadata": {}}
+
+
+def _stop_payload():
+    return json.dumps({"prompt": "", "tags": [STOP_TAG]})
+
+
+class TestCallAgentStop:
+    @pytest.mark.asyncio
+    async def test_stop_message_cancels_execution(self):
+        """A stop-tagged message mid-stream cancels streaming and patches tool result."""
+        agent = _make_stream_agent([_text_event("partial")], stall_after=1)
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(return_value=_stop_payload())
+
+        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch, \
+             patch("app.routers.websocket._record_stopped_in_history", new_callable=AsyncMock) as mock_record:
+            result = await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        assert result is None
+        mock_patch.assert_awaited_once()
+        # Patched with the stop reply message
+        assert mock_patch.call_args.args[2] == STOP_CANCEL_REPLY
+        # Stopped run recorded in history with the partial streamed text
+        mock_record.assert_awaited_once()
+        assert mock_record.call_args.args[2] == "partial"
+        # Opened the message block
+        websocket.send_text.assert_any_await("<message>")
+        # Notified the client that the execution was stopped
+        websocket.send_text.assert_any_await(STOP_REPLY)
+
+    @pytest.mark.asyncio
+    async def test_normal_completion_no_patch(self):
+        """When streaming completes normally, the pending receiver is cancelled and no patch occurs."""
+        agent = _make_stream_agent([_text_event("hello"), _text_event(" world")])
+
+        async def _block():
+            await asyncio.sleep(60)
+
+        websocket = AsyncMock()
+        # Receiver blocks forever so streaming wins the race.
+        websocket.receive_text = AsyncMock(side_effect=_block)
+
+        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch:
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        mock_patch.assert_not_awaited()
+        # Streamed text was forwarded
+        websocket.send_text.assert_any_await("hello")
+        websocket.send_text.assert_any_await(" world")
+
+    @pytest.mark.asyncio
+    async def test_new_message_preempts_run(self):
+        """A non-stop message mid-run cancels the run and is returned for processing."""
+        agent = _make_stream_agent([_text_event("partial")], stall_after=1)
+        new_message = json.dumps({"prompt": "new question"})
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(return_value=new_message)
+
+        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch, \
+             patch("app.routers.websocket._record_stopped_in_history", new_callable=AsyncMock) as mock_record:
+            result = await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        assert result == new_message
+        mock_patch.assert_awaited_once()
+        assert mock_patch.call_args.args[2] == STOP_CANCEL_REPLY
+        mock_record.assert_awaited_once()
+        assert mock_record.call_args.args[2] == "partial"
+        # The client is notified that the previous execution was stopped
+        websocket.send_text.assert_any_await(STOP_REPLY)
+
+    @pytest.mark.asyncio
+    async def test_stream_exception_propagates(self):
+        """Exceptions raised by the stream (e.g. NeedsOauth2) propagate out of _call_agent."""
+        agent = MagicMock()
+        agent_cfg = MagicMock()
+
+        async def _astream_events(input_data, config=None, stream_mode=None):
+            raise NeedsOauth2(agent_cfg)
+            yield  # pragma: no cover - makes this an async generator
+
+        agent.astream_events = _astream_events
+
+        async def _block():
+            await asyncio.sleep(60)
+
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=_block)
+
+        with pytest.raises(NeedsOauth2):
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+
+class TestStreamPartialText:
+    @pytest.mark.asyncio
+    async def test_collects_streamed_text(self):
+        """Streamed text is collected into the partial_text buffer."""
+        agent = _make_stream_agent([_text_event("hello"), _text_event(" world")])
+        partial_text = []
+
+        await _stream_agent_events(agent, {"messages": []}, {"configurable": {}}, AsyncMock(), partial_text)
+
+        assert partial_text == ["hello", " world"]
+
+    @pytest.mark.asyncio
+    async def test_model_end_clears_buffer(self):
+        """Text from a finished LLM call is dropped; only the in-progress call is kept."""
+        end_event = {"event": "on_chat_model_end", "data": {}, "tags": [], "metadata": {}}
+        agent = _make_stream_agent([_text_event("saved"), end_event, _text_event("in progress")])
+        partial_text = []
+
+        await _stream_agent_events(agent, {"messages": []}, {"configurable": {}}, AsyncMock(), partial_text)
+
+        assert partial_text == ["in progress"]
+
+    @pytest.mark.asyncio
+    async def test_no_stream_model_end_keeps_buffer(self):
+        """The end of an internal no-stream LLM call does not clear the buffer."""
+        end_event = {"event": "on_chat_model_end", "data": {}, "tags": ["no-stream"], "metadata": {}}
+        agent = _make_stream_agent([_text_event("partial"), end_event])
+        partial_text = []
+
+        await _stream_agent_events(agent, {"messages": []}, {"configurable": {}}, AsyncMock(), partial_text)
+
+        assert partial_text == ["partial"]
+
+
+class TestRecordStoppedInHistory:
+    def _config(self):
+        return {"configurable": {"request_id": "req1", "request_metadata": {"agent": "a", "tags": []}}}
+
+    def _agent(self, messages, history):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(values={"messages": messages, "messages_history": history}))
+        agent.aupdate_state = AsyncMock()
+        return agent
+
+    def _written_history(self, agent):
+        return agent.aupdate_state.call_args.kwargs["values"]["messages_history"]
+
+    @pytest.mark.asyncio
+    async def test_adds_missing_human_message_and_stopped_ai_message(self):
+        human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
+        agent = self._agent(messages=[human], history=[])
+
+        await _record_stopped_in_history(agent, self._config(), "partial answer")
+
+        history = self._written_history(agent)
+        assert len(history) == 2
+        assert history[0] is human
+        assert isinstance(history[1], AIMessage)
+        assert history[1].content == "partial answer"
+        assert history[1].additional_kwargs["stopped"] is True
+        assert history[1].additional_kwargs["request_metadata"] == {"agent": "a", "tags": []}
+        assert "created_at" in history[1].additional_kwargs
+
+    @pytest.mark.asyncio
+    async def test_does_not_duplicate_human_message(self):
+        human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
+        agent = self._agent(messages=[human], history=[human])
+
+        await _record_stopped_in_history(agent, self._config(), "")
+
+        history = self._written_history(agent)
+        assert [m.id for m in history if isinstance(m, HumanMessage)] == ["h1"]
+        assert history[-1].additional_kwargs["stopped"] is True
+
+    @pytest.mark.asyncio
+    async def test_keeps_full_history(self):
+        """messages_history is a LastValue channel, so previous entries must be carried forward."""
+        old_human = HumanMessage(content="old", id="h0", additional_kwargs={"request_id": "req0"})
+        old_ai = AIMessage(content="old answer", id="a0")
+        human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
+        agent = self._agent(messages=[old_human, old_ai, human], history=[old_human, old_ai])
+
+        await _record_stopped_in_history(agent, self._config(), "partial")
+
+        history = self._written_history(agent)
+        assert [m.id for m in history[:3]] == ["h0", "a0", "h1"]
+        assert history[3].additional_kwargs["stopped"] is True

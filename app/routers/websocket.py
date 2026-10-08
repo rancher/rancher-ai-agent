@@ -112,7 +112,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         ws_request = None
         message_opened = True
         try:
-            request = next_request or await websocket.receive_text()
+            request = next_request if next_request is not None else await websocket.receive_text()
             next_request = None
             request_id = str(uuid.uuid4())
 

@@ -38,13 +38,21 @@ async def test_should_interrupt_returns_empty_for_empty_validation_list():
 
 
 @pytest.mark.asyncio
-async def test_should_interrupt_raises_when_plan_tool_missing():
-    with pytest.raises(ValueError, match="planning tool 'applyResourcePlan' not found"):
-        await _should_interrupt(
-            human_validation_tools=["applyResource"],
-            tool_call={"name": "applyResource", "args": {}},
-            planning_tools_by_name={},
-        )
+async def test_should_interrupt_returns_external_payload_when_plan_tool_missing():
+    result = await _should_interrupt(
+        human_validation_tools=["applyResource"],
+        tool_call={"name": "applyResource", "args": {"manifest": "..."}},
+        planning_tools_by_name={},
+    )
+
+    assert result.startswith("<confirmation-response>")
+    assert result.endswith("</confirmation-response>")
+    inner = result.removeprefix("<confirmation-response>").removesuffix("</confirmation-response>")
+    assert json.loads(inner) == {
+        "type": "external",
+        "name": "applyResource",
+        "args": {"manifest": "..."},
+    }
 
 
 @pytest.mark.asyncio
@@ -131,6 +139,18 @@ def test_build_ui_tools_returns_empty_when_name_is_empty(mock_dispatch):
         interrupt_message="<confirmation-response>{}</confirmation-response>",
         state={},
         config=config,
+    )
+    assert result == []
+    mock_dispatch.assert_not_called()
+
+
+@patch("app.services.agent.middleware.human_validation._dispatch_ui_tools")
+def test_build_ui_tools_returns_empty_for_external_type(mock_dispatch):
+    data = {"type": "external", "name": "applyResource", "args": {"manifest": "..."}}
+    result = _build_interrupt_ui_tools(
+        interrupt_message=_make_interrupt_message(data),
+        state={},
+        config=_make_config(),
     )
     assert result == []
     mock_dispatch.assert_not_called()

@@ -138,15 +138,22 @@ async def _should_interrupt(
     tool_call: dict,
     planning_tools_by_name: dict[str, BaseTool],
 ) -> str:
-    """Return a confirmation prompt if *tool_call* requires human validation, else ``''``."""
+    """Return a confirmation prompt if *tool_call* requires human validation, else ``''``.
+
+    If no ``<tool_name>Plan`` planning tool exists, a generic ``external`` payload
+    with the tool name and args is returned instead of a plan preview.
+    """
     for tool_name in human_validation_tools:
         if tool_name == tool_call["name"]:
             plan_tool_name = tool_call["name"] + "Plan"
             plan_tool = planning_tools_by_name.get(plan_tool_name)
             if plan_tool is None:
-                raise ValueError(
-                    f"planning tool '{plan_tool_name}' not found for tool '{tool_call['name']}'"
-                )
+                safe_response = json.dumps({
+                    "type": "external",
+                    "name": tool_name,
+                    "args": tool_call["args"],
+                })
+                return f"<confirmation-response>{safe_response}</confirmation-response>"
             plan_response = await plan_tool.ainvoke(tool_call["args"])
 
             if isinstance(plan_response, list) and plan_response:
@@ -182,6 +189,9 @@ def _build_interrupt_ui_tools(
     )
     if isinstance(data, list) and len(data) > 0:
         data = data[0]
+
+    if data.get("type") == "external":
+        return ui_tools_list
 
     resource = data.get("resource", {})
     tool_input: dict = {

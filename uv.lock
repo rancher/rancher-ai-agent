@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -1575,7 +1575,7 @@ wheels = [
 
 [[package]]
 name = "langchain-aws"
-version = "1.7.4"
+version = "1.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -1583,9 +1583,9 @@ dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/5c/a34197f3e3cb5a6d67f60542dd40df4a3710c63a1d41239c0bf20fab6dd9/langchain_aws-1.7.4.tar.gz", hash = "sha256:93b814fb55aa8464d152b05b985cd6664ddf8fc37e1dc2717b9b0bf903ea551b", size = 675188, upload-time = "2026-08-26T14:13:09.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/15/0c339138074460804086b163398fa0b314b45e45a39ef6c93f83d4c95738/langchain_aws-1.8.1.tar.gz", hash = "sha256:45e5971881bfd9044a0b698111ac72d8697a13f6ac8d9e052f91b5b94503092d", size = 789820, upload-time = "2026-10-06T20:15:04.188Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/94/5c0dcb02194c984556a705e3f4981bcaaf3a16244b660972a475348c148d/langchain_aws-1.7.4-py3-none-any.whl", hash = "sha256:0d6a30e0b503fc66b140ccd35fddbdeb7171c33028bac03933274d86c99288a0", size = 233224, upload-time = "2026-08-26T14:13:08.039Z" },
+    { url = "https://files.pythonhosted.org/packages/45/35/3fbd9538af94e71c5d854b1534161b5d9c1b667c9294a10fb8dd5235417a/langchain_aws-1.8.1-py3-none-any.whl", hash = "sha256:81456d613d3f9a67e29db76ce52ca201f2ea2b6cb8098de7d8edd1848dc2ef87", size = 246611, upload-time = "2026-10-06T20:15:02.868Z" },
 ]
 
 [[package]]
@@ -1630,7 +1630,7 @@ wheels = [
 
 [[package]]
 name = "langchain-core"
-version = "1.6.1"
+version = "1.6.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1644,9 +1644,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uuid-utils" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/90/12/aff76ca89c219ebe6f9dd3c5dbc4e3b1cf5450e9fc7037dccad23d45cd7a/langchain_core-1.6.1.tar.gz", hash = "sha256:1b156cb395aac4f009a8a1b38a574c7d948fe2d5f74c96e0d8a5017b4149e04f", size = 1003359, upload-time = "2026-08-27T19:31:14.956Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/d3/e9611e44e62ab8175127e137587c62dc2ed00e2615aebd89dfdb77f5fba0/langchain_core-1.6.9.tar.gz", hash = "sha256:34394228603e6f0bd24ce4e773b58b7d160e1b8cf489ecb350cf41f5366f5e92", size = 1010051, upload-time = "2026-10-08T20:11:19.881Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8e/25/f50dd65673c819aa33d3c34df58c115dbb6ec627d19f93e6e401dd0fc8d7/langchain_core-1.6.1-py3-none-any.whl", hash = "sha256:954a84132a5cb0435d27b910e336347b6744ecc18fbeef1e2de7029a0959841a", size = 571478, upload-time = "2026-08-27T19:31:13.34Z" },
+    { url = "https://files.pythonhosted.org/packages/49/41/fdcdd869c052874b17e2325c986cf8c2fc6bbefa3b9d5404dd64dfffb12a/langchain_core-1.6.9-py3-none-any.whl", hash = "sha256:2bacea12270fd4cfdeeefdc5977e7e8b3c30814c509534d1ef43f4e5b7d3f657", size = 572951, upload-time = "2026-10-08T20:11:18.189Z" },
 ]
 
 [[package]]
@@ -2984,7 +2984,7 @@ requires-dist = [
     { name = "kopf", specifier = "==1.44.6" },
     { name = "kubernetes", specifier = "==36.0.3" },
     { name = "langchain", specifier = "==1.3.14" },
-    { name = "langchain-aws", specifier = "==1.7.4" },
+    { name = "langchain-aws", specifier = "==1.8.1" },
     { name = "langchain-community", specifier = "==0.4.2" },
     { name = "langchain-google-genai", specifier = "==4.3.7" },
     { name = "langchain-mcp-adapters", specifier = "==0.3.2" },
@@ -3406,8 +3406,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
-    { name = "jeepney", marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

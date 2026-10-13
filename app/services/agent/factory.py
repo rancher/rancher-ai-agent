@@ -113,7 +113,6 @@ async def _build_child_agents(
             child_agents.append(ChildAgent(
                 config=agent_cfg,
                 agent=create_child_agent(llm, tools, checkpointer, agent_cfg),
-                tools=tools,
             ))
             agents_metadata.append({"name": agent_cfg.name, "status": "active"})
         except NeedsOauth2 as e:

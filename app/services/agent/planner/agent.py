@@ -185,6 +185,9 @@ def create_planner_agent(
 
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
+            dispatch_custom_event(
+                "planner-error", f'<error>{json.dumps({"message": PLAN_FAILED_REPLY})}</error>'
+            )
             return {
                 "subtasks": [],
                 "results": [],

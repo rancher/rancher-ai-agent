@@ -172,3 +172,108 @@ def test_plan_executes_subtasks_and_reduces():
 
     finally:
         LLMManager._instance = None
+
+
+def test_plan_with_unknown_agent_fails():
+    """Tests that a plan assigning a subtask to an agent that does not exist is stopped.
+
+    LLM call order:
+    1. Planner generates the plan (structured output)
+
+    The first subtask fails right away because no such agent is available, so the
+    plan stops: no child agent runs, no evaluation or reduction happens.
+    """
+    fake_prompt = "add 2 and 3, then multiply by 4"
+    first_task = "add 2 and 3"
+    second_task = "multiply 5 by 4"
+    unknown_agent_name = "ghost-agent"
+
+    fake_llm = FakeMessagesListChatModelWithTools(responses=[
+        AIMessage(content="", tool_calls=[{
+            "id": "plan_1",
+            "name": "Plan",
+            "args": {"subtasks": [
+                {"task": first_task, "agent": unknown_agent_name},
+                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+            ]},
+        }]),
+    ])
+    fake_llm.all_calls = []
+    LLMManager._instance = fake_llm
+
+    try:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
+            websocket.receive_text()
+
+            websocket.send_text(fake_prompt)
+            full_message = collect_messages(websocket, 1)[0]
+
+        plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
+        assert plans, "Should contain plan progress events"
+        assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
+            (first_task, unknown_agent_name, "failed"),
+            (second_task, CALCULATOR_AGENT_NAME, "pending"),
+        ]
+
+        assert len(fake_llm.all_calls) == 1, \
+            f"Expected only the planner LLM call, got {len(fake_llm.all_calls)}"
+
+    finally:
+        LLMManager._instance = None
+
+
+def test_plan_approval_rejected(monkeypatch):
+    """Tests that rejecting a plan awaiting approval cancels it without running any subtask.
+
+    LLM call order:
+    1. Planner generates the plan (structured output)
+
+    The plan is then sent to the user for approval; answering "no" ends the run, so no
+    child agent, evaluation or reducer call follows.
+    """
+    monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
+
+    fake_prompt = "add 2 and 3, then multiply by 4"
+    first_task = "add 2 and 3"
+    second_task = "multiply 5 by 4"
+
+    fake_llm = FakeMessagesListChatModelWithTools(responses=[
+        AIMessage(content="", tool_calls=[{
+            "id": "plan_1",
+            "name": "Plan",
+            "args": {"subtasks": [
+                {"task": first_task, "agent": MATH_AGENT_NAME},
+                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+            ]},
+        }]),
+    ])
+    fake_llm.all_calls = []
+    LLMManager._instance = fake_llm
+
+    try:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
+            websocket.receive_text()
+
+            websocket.send_text(fake_prompt)
+            approval_message = collect_messages(websocket, 1)[0]
+
+            websocket.send_text("no")
+            rejection_message = collect_messages(websocket, 1)[0]
+
+        # The plan is presented for approval, with every subtask still pending.
+        plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", approval_message)]
+        assert len(plans) == 1, "Should contain exactly the plan awaiting approval"
+        assert plans[0]["approval"] is True
+        assert [(t["task"], t["agent"], t["status"]) for t in plans[0]["tasks"]] == [
+            (first_task, MATH_AGENT_NAME, "pending"),
+            (second_task, CALCULATOR_AGENT_NAME, "pending"),
+        ]
+
+        # The rejection ends the run with nothing streamed to the client.
+        assert rejection_message == "<message></message>"
+
+        assert len(fake_llm.all_calls) == 1, \
+            f"Expected only the planner LLM call, got {len(fake_llm.all_calls)}"
+
+    finally:
+        LLMManager._instance = None

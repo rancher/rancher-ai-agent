@@ -277,3 +277,147 @@ def test_plan_approval_rejected(monkeypatch):
 
     finally:
         LLMManager._instance = None
+
+
+def _receive_until(websocket, *suffixes: str) -> str:
+    """Receives text frames until the accumulated text ends with one of ``suffixes``."""
+    text = ""
+    while not text.endswith(suffixes):
+        text += websocket.receive_text()
+    return text
+
+
+def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
+    """Runs the two-subtask plan with the given agents protected by OAuth2.
+
+    Both agents are built without tools at connection time (their MCP servers answer 401
+    until a bearer token is sent). The OAuth2 flow is simulated: every
+    ``<authentication>`` request is answered with ``authentication_confirmed`` and the
+    token the callback would have stored is already in the OAuth store.
+
+    Returns the text of every frame group received: the authentication requests, in
+    order, and the final message.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.oauth2.cookies import get_oauth_cookie_names
+    from app.services.oauth2.store import oauth_store
+
+    first_task = "add 2 and 3"
+    second_task = "multiply 5 by 4"
+    final_answer = "The final result is 20."
+
+    def agent_config(name, description, prompt, port, tool_name):
+        return AgentConfig(
+            name=name,
+            displayName=name,
+            description=description,
+            system_prompt=prompt,
+            mcp_url=f"http://localhost:{port}/mcp",
+            authentication=AuthenticationType.OAUTH2 if name in oauth_agent_names else AuthenticationType.NONE,
+        )
+
+    configs = [
+        agent_config(MATH_AGENT_NAME, MATH_AGENT_DESCRIPTION, MATH_AGENT_PROMPT, 8005, "add"),
+        agent_config(CALCULATOR_AGENT_NAME, CALCULATOR_AGENT_DESCRIPTION, CALCULATOR_AGENT_PROMPT, 8006, "multiply"),
+    ]
+    setup_agent_environment(monkeypatch, configs)
+    monkeypatch.delenv("RANCHER_API_TOKEN", raising=False)
+
+    oauth_client = MagicMock()
+    oauth_client.create_authorization_url = AsyncMock(
+        return_value={"state": "state", "url": "https://idp.example/authorize", "code_verifier": "verifier"}
+    )
+    oauth_manager = MagicMock()
+    oauth_manager.get_client.return_value = oauth_client
+    monkeypatch.setattr(
+        "app.services.oauth2.handler.OAuthClientManager",
+        MagicMock(get_instance=MagicMock(return_value=oauth_manager)),
+    )
+    for name in oauth_agent_names:
+        oauth_store.set_token(get_oauth_cookie_names(name)["access_token"], f"token-{name}", "")
+
+    fake_llm = FakeMessagesListChatModelWithTools(responses=[
+        AIMessage(content="", tool_calls=[{
+            "id": "plan_1",
+            "name": "Plan",
+            "args": {"subtasks": [
+                {"task": first_task, "agent": MATH_AGENT_NAME},
+                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+            ]},
+        }]),
+        AIMessage(content="sum is 5"),
+        AIMessage(content="yes"),
+        AIMessage(content="product is 20"),
+        AIMessage(content="yes"),
+        AIMessage(content=final_answer),
+    ])
+    fake_llm.all_calls = []
+    LLMManager._instance = fake_llm
+
+    processes = start_mock_mcp_servers({
+        8005: ("mock-oauth-1", [add], MATH_AGENT_NAME in oauth_agent_names),
+        8006: ("mock-oauth-2", [multiply], CALCULATOR_AGENT_NAME in oauth_agent_names),
+    })
+
+    try:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
+            websocket.receive_text()
+
+            websocket.send_text("add 2 and 3, then multiply by 4")
+            authentication_requests = []
+            while True:
+                text = _receive_until(websocket, "</authentication>", "</message>")
+                if not text.endswith("</authentication>"):
+                    break
+                authentication_requests.append(text)
+                websocket.send_text("authentication_confirmed")
+
+        return authentication_requests, text, fake_llm
+    finally:
+        LLMManager._instance = None
+        for process in processes:
+            process.terminate()
+        # Wait for the ports to be released before another test reuses them.
+        for process in processes:
+            process.join(timeout=5)
+
+
+def _authenticated_agents(authentication_requests: list[str]) -> list[str]:
+    return [
+        json.loads(re.search(r"<authentication>(.*?)</authentication>", request).group(1))["agent"]
+        for request in authentication_requests
+    ]
+
+
+def test_plan_resumes_after_oauth2_authentication(monkeypatch):
+    """Tests that a plan stops to authenticate the one agent that needs OAuth2, then resumes and finishes.
+
+    math-agent needs no authentication and runs first; calculator-agent triggers the
+    OAuth2 flow when its subtask is reached, and the plan continues where it stopped.
+    """
+    authentication_requests, final_message, fake_llm = _run_plan_with_oauth2_agents(
+        monkeypatch, [CALCULATOR_AGENT_NAME]
+    )
+
+    assert _authenticated_agents(authentication_requests) == [CALCULATOR_AGENT_NAME]
+    assert "<error>" not in final_message
+    assert "The final result is 20." in final_message
+    assert len(fake_llm.all_calls) == 6, \
+        f"Expected 6 LLM calls (plan + 2 * (child + evaluation) + reduce), got {len(fake_llm.all_calls)}"
+
+
+def test_plan_resumes_after_oauth2_authentication_of_two_agents(monkeypatch):
+    """Tests that a plan authenticates two different OAuth2 agents, one after the other, and finishes.
+
+    Each agent triggers its own OAuth2 flow when its subtask is reached, so the plan is
+    interrupted twice and resumes after each authentication.
+    """
+    authentication_requests, final_message, fake_llm = _run_plan_with_oauth2_agents(
+        monkeypatch, [MATH_AGENT_NAME, CALCULATOR_AGENT_NAME]
+    )
+
+    assert _authenticated_agents(authentication_requests) == [MATH_AGENT_NAME, CALCULATOR_AGENT_NAME]
+    assert "<error>" not in final_message
+    assert "The final result is 20." in final_message
+    assert len(fake_llm.all_calls) == 6, \
+        f"Expected 6 LLM calls (plan + 2 * (child + evaluation) + reduce), got {len(fake_llm.all_calls)}"

@@ -38,8 +38,27 @@ def multiply(a: int, b: int) -> str:
     return f"product is {a * b}"
 
 
-def serve_mock_mcp(name: str, port: int, tools: list[Callable]):
+class RequireBearerToken:
+    """ASGI middleware answering 401 to HTTP requests that carry no ``Authorization: Bearer`` header."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope["headers"])
+            if not headers.get(b"authorization", b"").startswith(b"Bearer "):
+                await send({"type": "http.response.start", "status": 401, "headers": []})
+                await send({"type": "http.response.body", "body": b"Unauthorized"})
+                return
+        await self.app(scope, receive, send)
+
+
+def serve_mock_mcp(name: str, port: int, tools: list[Callable], require_bearer: bool = False):
     """Runs a mock MCP server exposing ``tools`` on ``port``.
+
+    When ``require_bearer`` is set, requests without a bearer token are rejected with 401,
+    like an MCP server protected by OAuth2.
 
     The server is built inside the child process so the process target stays picklable
     (required by the ``forkserver``/``spawn`` multiprocessing start methods).
@@ -49,21 +68,29 @@ def serve_mock_mcp(name: str, port: int, tools: list[Callable]):
     mcp = FastMCP(name)
     for tool in tools:
         mcp.add_tool(tool)
-    uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=port, log_level="error")
+    asgi_app = mcp.streamable_http_app()
+    if require_bearer:
+        asgi_app = RequireBearerToken(asgi_app)
+    uvicorn.run(asgi_app, host="0.0.0.0", port=port, log_level="error")
 
 
-def start_mock_mcp_servers(servers: dict[int, tuple[str, list[Callable]]]) -> list[multiprocessing.Process]:
-    """Starts one mock MCP server per port and waits until all of them are available."""
+def start_mock_mcp_servers(
+    servers: dict[int, tuple[str, list[Callable]] | tuple[str, list[Callable], bool]],
+) -> list[multiprocessing.Process]:
+    """Starts one mock MCP server per port and waits until all of them are available.
+
+    Each value is ``(name, tools)`` or ``(name, tools, require_bearer)``.
+    """
     processes = [
-        multiprocessing.Process(target=serve_mock_mcp, args=(name, port, tools))
-        for port, (name, tools) in servers.items()
+        multiprocessing.Process(target=serve_mock_mcp, args=(name, port, tools, *rest))
+        for port, (name, tools, *rest) in servers.items()
     ]
     for process in processes:
         process.start()
 
     # Wait for the mock servers to be available before running tests.
     try:
-        for (port, (name, _)), process in zip(servers.items(), processes):
+        for (port, (name, *_)), process in zip(servers.items(), processes):
             deadline = time.monotonic() + MOCK_MCP_STARTUP_TIMEOUT
             while True:
                 if not process.is_alive():

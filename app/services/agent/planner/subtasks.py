@@ -71,7 +71,7 @@ async def _run_pending_subtask(
     child = agents_by_name.get(agent_name)
     if child is None:
         reason = f"No agent named '{agent_name}' is available to run this task."
-        logging.error(reason)
+        logging.warning(reason)
         return _fail_plan(subtasks, results, index, task, reason, emit_plan)
     else:
         # The child was built without tools because its MCP connection requires OAuth2:

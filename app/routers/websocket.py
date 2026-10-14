@@ -162,16 +162,12 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                         agent = child_graph
                     logging.debug(f"Successfully authenticated and reloaded agent '{e.agent_cfg.name}'")
 
-                # Resume the agent from its last checkpoint (the tool call that
-                # triggered OAuth). Passing None lets LangGraph retry from the
-                # saved state rather than starting a new turn.
-                next_request = await _call_agent(
-                    agent=target_agent,
-                    input_data=None,
-                    config=target_config,
-                    websocket=websocket)
+                    # Resume the agent from its last checkpoint (the tool call that
+                    # triggered OAuth). Passing None lets LangGraph retry from the
+                    # saved state rather than starting a new turn.
+                    input_data = None
 
-            
+
         except WebSocketDisconnect:
             logging.debug(f"Client disconnected.")
 

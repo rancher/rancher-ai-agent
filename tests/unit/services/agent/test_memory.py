@@ -279,7 +279,7 @@ async def test_message_types_have_correct_fields():
     assert "tools" in agent_msg, "AI message should have tools"
     assert len(agent_msg["tools"]) == 1, "AI message should have 1 tool"
     assert agent_msg["tools"][0]["toolName"] == "log_viewer", "AI message should preserve tool info"
-    assert agent_msg["stopped"] is False, "AI message should not be flagged as stopped"
+    assert agent_msg["stopped"] is "", "AI message should not be flagged as stopped"
     # Fields AI should NOT have
     assert "context" not in agent_msg, "AI message should NOT have context from user request"
     assert "labels" not in agent_msg, "AI message should NOT have labels from user request"

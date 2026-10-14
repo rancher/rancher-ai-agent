@@ -15,3 +15,9 @@ STOP_REASON_NEW_REQUEST = "new-request"
 
 # Message injected as the tool result when a running execution is stopped by the user.
 STOP_CANCEL_REPLY = "Execution stopped by the user."
+
+# Reply closing a stopped turn in the LLM context, so the abandoned request is not resumed on the next turn.
+STOP_CONTEXT_REPLY = (
+    "The user stopped this request before it completed. It was abandoned: "
+    "do not resume or repeat it unless the user asks for it again."
+)

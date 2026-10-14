@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain.messages import ToolMessage
 
-from app.constants import INTERRUPT_CANCEL_REPLY
+from app.constants import INTERRUPT_CANCEL_REPLY, STOP_CONTEXT_REPLY
 from app.services.agent.middleware.messages_history import (
     MessagesHistoryMiddleware,
     _select_history_messages,
@@ -41,6 +41,19 @@ def test_select_history_excludes_cancel_reply():
     messages = [
         HumanMessage(content="hello"),
         AIMessage(content=INTERRUPT_CANCEL_REPLY),
+    ]
+
+    result = _select_history_messages(messages)
+
+    assert len(result) == 1
+    assert result[0].content == "hello"
+
+
+def test_select_history_excludes_stop_context_reply():
+    """Verify AIMessages closing a stopped turn (STOP_CONTEXT_REPLY) are excluded."""
+    messages = [
+        HumanMessage(content="hello"),
+        AIMessage(content=STOP_CONTEXT_REPLY, additional_kwargs={"stopped": True}),
     ]
 
     result = _select_history_messages(messages)

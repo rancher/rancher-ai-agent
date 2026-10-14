@@ -7,21 +7,22 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.graph.message import add_messages
 from typing_extensions import override
 
-from ....constants import INTERRUPT_CANCEL_REPLY
+from ....constants import INTERRUPT_CANCEL_REPLY, STOP_CONTEXT_REPLY
 
 
 def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
     """Return messages worth preserving in the full history.
 
     Includes:
-    - HumanMessages and AIMessages with content (excluding summarization injections)
+    - HumanMessages and AIMessages with content (excluding summarization injections and
+      the replies closing cancelled or stopped turns, which are only LLM context)
     - ToolMessages with interrupt/confirmation data (human-in-the-loop responses)
     """
     result = []
     for m in messages:
         if getattr(m, "additional_kwargs", {}).get("lc_source") == "summarization":
             continue
-        if isinstance(m, (HumanMessage, AIMessage)) and m.content and m.content != INTERRUPT_CANCEL_REPLY:
+        if isinstance(m, (HumanMessage, AIMessage)) and m.content and m.content not in (INTERRUPT_CANCEL_REPLY, STOP_CONTEXT_REPLY):
             result.append(m)
         elif isinstance(m, ToolMessage) and "confirmation" in getattr(m, "additional_kwargs", {}):
             result.append(m)

@@ -14,11 +14,13 @@ from app.routers.websocket import (
     _patch_tool_result,
     _call_agent,
     _record_stopped_in_history,
+    _close_stopped_thread,
+    _close_stopped_run,
     _stream_agent_events,
     _build_stop_reply,
     WebSocketRequest,
 )
-from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_REASON_USER, STOP_REASON_NEW_REQUEST
+from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_CONTEXT_REPLY, STOP_REASON_USER, STOP_REASON_NEW_REQUEST
 from app.services.agent._constants import NeedsOauth2
 from app.services.agent.supervisor import SupervisorGraph
 from app.services.oauth2.models import OAuth2Canceled
@@ -26,7 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from langgraph.types import Command
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
 class MockWebSocket:
@@ -834,14 +836,12 @@ class TestCallAgentStop:
         websocket = AsyncMock()
         websocket.receive_text = AsyncMock(return_value=_stop_payload())
 
-        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch, \
+        with patch("app.routers.websocket._close_stopped_run", new_callable=AsyncMock) as mock_close, \
              patch("app.routers.websocket._record_stopped_in_history", new_callable=AsyncMock) as mock_record:
             result = await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
 
         assert result is None
-        mock_patch.assert_awaited_once()
-        # Patched with the stop reply message
-        assert mock_patch.call_args.args[2] == STOP_CANCEL_REPLY
+        mock_close.assert_awaited_once()
         # Stopped run recorded in history with the partial streamed text
         mock_record.assert_awaited_once()
         assert mock_record.call_args.args[2] == "partial"
@@ -864,10 +864,10 @@ class TestCallAgentStop:
         # Receiver blocks forever so streaming wins the race.
         websocket.receive_text = AsyncMock(side_effect=_block)
 
-        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch:
+        with patch("app.routers.websocket._close_stopped_run", new_callable=AsyncMock) as mock_close:
             await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
 
-        mock_patch.assert_not_awaited()
+        mock_close.assert_not_awaited()
         # Streamed text was forwarded
         websocket.send_text.assert_any_await("hello")
         websocket.send_text.assert_any_await(" world")
@@ -880,13 +880,12 @@ class TestCallAgentStop:
         websocket = AsyncMock()
         websocket.receive_text = AsyncMock(return_value=new_message)
 
-        with patch("app.routers.websocket._patch_tool_result", new_callable=AsyncMock) as mock_patch, \
+        with patch("app.routers.websocket._close_stopped_run", new_callable=AsyncMock) as mock_close, \
              patch("app.routers.websocket._record_stopped_in_history", new_callable=AsyncMock) as mock_record:
             result = await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
 
         assert result == new_message
-        mock_patch.assert_awaited_once()
-        assert mock_patch.call_args.args[2] == STOP_CANCEL_REPLY
+        mock_close.assert_awaited_once()
         mock_record.assert_awaited_once()
         assert mock_record.call_args.args[2] == "partial"
         assert mock_record.call_args.args[3] == STOP_REASON_NEW_REQUEST
@@ -1002,3 +1001,107 @@ class TestRecordStoppedInHistory:
         history = self._written_history(agent)
         assert [m.id for m in history[:3]] == ["h0", "a0", "h1"]
         assert history[3].additional_kwargs["stopped"] == STOP_REASON_USER
+
+
+class TestCloseStoppedThread:
+    def _config(self, thread_id="t1"):
+        return {"configurable": {"thread_id": thread_id}}
+
+    def _agent(self, values):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(values=values))
+        agent.aupdate_state = AsyncMock()
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_unanswered_request_gets_stop_reply_and_planner_state_reset(self):
+        human = HumanMessage(content="create ns", id="h1")
+        agent = self._agent({
+            "messages": [human],
+            "messages_history": [human],
+            "subtasks": [{"task": "x", "status": "in_progress", "agent": "rancher"}],
+            "results": ["r"],
+            "awaiting_input": True,
+        })
+
+        await _close_stopped_thread(agent, self._config())
+
+        values = agent.aupdate_state.call_args.kwargs["values"]
+        assert len(values["messages"]) == 1
+        reply = values["messages"][0]
+        assert isinstance(reply, AIMessage)
+        assert reply.content == STOP_CONTEXT_REPLY
+        assert reply.additional_kwargs["stopped"] is True
+        assert values["subtasks"] == []
+        assert values["results"] == []
+        assert values["awaiting_input"] is False
+        # Keys absent from the state are not written, and history is left untouched.
+        assert "feedback" not in values
+        assert "retry" not in values
+        assert "messages_history" not in values
+
+    @pytest.mark.asyncio
+    async def test_pending_tool_call_is_patched_and_closed(self):
+        tool_call_msg = AIMessage(content="", id="a1", tool_calls=[{"id": "tc1", "name": "t", "args": {}}])
+        patched = ToolMessage(content=STOP_CANCEL_REPLY, tool_call_id="tc1")
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(side_effect=[
+            MagicMock(values={"messages": [tool_call_msg]}),
+            MagicMock(values={"messages": [tool_call_msg, patched]}),
+        ])
+        agent.aupdate_state = AsyncMock()
+
+        await _close_stopped_thread(agent, self._config())
+
+        assert agent.aupdate_state.await_count == 2
+        tool_values = agent.aupdate_state.call_args_list[0].kwargs["values"]
+        assert tool_values["messages"][0].tool_call_id == "tc1"
+        assert tool_values["messages"][0].content == STOP_CANCEL_REPLY
+        stop_values = agent.aupdate_state.call_args_list[1].kwargs["values"]
+        assert stop_values["messages"][0].content == STOP_CONTEXT_REPLY
+
+    @pytest.mark.asyncio
+    async def test_completed_thread_is_untouched(self):
+        agent = self._agent({"messages": [HumanMessage(content="q"), AIMessage(content="answer")]})
+
+        await _close_stopped_thread(agent, self._config())
+
+        agent.aupdate_state.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_thread_is_untouched(self):
+        agent = self._agent({})
+
+        await _close_stopped_thread(agent, self._config())
+
+        agent.aupdate_state.assert_not_awaited()
+
+
+class TestCloseStoppedRun:
+    @pytest.mark.asyncio
+    async def test_closes_target_and_child_threads(self):
+        child_graph = MagicMock()
+        child = MagicMock(agent=child_graph)
+        supervisor = SupervisorGraph(graph=MagicMock(), child_agents={"rancher": child})
+        config = {"configurable": {"thread_id": "t1", "request_id": "r1"}}
+
+        with patch("app.routers.websocket._close_stopped_thread", new_callable=AsyncMock) as mock_close:
+            await _close_stopped_run(supervisor, config)
+
+        calls = mock_close.call_args_list
+        assert calls[0].args == (supervisor, config)
+        child_threads = [c.args[1]["configurable"]["thread_id"] for c in calls[1:]]
+        assert child_threads == ["t1::child::rancher", "t1::planner::rancher"]
+        assert all(c.args[0] is child_graph for c in calls[1:])
+        # Other configurable keys are forwarded.
+        assert all(c.args[1]["configurable"]["request_id"] == "r1" for c in calls[1:])
+
+    @pytest.mark.asyncio
+    async def test_single_agent_closes_only_target(self):
+        agent = MagicMock()
+        config = {"configurable": {"thread_id": "t1"}}
+
+        with patch("app.routers.websocket._close_stopped_thread", new_callable=AsyncMock) as mock_close:
+            await _close_stopped_run(agent, config)
+
+        mock_close.assert_awaited_once_with(agent, config)

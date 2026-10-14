@@ -23,7 +23,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id_from_token
-from ..constants import CONTEXT_PARAMETERS_SUFFIX, STOP_TAG, STOP_CANCEL_REPLY, STOP_REASON_USER, STOP_REASON_NEW_REQUEST
+from ..constants import (
+    CONTEXT_PARAMETERS_SUFFIX,
+    STOP_TAG,
+    STOP_CANCEL_REPLY,
+    STOP_CONTEXT_REPLY,
+    STOP_REASON_USER,
+    STOP_REASON_NEW_REQUEST,
+)
 
 router = APIRouter()
 
@@ -230,6 +237,75 @@ async def _patch_tool_result(agent: CompiledStateGraph, config: dict, error_mess
     await agent.aupdate_state(config=config, values={"messages": tool_messages})
 
 
+# Planner state reset when a run is stopped, so stale subtasks are not resumed or
+# mistaken for a subtask waiting for the user's answer on the next turn.
+_STOPPED_PLANNER_STATE = {
+    "subtasks": [],
+    "results": [],
+    "awaiting_input": False,
+    "cancelled": False,
+    "retry": False,
+    "feedback": [],
+}
+
+
+async def _close_stopped_thread(agent: CompiledStateGraph, config: dict) -> None:
+    """
+    Close a stopped turn in the LLM-facing ``messages`` of a thread.
+
+    Cancelling a run can leave a pending tool call or a request with no reply. Both
+    are sent back to the LLM on the next turn, which would then resume the abandoned
+    request together with the new one. This patches any pending tool call and appends
+    an AIMessage stating the request was stopped. Planner keys present in the state
+    are reset too. Threads whose last message is already a final reply are untouched.
+    """
+    await _patch_tool_result(agent, config, STOP_CANCEL_REPLY)
+
+    state = await agent.aget_state(config=config)
+    if not state or not state.values.get("messages"):
+        return
+    last_msg = state.values["messages"][-1]
+    if isinstance(last_msg, AIMessage) and not last_msg.tool_calls:
+        return
+
+    values = {
+        key: value for key, value in _STOPPED_PLANNER_STATE.items() if key in state.values
+    }
+    values["messages"] = [
+        AIMessage(
+            content=STOP_CONTEXT_REPLY,
+            id=str(uuid.uuid4()),
+            additional_kwargs={"stopped": True, "created_at": datetime.now().isoformat()},
+        )
+    ]
+    await agent.aupdate_state(config=config, values=values)
+
+
+async def _close_stopped_run(agent: CompiledStateGraph | SupervisorGraph, config: dict) -> None:
+    """
+    Close a stopped run in the target thread and in the threads of its child agents.
+
+    The in-flight tool call of a supervisor or planner run lives in the child agent's
+    own thread, namespaced as ``<thread_id>::child::<agent>`` by the supervisor and
+    ``<thread_id>::planner::<agent>`` by the planner, so those are closed as well.
+    """
+    await _close_stopped_thread(agent, config)
+
+    if not isinstance(agent, SupervisorGraph):
+        return
+
+    thread_id = config["configurable"]["thread_id"]
+    for name, child in agent.child_agents.items():
+        if not child or not child.agent:
+            continue
+        for namespace in ("child", "planner"):
+            child_config = {
+                **config,
+                "configurable": {**config["configurable"], "thread_id": f"{thread_id}::{namespace}::{name}"},
+            }
+            await _close_stopped_thread(child.agent, child_config)
+
+
 async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, partial_text: str, reason: str) -> None:
     """
     Record a stopped execution in ``messages_history`` so it shows up in the chat history.
@@ -281,8 +357,9 @@ async def _call_agent(
 
     The streaming runs as a cancellable task that is raced against an incoming
     WebSocket message. If any message arrives while the agent is running, the
-    streaming task is cancelled (which aborts the in-flight LLM/tool call) and any
-    pending tool call is patched with a result so the next turn stays valid.
+    streaming task is cancelled (which aborts the in-flight LLM/tool call) and the
+    stopped turn is closed in the agent's (and its child agents') threads so the next
+    turn stays valid and does not resume the abandoned request.
     The stopped run is recorded in ``messages_history`` and the client is notified
     with a stop message carrying the reason. If the message carries the ``STOP_TAG``
     tag it is just a stop request (``user-stop``); otherwise it is a new request
@@ -325,7 +402,7 @@ async def _call_agent(
         # WebSocketDisconnect, which propagates to the endpoint's handler).
         message = receiver_task.result()
         await _cancel_task(stream_task)
-        await _patch_tool_result(agent, config, STOP_CANCEL_REPLY)
+        await _close_stopped_run(agent, config)
         is_user_stop = STOP_TAG in (_parse_websocket_request(message).tags or [])
         reason = STOP_REASON_USER if is_user_stop else STOP_REASON_NEW_REQUEST
         await _record_stopped_in_history(agent, config, "".join(partial_text), reason)

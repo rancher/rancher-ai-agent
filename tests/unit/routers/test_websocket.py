@@ -15,9 +15,10 @@ from app.routers.websocket import (
     _call_agent,
     _record_stopped_in_history,
     _stream_agent_events,
+    _build_stop_reply,
     WebSocketRequest,
 )
-from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_REPLY
+from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_REASON_USER, STOP_REASON_NEW_REQUEST
 from app.services.agent._constants import NeedsOauth2
 from app.services.agent.supervisor import SupervisorGraph
 from app.services.oauth2.models import OAuth2Canceled
@@ -844,10 +845,12 @@ class TestCallAgentStop:
         # Stopped run recorded in history with the partial streamed text
         mock_record.assert_awaited_once()
         assert mock_record.call_args.args[2] == "partial"
+        assert mock_record.call_args.args[3] == STOP_REASON_USER
         # Opened the message block
         websocket.send_text.assert_any_await("<message>")
-        # Notified the client that the execution was stopped
-        websocket.send_text.assert_any_await(STOP_REPLY)
+        # Notified the client that the execution was stopped by the user
+        websocket.send_text.assert_any_await(_build_stop_reply(STOP_REASON_USER))
+        assert _build_stop_reply(STOP_REASON_USER) == '<stop-message>{"reason": "user-stop"}</stop-message>'
 
     @pytest.mark.asyncio
     async def test_normal_completion_no_patch(self):
@@ -886,8 +889,9 @@ class TestCallAgentStop:
         assert mock_patch.call_args.args[2] == STOP_CANCEL_REPLY
         mock_record.assert_awaited_once()
         assert mock_record.call_args.args[2] == "partial"
-        # The client is notified that the previous execution was stopped
-        websocket.send_text.assert_any_await(STOP_REPLY)
+        assert mock_record.call_args.args[3] == STOP_REASON_NEW_REQUEST
+        # The client is notified that the previous execution was preempted
+        websocket.send_text.assert_any_await(_build_stop_reply(STOP_REASON_NEW_REQUEST))
 
     @pytest.mark.asyncio
     async def test_stream_exception_propagates(self):
@@ -963,14 +967,14 @@ class TestRecordStoppedInHistory:
         human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
         agent = self._agent(messages=[human], history=[])
 
-        await _record_stopped_in_history(agent, self._config(), "partial answer")
+        await _record_stopped_in_history(agent, self._config(), "partial answer", STOP_REASON_USER)
 
         history = self._written_history(agent)
         assert len(history) == 2
         assert history[0] is human
         assert isinstance(history[1], AIMessage)
         assert history[1].content == "partial answer"
-        assert history[1].additional_kwargs["stopped"] is True
+        assert history[1].additional_kwargs["stopped"] == STOP_REASON_USER
         assert history[1].additional_kwargs["request_metadata"] == {"agent": "a", "tags": []}
         assert "created_at" in history[1].additional_kwargs
 
@@ -979,11 +983,11 @@ class TestRecordStoppedInHistory:
         human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
         agent = self._agent(messages=[human], history=[human])
 
-        await _record_stopped_in_history(agent, self._config(), "")
+        await _record_stopped_in_history(agent, self._config(), "", STOP_REASON_NEW_REQUEST)
 
         history = self._written_history(agent)
         assert [m.id for m in history if isinstance(m, HumanMessage)] == ["h1"]
-        assert history[-1].additional_kwargs["stopped"] is True
+        assert history[-1].additional_kwargs["stopped"] == STOP_REASON_NEW_REQUEST
 
     @pytest.mark.asyncio
     async def test_keeps_full_history(self):
@@ -993,8 +997,8 @@ class TestRecordStoppedInHistory:
         human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
         agent = self._agent(messages=[old_human, old_ai, human], history=[old_human, old_ai])
 
-        await _record_stopped_in_history(agent, self._config(), "partial")
+        await _record_stopped_in_history(agent, self._config(), "partial", STOP_REASON_USER)
 
         history = self._written_history(agent)
         assert [m.id for m in history[:3]] == ["h0", "a0", "h1"]
-        assert history[3].additional_kwargs["stopped"] is True
+        assert history[3].additional_kwargs["stopped"] == STOP_REASON_USER

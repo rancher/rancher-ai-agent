@@ -23,7 +23,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id_from_token
-from ..constants import CONTEXT_PARAMETERS_SUFFIX, STOP_TAG, STOP_CANCEL_REPLY, STOP_REPLY
+from ..constants import CONTEXT_PARAMETERS_SUFFIX, STOP_TAG, STOP_CANCEL_REPLY, STOP_REASON_USER, STOP_REASON_NEW_REQUEST
 
 router = APIRouter()
 
@@ -234,14 +234,14 @@ async def _patch_tool_result(agent: CompiledStateGraph, config: dict, error_mess
     await agent.aupdate_state(config=config, values={"messages": tool_messages})
 
 
-async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, partial_text: str) -> None:
+async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, partial_text: str, reason: str) -> None:
     """
     Record a stopped execution in ``messages_history`` so it shows up in the chat history.
 
     Cancelling a run skips the MessagesHistoryMiddleware hooks, so the user's
     message may be missing from the history and the partial answer is lost.
     This adds the request's HumanMessage (if missing) and an AIMessage with the
-    partial streamed text flagged with ``stopped=True``. Only ``messages_history``
+    partial streamed text flagged with ``stopped=<reason>``. Only ``messages_history``
     is updated, so the stopped turn is not sent back to the LLM.
     """
     state = await agent.aget_state(config=config)
@@ -265,7 +265,7 @@ async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, pa
         AIMessage(
             content=partial_text,
             additional_kwargs={
-                "stopped": True,
+                "stopped": reason,
                 "created_at": datetime.now().isoformat(),
                 "request_metadata": config["configurable"].get("request_metadata", {}),
             },
@@ -288,8 +288,9 @@ async def _call_agent(
     streaming task is cancelled (which aborts the in-flight LLM/tool call) and any
     pending tool call is patched with a result so the next turn stays valid.
     The stopped run is recorded in ``messages_history`` and the client is notified
-    with ``STOP_REPLY``. If the message carries the ``STOP_TAG`` tag it is just a
-    stop request; otherwise it is a new request that preempts the current run.
+    with a stop message carrying the reason. If the message carries the ``STOP_TAG``
+    tag it is just a stop request (``user-stop``); otherwise it is a new request
+    that preempts the current run (``new-request``).
 
     Args:
         agent: The compiled LangGraph agent.
@@ -329,10 +330,12 @@ async def _call_agent(
         message = receiver_task.result()
         await _cancel_task(stream_task)
         await _patch_tool_result(agent, config, STOP_CANCEL_REPLY)
-        await _record_stopped_in_history(agent, config, "".join(partial_text))
-        await websocket.send_text(STOP_REPLY)
+        is_user_stop = STOP_TAG in (_parse_websocket_request(message).tags or [])
+        reason = STOP_REASON_USER if is_user_stop else STOP_REASON_NEW_REQUEST
+        await _record_stopped_in_history(agent, config, "".join(partial_text), reason)
+        await websocket.send_text(_build_stop_reply(reason))
 
-        if STOP_TAG in (_parse_websocket_request(message).tags or []):
+        if is_user_stop:
             logging.debug("Received stop message; cancelled agent execution.")
             return None
 
@@ -696,6 +699,10 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
     return {
         "messages": input_messages,
     }
+
+def _build_stop_reply(reason: str) -> str:
+    """Builds the message sent to the client when a running execution has been stopped."""
+    return f"<stop-message>{json.dumps({'reason': reason})}</stop-message>"
 
 
 def _restore_ui_tools_metadata(config: dict, state) -> None:

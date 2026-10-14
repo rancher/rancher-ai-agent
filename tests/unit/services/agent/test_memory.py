@@ -315,7 +315,7 @@ async def test_fetch_messages_includes_stopped_ai_message():
     stopped_msg.content = ""
     stopped_msg.text = ""
     stopped_msg.additional_kwargs = {
-        "stopped": True,
+        "stopped": "user-stop",
         "created_at": "2024-01-01T00:00:01Z",
         "request_metadata": {"agent": "kubernetes-agent", "tags": []},
     }
@@ -335,4 +335,4 @@ async def test_fetch_messages_includes_stopped_ai_message():
     assert len(messages) == 1
     assert messages[0]["role"] == "agent"
     assert messages[0]["message"] == ""
-    assert messages[0]["stopped"] is True
+    assert messages[0]["stopped"] == "user-stop"

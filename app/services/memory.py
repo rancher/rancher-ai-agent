@@ -340,7 +340,7 @@ class MemoryManager:
                     "message": (message.additional_kwargs.get("mcp_response") or "") + str(message.text),
                     "tools": message.additional_kwargs.get("ui_tools", []),
                     "tags": request_metadata.get("tags", []),
-                    "stopped": message.additional_kwargs.get("stopped", False),
+                    "stopped": message.additional_kwargs.get("stopped", ""),
                     "createdAt": message.additional_kwargs.get("created_at"),
                 })
             elif message.type == 'tool' and message.additional_kwargs.get("interrupt_message", "") != "":

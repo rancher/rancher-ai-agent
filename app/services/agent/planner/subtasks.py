@@ -372,8 +372,7 @@ def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None 
 def format_stopped_plan_event(subtasks: list[dict] | None) -> str | None:
     """Render the ``<plan>`` payload for a plan stopped by the user.
 
-    The plan's global status is ``cancelled`` and every subtask that had not finished
-    (``pending`` or ``in_progress``) is marked ``cancelled`` too. Returns None when there is nothing
+    The plan's global status is ``cancelled``. Returns None when there is nothing
     to report: no plan, a direct handoff (never exposed to the client), or a plan whose
     subtasks have all finished already.
     """
@@ -381,11 +380,7 @@ def format_stopped_plan_event(subtasks: list[dict] | None) -> str | None:
         return None
     if not any(st.get("status") in ("pending", "in_progress") for st in subtasks):
         return None
-    cancelled = [
-        {**st, "status": "cancelled"} if st.get("status") in ("pending", "in_progress") else st
-        for st in subtasks
-    ]
-    return _format_plan_event(cancelled, approval=False, status="cancelled")
+    return _format_plan_event(subtasks, approval=False, status="cancelled")
 
 
 def _next_subtask_index(subtasks: list[dict]) -> int:

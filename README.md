@@ -117,40 +117,9 @@ graph TD
     style MCPServer fill:#cce5ff,stroke:#007bff,stroke-width:2px
     style Kubernetes fill:#f8d7da,stroke:#dc3545,stroke-width:2px
 ```
-## Installation Steps
+## Installation
 
-1. Add the Helm Repository
-First, add the Rancher AI Agent Helm repository to your cluster.
-
-```bash
-helm repo add rancher-ai https://rancher.github.io/rancher-ai-agent
-```
-
-2. Update Your Helm Repositories
-Fetch the latest list of charts from all your configured repositories.
-
-```bash
-helm repo update
-```
-
-3. Install the Chart
-Install the agent chart into a new namespace using the values.yaml file you created.
-
-```bash
-helm install rancher-ai-agent rancher-ai/rancher-ai-agent \
-  --namespace cattle-ai-agent-system \
-  --create-namespace \
-  --devel \
-  -f values.yaml
---create-namespace
-```
-
---devel: Includes pre-release versions of the chart, which is currently required.
-
--f values.yaml: Applies your custom LLM configuration.
-
-## Accessing the UI
-Once the agent is installed, you need to install the UI extension
+See the [Quick Start guide](https://documentation.suse.com/cloudnative/rancher-ai/1.1.0/en/quick-start.html) for installation instructions.
 
 ## Chat History
 The AI Assistant maintains persistent chat history with REST API endpoints for accessing and managing conversations:
@@ -159,39 +128,6 @@ The AI Assistant maintains persistent chat history with REST API endpoints for a
 - `DELETE /api/chats/{id}` - Delete a specific chat session
 
 See the [OpenAPI spec](openapi.yaml) for full API details.
-
-## RBAC
-
-To use the AI agent a user needs get permission to the 'llm-config' secret and the 'http:rancher-ai-agent:80' services/proxy.
-
-NOTE: This is a temporary solution.
-The following GlobalRole can be used to grant permissions to use the AI Agent:
-
-```
-apiVersion: management.cattle.io/v3
-displayName: ai
-kind: GlobalRole
-metadata:
-  name: ai-agent
-namespacedRules:
-  cattle-ai-agent-system:
-    - apiGroups:
-        - ''
-      resourceNames:
-        - http:rancher-ai-agent:80
-      resources:
-        - services/proxy
-      verbs:
-        - get
-    - apiGroups:
-        - ''
-      resourceNames:
-        - llm-config
-      resources:
-        - secrets
-      verbs:
-        - get
-```
 
 ## MCP Authentication Types
 

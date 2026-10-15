@@ -16,6 +16,8 @@ from app.routers.websocket import (
     _record_stopped_in_history,
     _close_stopped_thread,
     _close_stopped_run,
+    _cancel_waiting_plan,
+    _send_stopped_plan_event,
     _stream_agent_events,
     _build_stop_reply,
     WebSocketRequest,
@@ -1069,6 +1071,21 @@ class TestCloseStoppedThread:
         agent.aupdate_state.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_forced_close_resets_thread_ending_with_reply(self):
+        agent = self._agent({
+            "messages": [HumanMessage(content="q"), AIMessage(content="Which namespace?")],
+            "subtasks": [{"task": "x", "status": "in_progress", "agent": "rancher"}],
+            "awaiting_input": True,
+        })
+
+        await _close_stopped_thread(agent, self._config(), force=True)
+
+        values = agent.aupdate_state.call_args.kwargs["values"]
+        assert values["messages"][0].content == STOP_CONTEXT_REPLY
+        assert values["subtasks"] == []
+        assert values["awaiting_input"] is False
+
+    @pytest.mark.asyncio
     async def test_empty_thread_is_untouched(self):
         agent = self._agent({})
 
@@ -1089,7 +1106,7 @@ class TestCloseStoppedRun:
             await _close_stopped_run(supervisor, config)
 
         calls = mock_close.call_args_list
-        assert calls[0].args == (supervisor, config)
+        assert calls[0].args == (supervisor, config, False)
         child_threads = [c.args[1]["configurable"]["thread_id"] for c in calls[1:]]
         assert child_threads == ["t1::child::rancher", "t1::planner::rancher"]
         assert all(c.args[0] is child_graph for c in calls[1:])
@@ -1104,4 +1121,121 @@ class TestCloseStoppedRun:
         with patch("app.routers.websocket._close_stopped_thread", new_callable=AsyncMock) as mock_close:
             await _close_stopped_run(agent, config)
 
-        mock_close.assert_awaited_once_with(agent, config)
+        mock_close.assert_awaited_once_with(agent, config, False)
+
+
+def _plan_subtasks():
+    return [
+        {"task": "a", "status": "completed", "agent": "rancher"},
+        {"task": "b", "status": "in_progress", "agent": "fleet"},
+        {"task": "c", "status": "pending", "agent": "rancher"},
+    ]
+
+
+def _cancelled_plan_event():
+    tasks = [{**st, "status": "cancelled"} if st["status"] != "completed" else st for st in _plan_subtasks()]
+    return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled"})}</plan>'
+
+
+class TestStoppedPlanEvent:
+    @pytest.mark.asyncio
+    async def test_sends_cancelled_plan(self):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(values={"subtasks": _plan_subtasks()}))
+        websocket = AsyncMock()
+
+        await _send_stopped_plan_event(agent, {"configurable": {}}, websocket)
+
+        websocket.send_text.assert_awaited_once_with(_cancelled_plan_event())
+
+    @pytest.mark.asyncio
+    async def test_no_plan_sends_nothing(self):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(values={"messages": []}))
+        websocket = AsyncMock()
+
+        await _send_stopped_plan_event(agent, {"configurable": {}}, websocket)
+
+        websocket.send_text.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_running_plan_stop_sends_cancelled_plan_before_reset(self):
+        """Stopping a running plan sends the cancelled <plan> before the state is reset."""
+        agent = _make_stream_agent([_text_event("partial")], stall_after=1)
+        agent.aget_state = AsyncMock(return_value=MagicMock(values={"subtasks": _plan_subtasks()}))
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(return_value=_stop_payload())
+        order = []
+        websocket.send_text = AsyncMock(side_effect=lambda text: order.append(text))
+
+        async def _close(*args, **kwargs):
+            order.append("close")
+
+        with patch("app.routers.websocket._close_stopped_run", side_effect=_close), \
+             patch("app.routers.websocket._record_stopped_in_history", new_callable=AsyncMock):
+            await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
+
+        plan_index = order.index(_cancelled_plan_event())
+        assert plan_index < order.index("close") < order.index(_build_stop_reply(STOP_REASON_USER))
+
+
+class TestCancelWaitingPlan:
+    def _supervisor(self, values, interrupts=()):
+        graph = MagicMock()
+        graph.aget_state = AsyncMock(return_value=MagicMock(values=values, interrupts=interrupts))
+        return SupervisorGraph(graph=graph, child_agents={})
+
+    async def _cancel(self, agent):
+        websocket = AsyncMock()
+        with patch("app.routers.websocket._close_stopped_run", new_callable=AsyncMock) as mock_close, \
+             patch("app.routers.websocket._record_stopped_in_history", new_callable=AsyncMock) as mock_record:
+            result = await _cancel_waiting_plan(agent, {"configurable": {}}, websocket)
+        return result, websocket, mock_close, mock_record
+
+    @pytest.mark.asyncio
+    async def test_awaiting_input_plan_is_cancelled(self):
+        agent = self._supervisor({"subtasks": _plan_subtasks(), "awaiting_input": True})
+
+        result, websocket, mock_close, mock_record = await self._cancel(agent)
+
+        assert result is True
+        sent = [c.args[0] for c in websocket.send_text.await_args_list]
+        assert sent == ["<message>", _cancelled_plan_event(), _build_stop_reply(STOP_REASON_USER)]
+        mock_close.assert_awaited_once_with(agent, {"configurable": {}}, force=True)
+        assert mock_record.call_args.args[3] == STOP_REASON_USER
+
+    @pytest.mark.asyncio
+    async def test_plan_waiting_on_interrupt_is_cancelled(self):
+        subtasks = [{**st, "status": "pending"} for st in _plan_subtasks()]
+        agent = self._supervisor({"subtasks": subtasks, "awaiting_input": False}, interrupts=(MagicMock(),))
+
+        result, websocket, mock_close, _ = await self._cancel(agent)
+
+        assert result is True
+        plan_event = websocket.send_text.await_args_list[1].args[0]
+        payload = json.loads(plan_event[len("<plan>"):-len("</plan>")])
+        assert payload["status"] == "cancelled"
+        assert all(t["status"] == "cancelled" for t in payload["tasks"])
+        mock_close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_idle_plan_is_untouched(self):
+        agent = self._supervisor({"subtasks": [], "awaiting_input": False})
+
+        result, websocket, mock_close, mock_record = await self._cancel(agent)
+
+        assert result is False
+        websocket.send_text.assert_not_awaited()
+        mock_close.assert_not_awaited()
+        mock_record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_single_agent_is_untouched(self):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(values={"subtasks": _plan_subtasks()}, interrupts=(MagicMock(),)))
+
+        result, websocket, mock_close, _ = await self._cancel(agent)
+
+        assert result is False
+        websocket.send_text.assert_not_awaited()
+        mock_close.assert_not_awaited()

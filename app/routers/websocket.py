@@ -10,6 +10,7 @@ from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
 from ..services.agent.factory import build_agent, reload_agent_tools
 from ..services.agent.loader import load_agent_configs
 from ..services.agent.supervisor import SupervisorGraph
+from ..services.agent.planner import format_stopped_plan_event
 from ..services.oauth2 import handle_oauth_authentication
 from ..services.oauth2.models import OAuth2Canceled
 from dataclasses import dataclass
@@ -125,8 +126,9 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
             ws_request = _parse_websocket_request(request)
             if STOP_TAG in (ws_request.tags or []):
-                # Nothing is running, so there is nothing to stop.
-                message_opened = False
+                # Nothing is running, but a plan waiting for the user's input must be cancelled.
+                config = _build_config(base_config, request_id, ws_request)
+                message_opened = await _cancel_waiting_plan(agent, config, websocket)
                 continue
             if not ws_request.agent and single_agent_name:
                 ws_request.agent = single_agent_name
@@ -249,7 +251,7 @@ _STOPPED_PLANNER_STATE = {
 }
 
 
-async def _close_stopped_thread(agent: CompiledStateGraph, config: dict) -> None:
+async def _close_stopped_thread(agent: CompiledStateGraph, config: dict, force: bool = False) -> None:
     """
     Close a stopped turn in the LLM-facing ``messages`` of a thread.
 
@@ -257,7 +259,8 @@ async def _close_stopped_thread(agent: CompiledStateGraph, config: dict) -> None
     are sent back to the LLM on the next turn, which would then resume the abandoned
     request together with the new one. This patches any pending tool call and appends
     an AIMessage stating the request was stopped. Planner keys present in the state
-    are reset too. Threads whose last message is already a final reply are untouched.
+    are reset too. Threads whose last message is already a final reply are untouched,
+    unless ``force`` is set (e.g. a plan waiting for the user's answer to a question).
     """
     await _patch_tool_result(agent, config, STOP_CANCEL_REPLY)
 
@@ -265,7 +268,7 @@ async def _close_stopped_thread(agent: CompiledStateGraph, config: dict) -> None
     if not state or not state.values.get("messages"):
         return
     last_msg = state.values["messages"][-1]
-    if isinstance(last_msg, AIMessage) and not last_msg.tool_calls:
+    if not force and isinstance(last_msg, AIMessage) and not last_msg.tool_calls:
         return
 
     values = {
@@ -281,15 +284,16 @@ async def _close_stopped_thread(agent: CompiledStateGraph, config: dict) -> None
     await agent.aupdate_state(config=config, values=values)
 
 
-async def _close_stopped_run(agent: CompiledStateGraph | SupervisorGraph, config: dict) -> None:
+async def _close_stopped_run(agent: CompiledStateGraph | SupervisorGraph, config: dict, force: bool = False) -> None:
     """
     Close a stopped run in the target thread and in the threads of its child agents.
 
     The in-flight tool call of a supervisor or planner run lives in the child agent's
     own thread, namespaced as ``<thread_id>::child::<agent>`` by the supervisor and
     ``<thread_id>::planner::<agent>`` by the planner, so those are closed as well.
+    ``force`` is passed to ``_close_stopped_thread``.
     """
-    await _close_stopped_thread(agent, config)
+    await _close_stopped_thread(agent, config, force)
 
     if not isinstance(agent, SupervisorGraph):
         return
@@ -303,7 +307,50 @@ async def _close_stopped_run(agent: CompiledStateGraph | SupervisorGraph, config
                 **config,
                 "configurable": {**config["configurable"], "thread_id": f"{thread_id}::{namespace}::{name}"},
             }
-            await _close_stopped_thread(child.agent, child_config)
+            await _close_stopped_thread(child.agent, child_config, force)
+
+
+async def _send_stopped_plan_event(agent: CompiledStateGraph | SupervisorGraph, config: dict, websocket: WebSocket) -> None:
+    """
+    Notify the client that the plan in the agent's thread was cancelled by a stop.
+
+    Must run before the planner state is reset by ``_close_stopped_run``. Agents that
+    are not planners have no ``subtasks`` in their state, so nothing is sent.
+    """
+    state = await agent.aget_state(config=config)
+    if not state:
+        return
+    if event := format_stopped_plan_event(state.values.get("subtasks")):
+        await websocket.send_text(event)
+
+
+async def _cancel_waiting_plan(agent: CompiledStateGraph | SupervisorGraph, config: dict, websocket: WebSocket) -> bool:
+    """
+    Cancel a plan that is waiting for the user when a stop arrives while nothing runs.
+
+    A plan waits either on an interrupt (plan approval or a child agent's confirmation)
+    or for the answer to a question asked by a subtask (``awaiting_input``). Without
+    cancelling it, the user's next message would be taken as that answer. The client is
+    sent the cancelled ``<plan>`` and a stop message inside a ``<message>`` block.
+
+    Returns:
+        True if a plan was cancelled and a ``<message>`` was opened (the caller closes it).
+    """
+    if not isinstance(agent, SupervisorGraph):
+        return False
+    state = await agent.aget_state(config=config)
+    if not state or not state.values.get("subtasks"):
+        return False
+    if not (state.interrupts or state.values.get("awaiting_input")):
+        return False
+
+    await websocket.send_text("<message>")
+    await _send_stopped_plan_event(agent, config, websocket)
+    await _close_stopped_run(agent, config, force=True)
+    await _record_stopped_in_history(agent, config, "", STOP_REASON_USER)
+    await websocket.send_text(_build_stop_reply(STOP_REASON_USER))
+
+    return True
 
 
 async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, partial_text: str, reason: str) -> None:
@@ -402,6 +449,7 @@ async def _call_agent(
         # WebSocketDisconnect, which propagates to the endpoint's handler).
         message = receiver_task.result()
         await _cancel_task(stream_task)
+        await _send_stopped_plan_event(agent, config, websocket)
         await _close_stopped_run(agent, config)
         is_user_stop = STOP_TAG in (_parse_websocket_request(message).tags or [])
         reason = STOP_REASON_USER if is_user_stop else STOP_REASON_NEW_REQUEST

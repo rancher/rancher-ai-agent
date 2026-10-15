@@ -29,6 +29,7 @@ from app.services.agent.planner.agent import (
     _route_next,
     create_planner_agent,
 )
+from app.services.agent.planner import format_stopped_plan_event
 from app.services.agent.planner.prompts import (
     CANCEL_PLAN_REQUEST,
     PLAN_CANCELLED_REPLY,
@@ -944,3 +945,46 @@ class TestAwaitingUserInput:
         assert "Namespace test-ns created" in sent[2]
         assert "Create a pod in the namespace." in sent[2]
         llm.with_structured_output.return_value.ainvoke.assert_awaited_once()
+
+
+class TestStoppedPlanEvent:
+    def _payload(self, event):
+        return json.loads(event[len("<plan>"):-len("</plan>")])
+
+    def test_unfinished_subtasks_are_cancelled(self):
+        subtasks = [
+            {"task": "a", "status": "completed", "agent": "rancher"},
+            {"task": "b", "status": "in_progress", "agent": "fleet"},
+            {"task": "c", "status": "pending", "agent": "rancher"},
+        ]
+
+        payload = self._payload(format_stopped_plan_event(subtasks))
+
+        assert payload["status"] == "cancelled"
+        assert payload["approval"] is False
+        assert [t["status"] for t in payload["tasks"]] == ["completed", "cancelled", "cancelled"]
+        # The planner state is not mutated.
+        assert subtasks[1]["status"] == "in_progress"
+
+    def test_global_status_is_cancelled_even_with_a_failed_subtask(self):
+        subtasks = [
+            {"task": "a", "status": "failed", "agent": "rancher"},
+            {"task": "b", "status": "pending", "agent": "fleet"},
+        ]
+
+        payload = self._payload(format_stopped_plan_event(subtasks))
+
+        assert payload["status"] == "cancelled"
+        assert [t["status"] for t in payload["tasks"]] == ["failed", "cancelled"]
+
+    @pytest.mark.parametrize("subtasks", [
+        None,
+        [],
+        [{"task": "a", "status": "in_progress", "agent": "rancher"}],
+        [
+            {"task": "a", "status": "completed", "agent": "rancher"},
+            {"task": "b", "status": "completed", "agent": "fleet"},
+        ],
+    ])
+    def test_nothing_to_report(self, subtasks):
+        assert format_stopped_plan_event(subtasks) is None

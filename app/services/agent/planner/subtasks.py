@@ -360,10 +360,32 @@ def _plan_status(subtasks: list[dict]) -> str:
     return "in_progress"
 
 
-def _format_plan_event(subtasks: list[dict], approval: bool) -> str:
-    """Render the ``<plan>`` payload streamed to the client for plan-progress events."""
-    payload = {"tasks": subtasks, "approval": approval, "status": _plan_status(subtasks)}
+def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None = None) -> str:
+    """Render the ``<plan>`` payload streamed to the client for plan-progress events.
+
+    The global ``status`` is derived from the subtasks unless given explicitly.
+    """
+    payload = {"tasks": subtasks, "approval": approval, "status": status or _plan_status(subtasks)}
     return f"<plan>{json.dumps(payload)}</plan>"
+
+
+def format_stopped_plan_event(subtasks: list[dict] | None) -> str | None:
+    """Render the ``<plan>`` payload for a plan stopped by the user.
+
+    The plan's global status is ``cancelled`` and every subtask that had not finished
+    (``pending`` or ``in_progress``) is marked ``cancelled`` too. Returns None when there is nothing
+    to report: no plan, a direct handoff (never exposed to the client), or a plan whose
+    subtasks have all finished already.
+    """
+    if not subtasks or _is_direct_handoff(subtasks):
+        return None
+    if not any(st.get("status") in ("pending", "in_progress") for st in subtasks):
+        return None
+    cancelled = [
+        {**st, "status": "cancelled"} if st.get("status") in ("pending", "in_progress") else st
+        for st in subtasks
+    ]
+    return _format_plan_event(cancelled, approval=False, status="cancelled")
 
 
 def _next_subtask_index(subtasks: list[dict]) -> int:

@@ -1,8 +1,59 @@
 # Architecture
 
-The Rancher AI Agent uses a [subagents](https://docs.langchain.com/oss/python/langchain/multi-agent/subagents) architecture built on LangGraph. A single **supervisor agent** receives user requests and delegates work to one or more specialized **child agents** (loaded from AIAgentConfig CRDs). Each child agent is wrapped as a LangChain tool so the supervisor's LLM decides which agent(s) to invoke, coordinates their results, and synthesizes a final response.
+The Rancher AI Agent uses a [subagents](https://docs.langchain.com/oss/python/langchain/multi-agent/subagents) architecture built on LangGraph. Specialized **child agents** are loaded from AIAgentConfig CRDs, each connected to its own MCP server. Depending on how many agents are available to the user and on the deployment configuration, one of three runtime modes is used (see `app/services/agent/factory.py`):
 
-Both supervisor and child agents are constructed with the same `create_agent` factory and share a middleware-based extension model for cross-cutting concerns.
+| Mode | When | How it works |
+|------|------|--------------|
+| **Single agent** | Only one agent is accessible (or only one connects successfully) | The child agent talks to the user directly. |
+| **Supervisor** | Two or more agents, planner mode disabled (default) | A ReAct **supervisor agent** wraps each child agent as a LangChain tool; its LLM decides which agent(s) to invoke, coordinates their results, and synthesizes a final response. |
+| **Planner** | Two or more agents and `PLAN_ENABLED=true` (Helm value `plan.enabled`) | A **planner agent** first builds an explicit plan of subtasks, each assigned to a child agent, executes them sequentially and then reduces the results into a single answer. See [Planner Mode](#planner-mode). |
+
+Child agents and the supervisor are constructed with the same `create_agent` factory and share a middleware-based extension model for cross-cutting concerns. The planner is a custom LangGraph `StateGraph` that orchestrates the same child agents.
+
+---
+
+## Planner Mode
+
+Planner mode (`app/services/agent/planner/`) trades the supervisor's free-form tool-calling loop for an explicit, user-visible plan. It is useful for multi-step requests that span several agents, where the user benefits from seeing (and optionally approving) what will be done before it runs.
+
+### Graph
+
+```mermaid
+graph LR
+    START((start)) --> plan
+    plan -->|multi-step plan, approval enabled| approval
+    plan -->|single subtask or approval disabled| execute
+    plan -->|direct reply / failure| summarize
+    approval -->|yes| execute
+    approval -->|feedback| plan
+    approval -->|no| summarize
+    execute -->|pending subtasks| execute
+    execute -->|all subtasks done| reduce
+    execute -->|single subtask done| ui_tools
+    execute -->|failed / cancelled / waiting for user| summarize
+    reduce --> ui_tools
+    ui_tools --> summarize
+    summarize --> END((end))
+```
+
+| Node | Responsibility |
+|------|----------------|
+| `plan` | Breaks the user request into an ordered list of subtasks, each assigned to the most suitable child agent. Answers directly when no agent is needed (e.g. a greeting). |
+| `approval` | Optionally shows the plan to the user and waits for approval, rejection, or feedback. |
+| `execute` | Runs the next pending subtask in its child agent; loops until every subtask is done. |
+| `reduce` | Synthesizes the results of all subtasks into a single final answer. |
+| `ui_tools` | Selects UI tools for the final answer and attaches them to the reply. |
+| `summarize` | Compresses older planner messages once the conversation grows too long. |
+
+### Key Behaviours
+
+- **Direct handoff** — A plan with a single subtask is treated as a plain delegation: it skips approval, emits no plan events and returns the child's answer as-is, without the reducer.
+- **Sequential execution** — Subtasks run one after another, and each one receives the results of the previous subtasks as context.
+- **Subtask evaluation** — After each subtask, an LLM judges whether the child completed it, needs more information from the user (the plan pauses and the user's next message is forwarded to the child), or failed.
+- **Plan approval** — When `PLAN_APPROVAL_ENABLED=true` (Helm value `planApproval.enabled`), multi-step plans must be approved by the user first. Answering "yes" runs the plan, "no" cancels it, and any other answer is treated as feedback to regenerate the plan.
+- **Failure recovery** — When a subtask fails or is cancelled, the plan stops and the user is offered quick actions: retry the failed step, restart the whole plan, request more details about the failure, or cancel.
+- **Human validation** — Confirmation prompts raised inside a child agent are relayed to the user, just like in supervisor mode (see [Human Validation](#human-validation-human-in-the-loop)).
+- **Progress streaming** — The plan and the status of each subtask are streamed to the UI as `<plan>` events, so the user can follow its execution.
 
 ---
 
@@ -70,6 +121,10 @@ Because the child agent is invoked via `ainvoke()` (not as a subgraph), a `Graph
 The `cancel_human_validation_middleware` (`app/services/agent/middleware/cancel_check.py`) is a `@before_model` middleware registered on both the supervisor and child agents. After a human validation interrupt is resumed with a rejection (anything other than `"yes"`), the child returns a `ToolMessage` with `INTERRUPT_CANCEL_MESSAGE` as its content. On the next LLM turn, this middleware detects that the last message is a cancelled tool message and short-circuits the agent — it jumps directly to the `"end"` node with a cancellation reply, preventing any further LLM calls or tool executions.
 
 This relay pattern allows human-in-the-loop confirmations to originate deep inside a child agent while the client interacts exclusively with the supervisor's interrupt surface.
+
+### Planner Side
+
+The planner relays child interrupts the same way: the confirmation prompt is surfaced at the planner level, the user's response is forwarded to the paused child, and a rejection cancels the plan.
 
 ---
 

@@ -3,11 +3,28 @@
 
 ## Architecture
 
-The system is composed of a **UI Extension** for user interaction, a **ReAct Agent** for intelligent decision-making, and an **MCP Server** that acts as the intermediary between the agent and the Rancher API. 
+The system is composed of a **UI Extension** for user interaction, an **Agent** service for intelligent decision-making, and one or more **MCP Servers** that act as the intermediary between the agent and the Rancher API (or other backends). 
 
-### [ReAct Agent](https://github.com/rancher/rancher-ai-agent)
+### [Agent](https://github.com/rancher/rancher-ai-agent)
 
-The **ReAct Agent** is the orchestrator of the system’s intelligence. It leverages a **Large Language Model (LLM)** as its **reasoning engine**, while the agent itself provides the structure, coordination, and secure execution of actions.
+The **Agent** is the orchestrator of the system’s intelligence. It is built on LangGraph and leverages a **Large Language Model (LLM)** as its **reasoning engine**, while the agent itself provides the structure, coordination, and secure execution of actions.
+
+Specialized **child agents** are defined through `AIAgentConfig` CRDs, each backed by its own MCP server. Depending on the agents available to the user, the Agent runs in one of three modes:
+
+- **Single agent** — only one agent is available, so it talks to the user directly.
+- **Supervisor** (default for multiple agents) — a ReAct supervisor exposes each child agent as a tool and lets the LLM decide which agent(s) to call and how to combine their answers.
+- **Planner** — the request is first broken down into a plan of subtasks, each assigned to a child agent. The plan can optionally be approved by the user, its subtasks are executed sequentially with progress streamed to the UI, and the results are reduced into a single final answer.
+
+#### Enabling Planner Mode
+
+Planner mode and plan approval are disabled by default and can be enabled through the Helm chart values:
+
+```yaml
+plan:
+  enabled: true        # use the planner instead of the supervisor
+planApproval:
+  enabled: true        # ask the user to approve multi-step plans before running them
+```
 
 #### 🧠 LLM (Reasoning Engine)
 - Interprets user inputs expressed in natural language.  
@@ -16,24 +33,24 @@ The **ReAct Agent** is the orchestrator of the system’s intelligence. It lever
 - Synthesizes outputs from tools into clear, human-readable responses.  
 
 #### ⚙️ Agent (Orchestrator)
-- Wraps the LLM with the **ReAct (Reason + Act)**
-- Decides when to let the LLM keep reasoning or when to **act** on its instructions.  
+- Wraps the LLM with the **ReAct (Reason + Act)** loop, or with an explicit plan → execute → reduce flow in planner mode.
+- Decides when to let the LLM keep reasoning or when to **act** on its instructions, delegating work to the appropriate child agents.  
 - Calls external tools (via the MCP Server) as directed by the LLM.  
 - Ensures secure interactions by passing the user’s Rancher token to the MCP server for authentication and authorization.  
 
 #### [MCP Server](https://github.com/rancher/rancher-ai-mcp)
 
-The **MCP Server** acts as a secure, controlled gateway between the ReAct Agent and the Rancher and Kubernetes APIs. Its functions include:
+The **MCP Server** acts as a secure, controlled gateway between the Agent and the Rancher and Kubernetes APIs. Its functions include:
 
-  * **Exposing Tools**: It provides a set of well-defined, safe tools (API endpoints) that the ReAct Agent can call. These tools abstract away the complexity of direct Rancher/Kubernetes API interactions.
+  * **Exposing Tools**: It provides a set of well-defined, safe tools (API endpoints) that the Agent can call. These tools abstract away the complexity of direct Rancher/Kubernetes API interactions.
   * **Interaction with Rancher**: It translates tool calls from the agent into the appropriate API requests to the Rancher management server, retrieving or modifying resources as needed.
 
 ### UI Extension
 
 The **UI Extension** provides the user-facing chat interface within the Rancher dashboard. It is designed to be a seamless part of the Rancher experience and is responsible for:
 
-  * **User Input**: It captures user queries and sends them to the ReAct Agent.
-  * **Displaying Responses**: It receives responses from the ReAct Agent and presents them in a chat-like format.
+  * **User Input**: It captures user queries and sends them to the Agent.
+  * **Displaying Responses**: It receives responses from the Agent and presents them in a chat-like format.
 
 ### UI Tools
 
@@ -48,7 +65,7 @@ For comprehensive documentation on defining, configuring, and using UI tools, se
 
 ## Architecture Documentation
 
-For detailed documentation on the supervisor/child-agents architecture, middleware system, and human validation flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For detailed documentation on the supervisor/child-agents architecture, planner mode, middleware system, and human validation flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## How It Works (Flow)
 

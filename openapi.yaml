@@ -774,7 +774,7 @@ components:
           description: Role of who sent the message. 'agent' is aggregated response from llm/mcp
         message:
           type: string
-          description: The message content. For agent role, multiple messages are concatenated with newlines
+          description: The message content. For agent role, multiple messages are concatenated with newlines. Empty for stopped completion markers.
         context:
           oneOf:
             - type: object
@@ -806,6 +806,11 @@ components:
               input:
                 type: object
                 description: Input parameters for the UI tool
+        stopped:
+          type: string
+          nullable: true
+          description: Indicates that a streaming message was stopped. Contains the reason for stopping (e.g., 'user-stop', 'new-request'). Only present on agent messages that were interrupted. When present on an empty message, it serves as a completion marker for the stopped response.
+          example: ["user-stop", "new-request"]
         createdAt:
           type: integer
           description: Unix timestamp of when the message was created
@@ -823,6 +828,7 @@ components:
         context: "{ 'cluster: 'local'}"
         labels: '{"summary": "Chat summary"}'
         tags: "['welcome']"
+        stopped: "new-request" # Example of a stopped message, only present if the previous message was interrupted
         tools: "[ { 'toolName': 'my_tool', 'input': { 'param1': 'value1' } } ]"
         createdAt: 1767638974
 

@@ -279,7 +279,7 @@ async def test_message_types_have_correct_fields():
     assert "tools" in agent_msg, "AI message should have tools"
     assert len(agent_msg["tools"]) == 1, "AI message should have 1 tool"
     assert agent_msg["tools"][0]["toolName"] == "log_viewer", "AI message should preserve tool info"
-    assert agent_msg["stopped"] is "", "AI message should not be flagged as stopped"
+    assert agent_msg.get("stopped", "") == "", "AI message should not be flagged as stopped"
     # Fields AI should NOT have
     assert "context" not in agent_msg, "AI message should NOT have context from user request"
     assert "labels" not in agent_msg, "AI message should NOT have labels from user request"
@@ -336,3 +336,67 @@ async def test_fetch_messages_includes_stopped_ai_message():
     assert messages[0]["role"] == "agent"
     assert messages[0]["message"] == ""
     assert messages[0]["stopped"] == "user-stop"
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_returns_partial_and_stopped_marker():
+    """When an AI message is stopped with partial content, return both the partial message and an empty stopped marker.
+    
+    This proves that stopped responses always create two message entries:
+    1. The partial/truncated content with the stop reason
+    2. An empty message marking the response as complete/stopped
+    """
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    mock_checkpointer = MagicMock()
+    checkpoint_tuple = MagicMock()
+
+    # User message
+    user_msg = MagicMock(spec=HumanMessage)
+    user_msg.type = "human"
+    user_msg.content = "Stop this response"
+    user_msg.additional_kwargs = {
+        "request_id": "req1",
+        "request_metadata": {"agent": "test-agent", "tags": []},
+        "created_at": "2024-01-01T00:00:00Z",
+    }
+
+    # AI message with partial content AND stopped flag
+    stopped_msg = MagicMock(spec=AIMessage)
+    stopped_msg.type = "ai"
+    stopped_msg.content = "This is a partial response that was "  # Incomplete!
+    stopped_msg.text = "This is a partial response that was "
+    stopped_msg.additional_kwargs = {
+        "stopped": "user-stop",
+        "created_at": "2024-01-01T00:00:01Z",
+        "request_metadata": {"agent": "test-agent", "tags": []},
+    }
+
+    checkpoint_tuple.checkpoint = {
+        "channel_values": {
+            "messages_history": [user_msg, stopped_msg],
+        }
+    }
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)
+
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+
+    messages = await manager.fetch_messages("chat1", "user1", {})
+
+    # Should return 3 messages: user + partial response + empty stopped marker
+    assert len(messages) == 3, f"Expected 3 messages, got {len(messages)}: {messages}"
+    
+    # Message 1: User message
+    assert messages[0]["role"] == "user"
+    assert messages[0]["message"] == "Stop this response"
+    
+    # Message 2: Partial AI response (with content, no stopped flag)
+    assert messages[1]["role"] == "agent"
+    assert messages[1]["message"] == "This is a partial response that was "
+    assert messages[1].get("stopped", "") == "", "Partial message should NOT have stopped flag"
+    
+    # Message 3: Empty stopped marker (proves response was stopped)
+    assert messages[2]["role"] == "agent"
+    assert messages[2]["message"] == "", "Stopped marker should be empty"
+    assert messages[2]["stopped"] == "user-stop", "Stopped marker must have stop reason"

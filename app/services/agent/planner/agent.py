@@ -236,6 +236,11 @@ def create_planner_agent(
 
         if normalized == "no":
             logging.debug("Planner plan was rejected by the user.")
+            # Dispatch cancelled plan event so client receives <plan> update with status='cancelled'
+            dispatch_custom_event(
+                "planner-plan-created",
+                _format_plan_event(subtasks, approval=False, status="cancelled"),
+            )
             return {
                 "subtasks": [],
                 "results": [],

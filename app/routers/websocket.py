@@ -29,7 +29,8 @@ from ..constants import (
     STOP_TAG,
     STOP_CANCEL_REPLY,
     STOP_CONTEXT_REPLY,
-    STOP_REASON_USER,
+    STOP_REASON_MESSAGE_MANUAL,
+    STOP_REASON_PLANNING_MANUAL,
     STOP_REASON_NEW_REQUEST,
 )
 
@@ -347,8 +348,8 @@ async def _cancel_waiting_plan(agent: CompiledStateGraph | SupervisorGraph, conf
     await websocket.send_text("<message>")
     await _send_stopped_plan_event(agent, config, websocket)
     await _close_stopped_run(agent, config, force=True)
-    await _record_stopped_in_history(agent, config, "", STOP_REASON_USER)
-    await websocket.send_text(_build_stop_reply(STOP_REASON_USER))
+    await _record_stopped_in_history(agent, config, "", STOP_REASON_PLANNING_MANUAL)
+    await websocket.send_text(_build_stop_reply(STOP_REASON_PLANNING_MANUAL))
 
     return True
 
@@ -409,7 +410,7 @@ async def _call_agent(
     turn stays valid and does not resume the abandoned request.
     The stopped run is recorded in ``messages_history`` and the client is notified
     with a stop message carrying the reason. If the message carries the ``STOP_TAG``
-    tag it is just a stop request (``user-stop``); otherwise it is a new request
+    tag it is just a stop request (``message-manual-stop``); otherwise it is a new request
     that preempts the current run (``new-request``).
 
     Args:
@@ -450,9 +451,20 @@ async def _call_agent(
         message = receiver_task.result()
         await _cancel_task(stream_task)
         await _send_stopped_plan_event(agent, config, websocket)
-        await _close_stopped_run(agent, config)
+        
+        # Check for plan in progress BEFORE clearing state
         is_user_stop = STOP_TAG in (_parse_websocket_request(message).tags or [])
-        reason = STOP_REASON_USER if is_user_stop else STOP_REASON_NEW_REQUEST
+        reason = STOP_REASON_MESSAGE_MANUAL
+        if is_user_stop:
+            # Only use planning-stop if there's an actual plan with subtasks in progress
+            if isinstance(agent, SupervisorGraph):
+                state = await agent.aget_state(config=config)
+                if state and state.values.get("subtasks"):
+                    reason = STOP_REASON_PLANNING_MANUAL
+        else:
+            reason = STOP_REASON_NEW_REQUEST
+        
+        await _close_stopped_run(agent, config)
         await _record_stopped_in_history(agent, config, "".join(partial_text), reason)
         await websocket.send_text(_build_stop_reply(reason))
 

@@ -10,7 +10,8 @@ INTERRUPT_CANCEL_REPLY = "Previous tool canceled by the user."
 STOP_TAG = "stop"
 
 # Reasons a running execution can be stopped.
-STOP_REASON_USER = "user-stop"
+STOP_REASON_MESSAGE_MANUAL = "message-manual-stop"
+STOP_REASON_PLANNING_MANUAL = "planning-manual-stop"
 STOP_REASON_NEW_REQUEST = "new-request"
 
 # Message injected as the tool result when a running execution is stopped by the user.

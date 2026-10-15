@@ -852,7 +852,7 @@ class TestCallAgentStop:
         websocket.send_text.assert_any_await("<message>")
         # Notified the client that the execution was stopped by the user
         websocket.send_text.assert_any_await(_build_stop_reply(STOP_REASON_USER))
-        assert _build_stop_reply(STOP_REASON_USER) == '<stop-message>{"reason": "user-stop"}</stop-message>'
+        assert _build_stop_reply(STOP_REASON_USER) == '<stop-message>{"reason": "message-manual-stop"}</stop-message>'
 
     @pytest.mark.asyncio
     async def test_normal_completion_no_patch(self):

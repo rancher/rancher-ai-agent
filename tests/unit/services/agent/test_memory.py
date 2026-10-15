@@ -315,7 +315,7 @@ async def test_fetch_messages_includes_stopped_ai_message():
     stopped_msg.content = ""
     stopped_msg.text = ""
     stopped_msg.additional_kwargs = {
-        "stopped": "user-stop",
+        "stopped": "message-manual-stop",
         "created_at": "2024-01-01T00:00:01Z",
         "request_metadata": {"agent": "kubernetes-agent", "tags": []},
     }
@@ -335,7 +335,7 @@ async def test_fetch_messages_includes_stopped_ai_message():
     assert len(messages) == 1
     assert messages[0]["role"] == "agent"
     assert messages[0]["message"] == ""
-    assert messages[0]["stopped"] == "user-stop"
+    assert messages[0]["stopped"] == "message-manual-stop"
 
 
 @pytest.mark.asyncio
@@ -367,7 +367,7 @@ async def test_fetch_messages_returns_partial_and_stopped_marker():
     stopped_msg.content = "This is a partial response that was "  # Incomplete!
     stopped_msg.text = "This is a partial response that was "
     stopped_msg.additional_kwargs = {
-        "stopped": "user-stop",
+        "stopped": "message-manual-stop",
         "created_at": "2024-01-01T00:00:01Z",
         "request_metadata": {"agent": "test-agent", "tags": []},
     }
@@ -399,4 +399,4 @@ async def test_fetch_messages_returns_partial_and_stopped_marker():
     # Message 3: Empty stopped marker (proves response was stopped)
     assert messages[2]["role"] == "agent"
     assert messages[2]["message"] == "", "Stopped marker should be empty"
-    assert messages[2]["stopped"] == "user-stop", "Stopped marker must have stop reason"
+    assert messages[2]["stopped"] == "message-manual-stop", "Stopped marker must have stop reason"

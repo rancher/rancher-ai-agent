@@ -333,6 +333,9 @@ class MemoryManager:
             elif message.type == 'ai' and (message.content != "" or message.additional_kwargs.get("stopped")):
                 request_metadata = message.additional_kwargs.get("request_metadata", {})
 
+                # A stopped message is emitted as two rows (partial text, then an empty marker with
+                # "stopped") so the UI gets the same two messages as the live stream. Written by
+                # _record_stopped_in_history in routers/websocket.py. Keep both in sync.
                 if message.content != "":
                     rows.append({
                         "chatId": chat_id,

@@ -381,6 +381,8 @@ async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, pa
         ):
             history.append(msg)
 
+    # A single stored message yields up to two rows in the memory endpoint (partial text, then
+    # an empty "stopped" marker). See MemoryManager.fetch_messages in services/memory.py. Keep both in sync.
     history.append(
         AIMessage(
             content=partial_text,

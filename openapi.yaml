@@ -809,8 +809,8 @@ components:
         stopped:
           type: string
           nullable: true
-          description: Indicates that a streaming message was stopped. Contains the reason for stopping (e.g., 'user-stop', 'new-request'). Only present on agent messages that were interrupted. When present on an empty message, it serves as a completion marker for the stopped response.
-          example: ["user-stop", "new-request"]
+          description: Indicates that a streaming message was stopped. Contains the reason for stopping (e.g., 'message-manual-stop', 'planning-manual-stop', 'new-request'). Only present on agent messages that were interrupted. When present on an empty message, it serves as a completion marker for the stopped response.
+          example: ["message-manual-stop", "planning-manual-stop", "new-request"]
         createdAt:
           type: integer
           description: Unix timestamp of when the message was created

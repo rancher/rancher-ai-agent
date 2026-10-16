@@ -22,7 +22,7 @@ from app.routers.websocket import (
     _build_stop_reply,
     WebSocketRequest,
 )
-from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_CONTEXT_REPLY, STOP_REASON_USER, STOP_REASON_NEW_REQUEST
+from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_CONTEXT_REPLY, STOP_REASON_PLANNING_MANUAL, STOP_REASON_MESSAGE_MANUAL, STOP_REASON_NEW_REQUEST
 from app.services.agent._constants import NeedsOauth2
 from app.services.agent.supervisor import SupervisorGraph
 from app.services.oauth2.models import OAuth2Canceled
@@ -847,12 +847,12 @@ class TestCallAgentStop:
         # Stopped run recorded in history with the partial streamed text
         mock_record.assert_awaited_once()
         assert mock_record.call_args.args[2] == "partial"
-        assert mock_record.call_args.args[3] == STOP_REASON_USER
+        assert mock_record.call_args.args[3] == STOP_REASON_MESSAGE_MANUAL
         # Opened the message block
         websocket.send_text.assert_any_await("<message>")
         # Notified the client that the execution was stopped by the user
-        websocket.send_text.assert_any_await(_build_stop_reply(STOP_REASON_USER))
-        assert _build_stop_reply(STOP_REASON_USER) == '<stop-message>{"reason": "message-manual-stop"}</stop-message>'
+        websocket.send_text.assert_any_await(_build_stop_reply(STOP_REASON_MESSAGE_MANUAL))
+        assert _build_stop_reply(STOP_REASON_MESSAGE_MANUAL) == '<stop-message>{"reason": "message-manual-stop"}</stop-message>'
 
     @pytest.mark.asyncio
     async def test_normal_completion_no_patch(self):
@@ -968,14 +968,14 @@ class TestRecordStoppedInHistory:
         human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
         agent = self._agent(messages=[human], history=[])
 
-        await _record_stopped_in_history(agent, self._config(), "partial answer", STOP_REASON_USER)
+        await _record_stopped_in_history(agent, self._config(), "partial answer", STOP_REASON_MESSAGE_MANUAL)
 
         history = self._written_history(agent)
         assert len(history) == 2
         assert history[0] is human
         assert isinstance(history[1], AIMessage)
         assert history[1].content == "partial answer"
-        assert history[1].additional_kwargs["stopped"] == STOP_REASON_USER
+        assert history[1].additional_kwargs["stopped"] == STOP_REASON_MESSAGE_MANUAL
         assert history[1].additional_kwargs["request_metadata"] == {"agent": "a", "tags": []}
         assert "created_at" in history[1].additional_kwargs
 
@@ -998,11 +998,11 @@ class TestRecordStoppedInHistory:
         human = HumanMessage(content="question", id="h1", additional_kwargs={"request_id": "req1"})
         agent = self._agent(messages=[old_human, old_ai, human], history=[old_human, old_ai])
 
-        await _record_stopped_in_history(agent, self._config(), "partial", STOP_REASON_USER)
+        await _record_stopped_in_history(agent, self._config(), "partial", STOP_REASON_MESSAGE_MANUAL)
 
         history = self._written_history(agent)
         assert [m.id for m in history[:3]] == ["h0", "a0", "h1"]
-        assert history[3].additional_kwargs["stopped"] == STOP_REASON_USER
+        assert history[3].additional_kwargs["stopped"] == STOP_REASON_MESSAGE_MANUAL
 
 
 class TestCloseStoppedThread:
@@ -1133,7 +1133,8 @@ def _plan_subtasks():
 
 
 def _cancelled_plan_event():
-    tasks = [{**st, "status": "cancelled"} if st["status"] != "completed" else st for st in _plan_subtasks()]
+    # Subtasks keep their original status when plan is cancelled (no status modification)
+    tasks = _plan_subtasks()
     return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled"})}</plan>'
 
 
@@ -1176,7 +1177,7 @@ class TestStoppedPlanEvent:
             await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
 
         plan_index = order.index(_cancelled_plan_event())
-        assert plan_index < order.index("close") < order.index(_build_stop_reply(STOP_REASON_USER))
+        assert plan_index < order.index("close") < order.index(_build_stop_reply(STOP_REASON_MESSAGE_MANUAL))
 
 
 class TestCancelWaitingPlan:
@@ -1200,9 +1201,9 @@ class TestCancelWaitingPlan:
 
         assert result is True
         sent = [c.args[0] for c in websocket.send_text.await_args_list]
-        assert sent == ["<message>", _cancelled_plan_event(), _build_stop_reply(STOP_REASON_USER)]
+        assert sent == ["<message>", _cancelled_plan_event(), _build_stop_reply(STOP_REASON_PLANNING_MANUAL)]
         mock_close.assert_awaited_once_with(agent, {"configurable": {}}, force=True)
-        assert mock_record.call_args.args[3] == STOP_REASON_USER
+        assert mock_record.call_args.args[3] == STOP_REASON_PLANNING_MANUAL
 
     @pytest.mark.asyncio
     async def test_plan_waiting_on_interrupt_is_cancelled(self):
@@ -1215,7 +1216,8 @@ class TestCancelWaitingPlan:
         plan_event = websocket.send_text.await_args_list[1].args[0]
         payload = json.loads(plan_event[len("<plan>"):-len("</plan>")])
         assert payload["status"] == "cancelled"
-        assert all(t["status"] == "cancelled" for t in payload["tasks"])
+        # Subtasks keep their original status (all pending in this case)
+        assert all(t["status"] == "pending" for t in payload["tasks"])
         mock_close.assert_awaited_once()
 
     @pytest.mark.asyncio

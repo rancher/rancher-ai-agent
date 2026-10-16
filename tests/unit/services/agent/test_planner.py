@@ -962,7 +962,8 @@ class TestStoppedPlanEvent:
 
         assert payload["status"] == "cancelled"
         assert payload["approval"] is False
-        assert [t["status"] for t in payload["tasks"]] == ["completed", "cancelled", "cancelled"]
+        # Subtasks keep their original status when plan is cancelled
+        assert [t["status"] for t in payload["tasks"]] == ["completed", "in_progress", "pending"]
         # The planner state is not mutated.
         assert subtasks[1]["status"] == "in_progress"
 
@@ -975,7 +976,8 @@ class TestStoppedPlanEvent:
         payload = self._payload(format_stopped_plan_event(subtasks))
 
         assert payload["status"] == "cancelled"
-        assert [t["status"] for t in payload["tasks"]] == ["failed", "cancelled"]
+        # Subtasks keep their original status when plan is cancelled
+        assert [t["status"] for t in payload["tasks"]] == ["failed", "pending"]
 
     @pytest.mark.parametrize("subtasks", [
         None,

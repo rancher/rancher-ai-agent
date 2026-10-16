@@ -269,8 +269,15 @@ def test_plan_approval_rejected(monkeypatch):
             (second_task, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
-        # The rejection ends the run with nothing streamed to the client.
-        assert rejection_message == "<message></message>"
+        # The rejection ends the run with a cancelled plan event (tasks keep their original pending status).
+        rejection_plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", rejection_message)]
+        assert len(rejection_plans) == 1, "Should contain exactly the cancelled plan"
+        assert rejection_plans[0]["approval"] is False
+        assert rejection_plans[0]["status"] == "cancelled"
+        assert [(t["task"], t["agent"], t["status"]) for t in rejection_plans[0]["tasks"]] == [
+            (first_task, MATH_AGENT_NAME, "pending"),
+            (second_task, CALCULATOR_AGENT_NAME, "pending"),
+        ]
 
         assert len(fake_llm.all_calls) == 1, \
             f"Expected only the planner LLM call, got {len(fake_llm.all_calls)}"

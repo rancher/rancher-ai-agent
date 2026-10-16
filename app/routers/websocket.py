@@ -4,6 +4,7 @@ import logging
 import json
 import asyncio
 from datetime import datetime
+from typing import Any
 
 from ..dependencies import get_llm
 from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
@@ -176,7 +177,6 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                     # triggered OAuth). Passing None lets LangGraph retry from the
                     # saved state rather than starting a new turn.
                     input_data = None
-
 
         except WebSocketDisconnect:
             logging.debug(f"Client disconnected.")
@@ -396,7 +396,7 @@ async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, pa
 
 async def _call_agent(
     agent: CompiledStateGraph,
-    input_data: any, 
+    input_data: Any,
     config: dict,
     websocket: WebSocket,
 ) -> str | None:
@@ -502,7 +502,7 @@ async def _cancel_task(task: asyncio.Task) -> None:
 
 async def _stream_agent_events(
     agent: CompiledStateGraph,
-    input_data: any,
+    input_data: Any,
     config: dict,
     websocket: WebSocket,
     partial_text: list[str] | None = None,
@@ -632,7 +632,7 @@ def _extract_interrupt_value(stream: dict) -> str | None:
         return value or None
     return json.dumps(value)
     
-def _extract_text_from_chunk_content(chunk_content: any) -> str:
+def _extract_text_from_chunk_content(chunk_content: Any) -> str:
     """
     Extracts the text content from a chunk received from the LLM.
 

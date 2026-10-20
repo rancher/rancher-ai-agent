@@ -96,10 +96,19 @@ reference only, NOT part of the subtask to evaluate):
 
 PLANNER_FEEDBACK_SUFFIX = """\
 
-The user reviewed previous versions of this plan and requested changes. Produce a new
-plan that takes ALL of the following feedback into account, in order (later feedback
-refines or overrides earlier feedback):
+The user reviewed previous versions of this plan and requested changes. The latest
+version of the plan shown to the user was:
+{plan}
+
+Produce a new plan that takes ALL of the following feedback into account, in order (later
+feedback refines or overrides earlier feedback):
 {feedback}
+
+Also fill in:
+- "changes": a brief, user-facing explanation (one or two sentences) of what you modified
+  compared to the latest version of the plan shown above.
+- "cancel": true, with an empty "subtasks" list, ONLY if the latest feedback asks to stop,
+  cancel or abort the plan instead of changing it. Otherwise false.
 """
 
 PLANNER_RETRY_SUFFIX = """\

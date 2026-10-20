@@ -47,6 +47,7 @@ from .prompts import (
 )
 from .subtasks import (
     _extract_text,
+    _format_plan,
     _format_plan_event,
     _is_direct_handoff,
     _run_pending_subtask,
@@ -70,6 +71,16 @@ class Plan(BaseModel):
     reply: str | None = Field(
         default=None, description="Direct answer to the user when no subtasks are needed."
     )
+    changes: str | None = Field(
+        default=None,
+        description="Only when revising a previous plan from user feedback: a brief explanation "
+        "for the user of what was modified compared to the previous plan.",
+    )
+    cancel: bool = Field(
+        default=False,
+        description="Only when revising a previous plan from user feedback: true if the user "
+        "asked to stop or cancel the plan instead of changing it.",
+    )
 
 
 class PlannerState(TypedDict):
@@ -83,7 +94,6 @@ class PlannerState(TypedDict):
     feedback: list[str]
     retry: bool
     awaiting_input: bool
-
 
 
 def create_planner_agent(
@@ -151,6 +161,11 @@ def create_planner_agent(
             previous_plan_failure_message,
             previous_plan_cancellation_message,
         )
+
+        if feedback and plan is not None and plan.cancel:
+            logging.debug("Planner plan was cancelled by the user while giving feedback.")
+            return _reject_plan(state.get("subtasks") or [])
+
         additional_kwargs = {"created_at": datetime.now().isoformat()}
         messages = state.get("messages", [])
         last_message = messages[-1] if messages else None
@@ -201,6 +216,10 @@ def create_planner_agent(
 
         subtasks = [subtask.model_dump() for subtask in plan.subtasks]
 
+        # Sent to the client only: the explanation is not stored in the conversation.
+        if feedback and plan.changes:
+            dispatch_custom_event("planner-plan-changes", plan.changes)
+
         # Retrying only the failed step resumes the existing plan, so the results of the
         # subtasks that already completed must survive to feed the retried step and the
         # reducer. A restart or a brand-new plan starts over with no results.
@@ -236,19 +255,7 @@ def create_planner_agent(
 
         if normalized == "no":
             logging.debug("Planner plan was rejected by the user.")
-            # Dispatch cancelled plan event so client receives <plan> update with status='cancelled'
-            dispatch_custom_event(
-                "planner-plan-created",
-                _format_plan_event(subtasks, approval=False, status="cancelled"),
-            )
-            return {
-                "subtasks": [],
-                "results": [],
-                "cancelled": True,
-                "feedback": [],
-                "messages": [AIMessage(content="Plan was not approved by the user.")],
-                "messages_history": [AIMessage(content="Plan was not approved by the user.", additional_kwargs={"created_at": datetime.now().isoformat()})],
-            }
+            return _reject_plan(subtasks)
 
         # Any other response is treated as feedback: accumulate it so successive rounds of
         # feedback all apply, then route back to plan_node to regenerate the plan.
@@ -395,6 +402,23 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
+def _reject_plan(subtasks: list[dict]) -> dict:
+    """Cancel a plan the user did not approve and notify the client."""
+    # Dispatch cancelled plan event so client receives <plan> update with status='cancelled'
+    dispatch_custom_event(
+        "planner-plan-created",
+        _format_plan_event(subtasks, approval=False, status="cancelled"),
+    )
+    return {
+        "subtasks": [],
+        "results": [],
+        "cancelled": True,
+        "feedback": [],
+        "messages": [AIMessage(content="Plan was not approved by the user.")],
+        "messages_history": [AIMessage(content="Plan was not approved by the user.", additional_kwargs={"created_at": datetime.now().isoformat()})],
+    }
+
+
 async def _create_plan(
     llm: BaseChatModel,
     agents_description: str,
@@ -439,7 +463,9 @@ async def _create_plan(
             human_content += PLANNER_CANCEL_SUFFIX.format(details=previous_plan_cancellation_message)
         if feedback:
             joined = "\n".join(f"- {item}" for item in feedback)
-            human_content += PLANNER_FEEDBACK_SUFFIX.format(feedback=joined)
+            human_content += PLANNER_FEEDBACK_SUFFIX.format(
+                plan=_format_plan(state.get("subtasks") or []), feedback=joined
+            )
     else:
         human_content = request
 
@@ -467,14 +493,14 @@ async def _create_plan(
         # "parsing_error": Exception|None}.
         response = cast(dict, response)
         candidate = response.get("parsed")
-        if isinstance(candidate, Plan) and (candidate.subtasks or candidate.reply):
+        if isinstance(candidate, Plan) and (candidate.subtasks or candidate.reply or candidate.cancel):
             plan = candidate
         else:
             # Some models (e.g. gpt-oss-20b on bedrock_converse) emit the plan as
             # plain text/JSON instead of a tool call, so tool-call-based structured
             # output yields parsed=None. Recover the JSON from the raw message text.
             candidate = _parse_plan_from_raw(response.get("raw"))
-            if candidate is not None and (candidate.subtasks or candidate.reply):
+            if candidate is not None and (candidate.subtasks or candidate.reply or candidate.cancel):
                 logging.debug("Planner recovered plan from raw message text.")
                 plan = candidate
 

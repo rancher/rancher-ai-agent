@@ -9,6 +9,7 @@ import pytest
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from pydantic import ValidationError
 
 from app.services.agent._constants import INTERRUPT_CANCEL_MESSAGE
@@ -509,6 +510,16 @@ class TestCreatePlan:
         assert "previous plan attempt failed" not in prompt
 
     @pytest.mark.asyncio
+    async def test_includes_previous_plan_with_feedback(self):
+        llm = _mock_llm(structured_response={"raw": None, "parsed": Plan(subtasks=[], cancel=True)})
+        state = self._state("list clusters", [{"task": "old step", "agent": "a", "status": "pending"}])
+
+        plan, _ = await _create_plan(llm, "", state, feedback=["stop"])
+
+        assert plan is not None and plan.cancel is True
+        assert "old step" in self._human_prompt(llm)
+
+    @pytest.mark.asyncio
     async def test_includes_previous_failure_in_prompt(self):
         expected = Plan(subtasks=[SubTask(task="t", agent="a")])
         llm = _mock_llm(structured_response={"raw": None, "parsed": expected})
@@ -945,6 +956,61 @@ class TestAwaitingUserInput:
         assert "Namespace test-ns created" in sent[2]
         assert "Create a pod in the namespace." in sent[2]
         llm.with_structured_output.return_value.ainvoke.assert_awaited_once()
+
+
+class TestPlanFeedback:
+    """End-to-end planner graph runs where the user gives feedback on the plan."""
+
+    INITIAL = Plan(subtasks=[SubTask(task="one", agent="rancher"), SubTask(task="two", agent="rancher")])
+
+    @staticmethod
+    def _graph(*plans: Plan):
+        llm = _mock_llm()
+        llm.with_structured_output.return_value.ainvoke.side_effect = [
+            {"raw": None, "parsed": plan, "parsing_error": None} for plan in plans
+        ]
+        config = MagicMock()
+        config.name = "rancher"
+        config.description = "Rancher agent"
+        child = ChildAgent(config=config, agent=MagicMock())
+        return create_planner_agent(llm, [child], InMemorySaver())
+
+    @pytest.mark.asyncio
+    async def test_sends_changes_without_storing_them(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
+        revised = Plan(
+            subtasks=[SubTask(task="one", agent="rancher"), SubTask(task="three", agent="rancher")],
+            changes="Replaced step two with step three.",
+        )
+        graph = self._graph(self.INITIAL, revised)
+        config = {"configurable": {"thread_id": "t"}}
+
+        with patch("app.services.agent.planner.agent.dispatch_custom_event") as dispatch:
+            await graph.ainvoke({"messages": [HumanMessage(content="do it")]}, config)
+            await graph.ainvoke(Command(resume="use step three"), config)
+
+        dispatch.assert_called_once_with("planner-plan-changes", "Replaced step two with step three.")
+        state = (await graph.aget_state(config)).values
+        assert [st["task"] for st in state["subtasks"]] == ["one", "three"]
+        stored = [m.content for m in state["messages"] + state["messages_history"]]
+        assert revised.changes not in stored
+
+    @pytest.mark.asyncio
+    async def test_cancel_request_in_feedback_cancels_plan(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
+        graph = self._graph(self.INITIAL, Plan(subtasks=[], cancel=True))
+        config = {"configurable": {"thread_id": "t"}}
+
+        with patch("app.services.agent.planner.agent.dispatch_custom_event") as dispatch:
+            await graph.ainvoke({"messages": [HumanMessage(content="do it")]}, config)
+            state = await graph.ainvoke(Command(resume="stop the plan"), config)
+
+        assert state["cancelled"] is True
+        assert state["subtasks"] == []
+        event_name, payload = dispatch.call_args.args
+        assert event_name == "planner-plan-created"
+        assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))["status"] == "cancelled"
+        assert (await graph.aget_state(config)).interrupts == ()
 
 
 class TestStoppedPlanEvent:

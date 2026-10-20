@@ -181,11 +181,19 @@ class TestFailureReporting:
 
         event_name, payload = dispatch.call_args.args
         assert event_name == "planner-plan-created"
-        assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>")) == {
-            "tasks": subtasks,
-            "approval": False,
-            "status": "failed",
-        }
+        plan = json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))
+        assert plan["approval"] is False
+        assert plan["status"] == "failed"
+        assert len(plan["tasks"]) == 1
+        task = plan["tasks"][0]
+        assert task["task"] == "step"
+        assert task["agent"] == "a"
+        assert task["status"] == "failed"
+        assert task["actions"] == FAILURE_ACTIONS
+        # Verify tools are generated from actions
+        assert "tools" in task
+        assert len(task["tools"]) == 1
+        assert task["tools"][0]["toolName"] == "select-option"
 
 
 class TestRouting:

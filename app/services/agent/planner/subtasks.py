@@ -255,7 +255,6 @@ def _fail_plan(
         RETRY_SUBTASK_REQUEST,
         RESTART_PLAN_REQUEST,
         REQUEST_FAILURE_DETAILS,
-        CANCEL_PLAN_REQUEST,
     ]
     if emit_plan:
         dispatch_custom_event(

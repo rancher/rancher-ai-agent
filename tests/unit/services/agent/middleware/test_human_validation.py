@@ -4,11 +4,14 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain.messages import ToolMessage
+from langgraph.errors import GraphInterrupt
 
 from app.services.agent.middleware.human_validation import (
     _build_interrupt_ui_tools,
     _process_tool_result,
     _should_interrupt,
+    human_validation_middleware,
 )
 
 
@@ -155,7 +158,7 @@ def test_build_ui_tools_creates_show_yaml_for_create_type(mock_dispatch):
     assert result[0]["input"]["resourceName"] == "nginx"
     assert result[0]["input"]["resourceNamespace"] == "default"
     assert result[0]["input"]["yaml"] == {"apiVersion": "apps/v1", "kind": "Deployment"}
-    mock_dispatch.assert_called_once_with(result)
+    mock_dispatch.assert_not_called()
 
 
 @patch("app.services.agent.middleware.human_validation._dispatch_ui_tools")
@@ -178,7 +181,7 @@ def test_build_ui_tools_creates_show_yaml_diff_for_update_type(mock_dispatch):
     assert result[0]["toolName"] == "show-yaml-diff"
     assert result[0]["input"]["original"] == {"spec": {"replicas": 1}}
     assert result[0]["input"]["patched"] == {"spec": {"replicas": 3}}
-    mock_dispatch.assert_called_once_with(result)
+    mock_dispatch.assert_not_called()
 
 
 @patch("app.services.agent.middleware.human_validation._dispatch_ui_tools")
@@ -216,6 +219,69 @@ def test_build_ui_tools_filters_none_values(mock_dispatch):
 
     assert "resourceName" not in result[0]["input"]
     assert "resourceNamespace" not in result[0]["input"]
+
+
+# ---------------------------------------------------------------------------
+# human_validation_middleware (interrupt UI tools dispatch)
+# ---------------------------------------------------------------------------
+
+
+def _make_validation_request():
+    request = MagicMock()
+    request.state = {"selected_agent": {}}
+    request.tool_call = {"name": "applyResource", "args": {}, "id": "call-1"}
+    return request
+
+
+_UPDATE_DATA = {
+    "type": "update",
+    "resource": {"kind": "Service", "name": "my-svc"},
+    "payload": {"original": {"a": 1}, "patched": {"a": 2}},
+}
+
+
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.human_validation._dispatch_ui_tools")
+@patch("app.services.agent.middleware.human_validation.langgraph.types.interrupt")
+@patch("app.services.agent.middleware.human_validation._should_interrupt", new_callable=AsyncMock)
+@patch("app.services.agent.middleware.human_validation.get_config")
+async def test_middleware_dispatches_ui_tools_when_interrupt_raised(
+    mock_get_config, mock_should_interrupt, mock_interrupt, mock_dispatch
+):
+    mock_get_config.return_value = _make_config()
+    mock_should_interrupt.return_value = _make_interrupt_message(_UPDATE_DATA)
+    mock_interrupt.side_effect = GraphInterrupt(())
+    handler = AsyncMock()
+
+    middleware = human_validation_middleware({}, MagicMock(human_validation_tools=["applyResource"]))
+    with pytest.raises(GraphInterrupt):
+        await middleware.awrap_tool_call(_make_validation_request(), handler)
+
+    mock_dispatch.assert_called_once()
+    assert mock_dispatch.call_args.args[0][0]["toolName"] == "show-yaml-diff"
+    handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.human_validation._dispatch_ui_tools")
+@patch("app.services.agent.middleware.human_validation.langgraph.types.interrupt")
+@patch("app.services.agent.middleware.human_validation._should_interrupt", new_callable=AsyncMock)
+@patch("app.services.agent.middleware.human_validation.get_config")
+async def test_middleware_does_not_dispatch_ui_tools_on_resume(
+    mock_get_config, mock_should_interrupt, mock_interrupt, mock_dispatch
+):
+    mock_get_config.return_value = _make_config()
+    mock_should_interrupt.return_value = _make_interrupt_message(_UPDATE_DATA)
+    mock_interrupt.return_value = "yes"
+    handler = AsyncMock(return_value=ToolMessage(content="done", tool_call_id="call-1"))
+
+    middleware = human_validation_middleware({}, MagicMock(human_validation_tools=["applyResource"]))
+    result = await middleware.awrap_tool_call(_make_validation_request(), handler)
+
+    mock_dispatch.assert_not_called()
+    handler.assert_awaited_once()
+    assert result.additional_kwargs["confirmation"] is True
+    assert result.additional_kwargs["ui_tools"][0]["toolName"] == "show-yaml-diff"
 
 
 # ---------------------------------------------------------------------------

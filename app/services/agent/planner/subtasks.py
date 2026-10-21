@@ -101,9 +101,9 @@ async def _run_pending_subtask(
 
             # The user declined the confirmation: cancel the whole plan instead of
             # continuing with the remaining subtasks.
-            if _is_cancelled(result):
+            if cancel_message := _cancelled_tool_message(result):
                 logging.debug("Planner subtask for agent '%s' cancelled by the user", agent_name)
-                return _cancel_plan(subtasks, results, index, task, emit_plan)
+                return _cancel_plan(subtasks, results, index, task, emit_plan, cancel_message)
         else:
             if user_reply is not None:
                 # The subtask is already in progress: forward the user's answer.
@@ -287,6 +287,7 @@ def _cancel_plan(
     index: int,
     task: str,
     emit_plan: bool,
+    cancel_message: ToolMessage | None = None,
 ) -> dict:
     """Stop the plan after the user cancels a subtask and report it to the user.
 
@@ -294,6 +295,10 @@ def _cancel_plan(
     actions, emits a plan-progress event when running a multi-subtask plan, and returns a
     state update that routes the graph to END (via ``cancelled``) with a user-facing
     explanation instead of continuing with the remaining subtasks.
+
+    A direct hand-off is not exposed to the client as a plan, so its history records the
+    child's cancelled ``cancel_message`` (the declined confirmation) instead of a plan
+    cancellation, matching the history of a supervisor run.
     """
     subtasks[index]["status"] = "cancelled"
     subtasks[index]["actions"] = [
@@ -317,7 +322,9 @@ def _cancel_plan(
             )
         ],
         "messages_history": [
-            AIMessage(
+            cancel_message
+            if cancel_message is not None and _is_direct_handoff(subtasks)
+            else AIMessage(
                 content="Plan was canceled by the user.",
                 additional_kwargs={"created_at": datetime.now().isoformat()}
             )
@@ -406,12 +413,12 @@ def _next_subtask_index(subtasks: list[dict]) -> int:
     raise ValueError("No in-progress or pending subtask to run.")
 
 
-def _is_cancelled(result: dict) -> bool:
-    """Return True if the last ToolMessage in a child agent result is the cancellation marker."""
+def _cancelled_tool_message(result: dict) -> ToolMessage | None:
+    """Return the last ToolMessage in a child agent result if it is the cancellation marker."""
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, ToolMessage):
-            return msg.content == INTERRUPT_CANCEL_MESSAGE
-    return False
+            return msg if msg.content == INTERRUPT_CANCEL_MESSAGE else None
+    return None
 
 
 def _is_direct_handoff(subtasks: list) -> bool:

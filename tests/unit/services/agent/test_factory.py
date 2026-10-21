@@ -11,6 +11,7 @@ from contextlib import AsyncExitStack
 from app.services.agent.factory import (
     build_agent,
     NoAgentAvailableError,
+    USER_AGENT,
     create_mcp_client,
     _load_mcp_tools,
     _make_ca_httpx_factory,
@@ -393,7 +394,7 @@ async def test_create_mcp_client_none_auth(mock_mcp_client):
     mock_mcp_client.assert_called_once()
     call_args = mock_mcp_client.call_args[0][0]
     assert call_args["TestAgent"]["url"] == "http://test:8080"
-    assert call_args["TestAgent"]["headers"] == {}
+    assert call_args["TestAgent"]["headers"] == {"User-Agent": USER_AGENT}
 
 
 @pytest.mark.asyncio
@@ -708,6 +709,51 @@ async def test_create_mcp_client_ca_bundle_ref_failure_logs_and_continues(mock_g
     assert result == mock_client_instance
     call_args = mock_mcp_client.call_args[0][0]
     assert "httpx_client_factory" not in call_args["TestAgent"]
+
+
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.get_basic_auth_credentials')
+async def test_create_mcp_client_sets_user_agent_alongside_auth_headers(mock_get_creds, mock_mcp_client):
+    """Verify create_mcp_client identifies itself without dropping authentication headers."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.BASIC
+    mock_config.mcp_url = "http://test:8080"
+    mock_config.authentication_secret = "my-secret"
+
+    mock_get_creds.return_value = "dXNlcjpwYXNz"
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    await create_mcp_client(mock_config)
+
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["headers"]["User-Agent"] == USER_AGENT
+    assert call_args["TestAgent"]["headers"]["Authorization"] == "Basic dXNlcjpwYXNz"
+
+
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.get_header_auth_headers')
+async def test_create_mcp_client_keeps_configured_user_agent(mock_get_headers, mock_mcp_client):
+    """Verify create_mcp_client does not override a User-Agent set through header authentication."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.HEADER
+    mock_config.mcp_url = "http://test:8080"
+    mock_config.authentication_secret = "my-headers-secret"
+
+    mock_get_headers.return_value = {"User-Agent": "custom-agent"}
+
+    mock_client_instance = MagicMock()
+    mock_mcp_client.return_value = mock_client_instance
+
+    await create_mcp_client(mock_config)
+
+    call_args = mock_mcp_client.call_args[0][0]
+    assert call_args["TestAgent"]["headers"]["User-Agent"] == "custom-agent"
 
 
 def test_make_ca_httpx_factory_returns_async_client():

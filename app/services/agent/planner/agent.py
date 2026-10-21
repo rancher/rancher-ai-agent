@@ -67,7 +67,9 @@ class SubTask(BaseModel):
 class Plan(BaseModel):
     """The full plan produced by the planner: an ordered list of subtasks."""
 
-    subtasks: list[SubTask] = Field(description="Ordered list of subtasks to execute.")
+    subtasks: list[SubTask] = Field(
+        default_factory=list, description="Ordered list of subtasks to execute."
+    )
     reply: str | None = Field(
         default=None, description="Direct answer to the user when no subtasks are needed."
     )

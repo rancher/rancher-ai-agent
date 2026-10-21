@@ -415,7 +415,7 @@ def _reject_plan(subtasks: list[dict]) -> dict:
         "cancelled": True,
         "feedback": [],
         "messages": [AIMessage(content="Plan was not approved by the user.")],
-        "messages_history": [AIMessage(content="Plan was not approved by the user.", additional_kwargs={"created_at": datetime.now().isoformat()})],
+        "messages_history": [AIMessage(content="Plan was not approved.", additional_kwargs={"created_at": datetime.now().isoformat()})],
     }
 
 

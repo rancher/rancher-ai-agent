@@ -325,7 +325,7 @@ def _cancel_plan(
             cancel_message
             if cancel_message is not None and _is_direct_handoff(subtasks)
             else AIMessage(
-                content="Plan was canceled by the user.",
+                content="Plan was canceled.",
                 additional_kwargs={"created_at": datetime.now().isoformat()}
             )
         ]

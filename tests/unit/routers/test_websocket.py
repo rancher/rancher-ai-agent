@@ -472,6 +472,13 @@ class TestBuildConfig:
 
 # --- Tests for _resolve_target_agent ---
 
+def _idle_graph():
+    """A supervisor graph mock whose thread is not waiting on an interrupt."""
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(return_value=None)
+    return graph
+
+
 class TestResolveTargetAgent:
     @pytest.mark.asyncio
     async def test_no_agent_requested_returns_supervisor(self):
@@ -494,7 +501,7 @@ class TestResolveTargetAgent:
         child_agent.agent = child_graph
         child_agent.needs_oauth2 = False
         supervisor = SupervisorGraph(
-            graph=MagicMock(),
+            graph=_idle_graph(),
             child_agents={"fleet": child_agent},
         )
         config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
@@ -511,7 +518,7 @@ class TestResolveTargetAgent:
     @pytest.mark.asyncio
     async def test_supervisor_falls_back_for_unknown_child(self):
         supervisor = SupervisorGraph(
-            graph=MagicMock(),
+            graph=_idle_graph(),
             child_agents={"rancher": MagicMock()},
         )
         config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
@@ -525,6 +532,46 @@ class TestResolveTargetAgent:
         # Should fall back to supervisor
         assert result_config is config
         assert result_agent is supervisor
+
+    @staticmethod
+    def _interrupted_supervisor(turn_agent: str):
+        child_agent = MagicMock()
+        child_agent.agent = MagicMock()
+        child_agent.needs_oauth2 = False
+        graph = MagicMock()
+        state = MagicMock()
+        state.interrupts = [MagicMock()]
+        state.values = {"messages": [
+            HumanMessage(content="create pod", additional_kwargs={"request_metadata": {"agent": turn_agent}}),
+            AIMessage(content="", tool_calls=[{"id": "c1", "name": "fleet", "args": {"query": "create pod"}}]),
+        ]}
+        graph.aget_state = AsyncMock(return_value=state)
+        return SupervisorGraph(graph=graph, child_agents={"fleet": child_agent}), child_agent
+
+    @pytest.mark.asyncio
+    async def test_interrupt_raised_by_supervisor_resumes_supervisor(self):
+        """A confirmation answer naming the child agent resumes the supervisor when the supervisor raised the interrupt."""
+        supervisor, _ = self._interrupted_supervisor(turn_agent="")
+        config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
+        ws_request = WebSocketRequest(
+            prompt="no", user_input="no", context={},
+            tags=["confirmation"], labels={}, agent="fleet", ui_tools={}
+        )
+        result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, MagicMock(), MagicMock())
+        assert result_agent is supervisor
+        assert result_config is config
+
+    @pytest.mark.asyncio
+    async def test_interrupt_raised_by_child_turn_resumes_child(self):
+        """When the interrupted turn targeted the child directly, the answer resumes the child."""
+        supervisor, child_agent = self._interrupted_supervisor(turn_agent="fleet")
+        config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
+        ws_request = WebSocketRequest(
+            prompt="no", user_input="no", context={},
+            tags=["confirmation"], labels={}, agent="", ui_tools={}
+        )
+        result_agent, _ = await _resolve_target_agent(supervisor, config, ws_request, MagicMock(), MagicMock())
+        assert result_agent is child_agent.agent
 
 
 # --- Tests for _build_input_data ---
@@ -747,7 +794,7 @@ class TestResolveTargetAgentOAuth2:
         child_agent.config.name = "fleet"
 
         supervisor = SupervisorGraph(
-            graph=MagicMock(),
+            graph=_idle_graph(),
             child_agents={"fleet": child_agent},
         )
         config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
@@ -773,7 +820,7 @@ class TestResolveTargetAgentOAuth2:
         child_agent.config.name = "fleet"
 
         supervisor = SupervisorGraph(
-            graph=MagicMock(),
+            graph=_idle_graph(),
             child_agents={"fleet": child_agent},
         )
         config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}

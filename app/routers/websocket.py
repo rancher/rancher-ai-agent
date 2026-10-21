@@ -762,6 +762,10 @@ async def _resolve_target_agent(
     along with a config using the namespaced thread_id ``<parent>::child::<agent>`` (matching
     the convention used by the supervisor). Otherwise, returns the supervisor agent and the original config.
 
+    If the supervisor thread is waiting on an interrupt, the answer must resume the graph that
+    raised it, so the agent of the interrupted turn is used instead of ``ws_request.agent`` (the
+    client sends the child agent's name when answering a confirmation raised via the supervisor).
+
     Args:
         agent: The supervisor (or single-agent) compiled graph.
         config: The current run config.
@@ -771,6 +775,10 @@ async def _resolve_target_agent(
         A tuple of (target agent graph, config for that agent).
     """
     requested_agent = ws_request.agent
+    if isinstance(agent, SupervisorGraph):
+        state = await agent.aget_state(config=config)
+        if state and state.interrupts:
+            requested_agent = _get_interrupted_turn_agent(state)
     if not requested_agent:
         return agent, config
 
@@ -861,3 +869,12 @@ def _restore_ui_tools_metadata(config: dict, state) -> None:
             if previous_ui_tools:
                 request_metadata["ui_tools"] = previous_ui_tools
             break
+
+
+def _get_interrupted_turn_agent(state) -> str:
+    """Return the agent requested by the HumanMessage that started the interrupted turn ("" for the supervisor)."""
+    for msg in reversed(state.values.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            request_metadata = (getattr(msg, "additional_kwargs", {}) or {}).get("request_metadata", {})
+            return request_metadata.get("agent") or ""
+    return ""

@@ -403,7 +403,8 @@ def _get_default_ai_agent_config_crds() -> list:
                 "humanValidationTools": [
                     "createImportedCluster",
                     "scaleClusterNodePool",
-                    "createK3kCluster"                
+                    "createK3kCluster",
+                    "investigateFailedProvisioningPlanApplication"
                 ]
             }
         }

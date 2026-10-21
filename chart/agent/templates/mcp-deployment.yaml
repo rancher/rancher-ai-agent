@@ -66,6 +66,8 @@ spec:
           - name: no_proxy
             value: "{{ .Values.proxy.noProxy }}"
           {{- end }}
+          - name: TOOLBOX_IMAGE
+            value: "{{ template "system_default_registry" . }}{{ .Values.mcp.toolboxImage.repository }}:{{ .Values.mcp.toolboxImage.tag }}"
         ports:
           - containerPort: 9092
         command: ["/usr/local/bin/mcp"]

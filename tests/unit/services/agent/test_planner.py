@@ -768,7 +768,7 @@ class TestRunPendingSubtask:
         assert subtasks[0]["status"] == "cancelled"
         assert subtasks[0]["actions"] == [RETRY_SUBTASK_REQUEST, RESTART_PLAN_REQUEST]
         dispatch.assert_called_once()
-        assert outcome["messages_history"][0].content == "Plan was canceled by the user."
+        assert outcome["messages_history"][0].content == "Plan was canceled."
 
     @pytest.mark.asyncio
     async def test_declined_confirmation_in_direct_handoff_records_confirmation(self, dispatch):

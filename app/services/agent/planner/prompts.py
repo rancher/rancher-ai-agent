@@ -15,6 +15,10 @@ Rules you MUST follow:
   questions you can answer without tools or cluster data), return an empty "subtasks"
   list and put a short, friendly answer to the user in "reply". The parameters appended
   to the message are never, on their own, a reason to create a subtask.
+- If the message is unclear, meaningless, gibberish or random characters (e.g.
+  "nskjadfsadjkasjfdh"), return an empty "subtasks" list and put a short reply in
+  "reply" asking the user to rephrase or clarify the request. Never leave both
+  "subtasks" and "reply" empty.
 - Otherwise return at least one subtask and leave "reply" empty. If the request is
   simple, return exactly one subtask that covers the whole request.
 - If the request is complex, break it down into as many subtasks as needed so each one

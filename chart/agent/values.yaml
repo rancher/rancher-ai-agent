@@ -25,6 +25,9 @@ ollamaUrl: ""
 googleApiKey:
 openaiApiKey:
 openaiUrl:
+openaiCaSecret: # Optional: Secret in cattle-ai-agent-system containing a PEM CA for the OpenAI endpoint
+  name: ""
+  key: ca.crt
 awsBedrock:
   bearerToken:
   region:

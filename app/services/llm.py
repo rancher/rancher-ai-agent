@@ -1,5 +1,8 @@
 import os
+import ssl
 import logging
+
+import httpx
 
 from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -81,9 +84,10 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
             return ChatOpenAI(model=model, base_url=llm_mock_url)
         
         openai_url = os.environ.get("OPENAI_URL")
+        ca_kwargs = _get_openai_ca_kwargs()
         if openai_url:
-            return ChatOpenAI(model=model, base_url=openai_url)
-        return ChatOpenAI(model=model)
+            return ChatOpenAI(model=model, base_url=openai_url, **ca_kwargs)
+        return ChatOpenAI(model=model, **ca_kwargs)
     if activeLlm == "bedrock":
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
@@ -98,6 +102,38 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
         return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key)
 
     raise ValueError(f"Unsupported LLM provider: {activeLlm}")
+
+
+def _get_openai_ca_kwargs() -> dict:
+    """
+    Builds the HTTP client kwargs for ChatOpenAI when a custom CA is configured.
+
+    The CA is read from the secret referenced by OPENAI_CA_SECRET_NAME (key OPENAI_CA_SECRET_KEY,
+    defaults to ``ca.crt``) and trusted in addition to the system CAs.
+
+    Returns:
+        A dict with ``http_client`` and ``http_async_client``, or an empty dict if no CA is
+        configured or it could not be loaded.
+    """
+    secret_name = os.environ.get("OPENAI_CA_SECRET_NAME")
+    if not secret_name:
+        return {}
+
+    # Imported lazily to avoid a circular import (app.services.agent imports this module).
+    from .agent.loader import get_ca_cert_from_secret
+
+    try:
+        ca_pem = get_ca_cert_from_secret(secret_name, os.environ.get("OPENAI_CA_SECRET_KEY", "ca.crt"))
+        ctx = ssl.create_default_context()  # loads system CAs
+        ctx.load_verify_locations(cadata=ca_pem)
+    except Exception as e:
+        logging.error(f"Failed to load OpenAI CA cert from secret '{secret_name}': {e}")
+        return {}
+
+    return {
+        "http_client": httpx.Client(verify=ctx),
+        "http_async_client": httpx.AsyncClient(verify=ctx),
+    }
 
 
 def get_llm_with_model(model: str) -> BaseChatModel:

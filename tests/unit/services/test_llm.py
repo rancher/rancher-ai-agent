@@ -30,6 +30,34 @@ def test_get_llm_openai(mock_openai):
         mock_openai.assert_called_once_with(model="gpt-4")
         assert llm == mock_openai.return_value
 
+@patch('app.services.llm.httpx')
+@patch('app.services.llm.ssl.create_default_context')
+@patch('app.services.agent.loader.get_ca_cert_from_secret', return_value="PEM")
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_with_custom_ca(mock_openai, mock_get_ca, mock_ssl_ctx, mock_httpx):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_URL": "https://openai.example.com", "OPENAI_CA_SECRET_NAME": "openai-ca", "OPENAI_CA_SECRET_KEY": "my-ca.crt"}, clear=True):
+        llm = get_llm()
+        mock_get_ca.assert_called_once_with("openai-ca", "my-ca.crt")
+        mock_ssl_ctx.return_value.load_verify_locations.assert_called_once_with(cadata="PEM")
+        mock_httpx.Client.assert_called_once_with(verify=mock_ssl_ctx.return_value)
+        mock_httpx.AsyncClient.assert_called_once_with(verify=mock_ssl_ctx.return_value)
+        mock_openai.assert_called_once_with(
+            model="gpt-4",
+            base_url="https://openai.example.com",
+            http_client=mock_httpx.Client.return_value,
+            http_async_client=mock_httpx.AsyncClient.return_value,
+        )
+        assert llm == mock_openai.return_value
+
+@patch('app.services.agent.loader.get_ca_cert_from_secret', side_effect=RuntimeError("not found"))
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_custom_ca_load_failure(mock_openai, mock_get_ca):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca"}, clear=True):
+        llm = get_llm()
+        mock_get_ca.assert_called_once_with("openai-ca", "ca.crt")
+        mock_openai.assert_called_once_with(model="gpt-4")
+        assert llm == mock_openai.return_value
+
 @patch('app.services.llm.ChatOpenAI')
 def test_get_llm_generic_openai(mock_openai):
     with patch.dict(os.environ, {"GENERIC_OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "generic-openai", "GENERIC_OPENAI_URL": "https://api.example.com", "GENERIC_OPENAI_API_KEY": "fake-key"}, clear=True):

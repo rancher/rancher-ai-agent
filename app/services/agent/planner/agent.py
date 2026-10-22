@@ -202,6 +202,12 @@ def create_planner_agent(
                 "messages_history": [request_message, reply],
             }
 
+        if plan is not None and plan.cancel:
+            logging.debug("Planner plan was cancelled.")
+            if plan.changes:
+                dispatch_custom_event("planner-plan-changes", plan.changes)
+            return _reject_plan(state.get("subtasks") or [])
+
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
             dispatch_custom_event(

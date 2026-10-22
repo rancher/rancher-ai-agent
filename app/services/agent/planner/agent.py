@@ -168,7 +168,7 @@ def create_planner_agent(
         # omitted the cancel flag) means there is no plan left to run: cancel it.
         if feedback and (plan is None or plan.cancel or not (plan.subtasks or plan.reply)):
             logging.debug("Planner plan was cancelled by the user while giving feedback.")
-            return _reject_plan(state.get("subtasks") or [])
+            return _reject_plan(state.get("subtasks") or [], "Plan has been canceled.")
 
         additional_kwargs = {"created_at": datetime.now().isoformat()}
         messages = state.get("messages", [])
@@ -206,7 +206,7 @@ def create_planner_agent(
             logging.debug("Planner plan was cancelled.")
             if plan.changes:
                 dispatch_custom_event("planner-plan-changes", plan.changes)
-            return _reject_plan(state.get("subtasks") or [])
+            return _reject_plan(state.get("subtasks") or [], "Plan has been canceled.")
 
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
@@ -265,7 +265,7 @@ def create_planner_agent(
 
         if normalized == "no":
             logging.debug("Planner plan was rejected by the user.")
-            return _reject_plan(subtasks)
+            return _reject_plan(subtasks, "Plan was not approved.")
 
         # Any other response is treated as feedback: accumulate it so successive rounds of
         # feedback all apply, then route back to plan_node to regenerate the plan.
@@ -412,7 +412,7 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
-def _reject_plan(subtasks: list[dict]) -> dict:
+def _reject_plan(subtasks: list[dict], history_message: str) -> dict:
     """Cancel a plan the user did not approve and notify the client."""
     # Dispatch cancelled plan event so client receives <plan> update with status='cancelled'
     dispatch_custom_event(
@@ -425,7 +425,7 @@ def _reject_plan(subtasks: list[dict]) -> dict:
         "cancelled": True,
         "feedback": [],
         "messages": [AIMessage(content="Plan was not approved by the user.")],
-        "messages_history": [AIMessage(content="Plan was not approved.", additional_kwargs={"created_at": datetime.now().isoformat()})],
+        "messages_history": [AIMessage(content=history_message, additional_kwargs={"created_at": datetime.now().isoformat()})],
     }
 
 

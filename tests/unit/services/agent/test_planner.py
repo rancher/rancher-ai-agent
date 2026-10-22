@@ -36,6 +36,7 @@ from app.services.agent.planner.prompts import (
     PLAN_CANCELLED_REPLY,
     PLAN_CANCELLED_PREFIX,
     PLAN_FAILED_PREFIX,
+    PLAN_FAILED_REPLY,
     REQUEST_FAILURE_DETAILS,
     RESTART_PLAN_REQUEST,
     RETRY_SUBTASK_REQUEST,
@@ -1044,6 +1045,23 @@ class TestPlanFeedback:
         assert event_name == "planner-plan-created"
         assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))["status"] == "cancelled"
         assert (await graph.aget_state(config)).interrupts == ()
+
+    @pytest.mark.asyncio
+    async def test_empty_plan_in_feedback_cancels_plan(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
+        graph = self._graph(self.INITIAL, Plan(subtasks=[]))
+        config = {"configurable": {"thread_id": "t"}}
+
+        with patch("app.services.agent.planner.agent.dispatch_custom_event") as dispatch:
+            await graph.ainvoke({"messages": [HumanMessage(content="do it")]}, config)
+            state = await graph.ainvoke(Command(resume="stop"), config)
+
+        assert state["cancelled"] is True
+        assert state["subtasks"] == []
+        event_name, payload = dispatch.call_args.args
+        assert event_name == "planner-plan-created"
+        assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))["status"] == "cancelled"
+        assert PLAN_FAILED_REPLY not in [m.content for m in state["messages"]]
 
 
 class TestStoppedPlanEvent:

@@ -164,7 +164,9 @@ def create_planner_agent(
             previous_plan_cancellation_message,
         )
 
-        if feedback and plan is not None and plan.cancel:
+        # While revising a plan, an empty answer (e.g. the user said "stop" and the LLM
+        # omitted the cancel flag) means there is no plan left to run: cancel it.
+        if feedback and (plan is None or plan.cancel or not (plan.subtasks or plan.reply)):
             logging.debug("Planner plan was cancelled by the user while giving feedback.")
             return _reject_plan(state.get("subtasks") or [])
 

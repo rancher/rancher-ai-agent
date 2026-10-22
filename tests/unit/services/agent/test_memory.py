@@ -400,3 +400,32 @@ async def test_fetch_messages_returns_partial_and_stopped_marker():
     assert messages[2]["role"] == "agent"
     assert messages[2]["message"] == "", "Stopped marker should be empty"
     assert messages[2]["stopped"] == "message-manual-stop", "Stopped marker must have stop reason"
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_skips_ai_message_without_text():
+    """An AIMessage with only non-text content blocks (e.g. a tool_use-only supervisor call) yields no row."""
+    from langchain_core.messages import AIMessage
+
+    mock_checkpointer = MagicMock()
+    checkpoint_tuple = MagicMock()
+
+    tool_call_msg = AIMessage(
+        content=[{"type": "tool_use", "id": "call_1", "name": "fleet", "input": {"query": "create pod"}}],
+        tool_calls=[{"id": "call_1", "name": "fleet", "args": {"query": "create pod"}}],
+        additional_kwargs={"created_at": "2024-01-01T00:00:01Z", "request_metadata": {"agent": "", "tags": []}},
+    )
+
+    checkpoint_tuple.checkpoint = {
+        "channel_values": {
+            "messages_history": [tool_call_msg],
+        }
+    }
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)
+
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+
+    messages = await manager.fetch_messages("chat1", "user1", {})
+
+    assert messages == []

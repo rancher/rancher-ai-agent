@@ -9,6 +9,7 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.callbacks.manager import dispatch_custom_event
 from langchain_core.tools import BaseTool
 from langgraph.config import get_config
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from .._constants import INTERRUPT_CANCEL_MESSAGE
@@ -28,12 +29,12 @@ def human_validation_middleware(
     2. If so, invokes the corresponding planning tool (``<tool_name>Plan``) to produce
        a preview of the intended change (diff / manifest), then calls
        ``langgraph.types.interrupt()`` to pause the graph and surface the prompt to
-       the client.
+       the client. Associated UI tools (e.g. YAML diff viewers) are dispatched via
+       ``_dispatch_ui_tools`` only when the interrupt is first raised, not on resume.
     3. On resume, if the user answered anything other than ``"yes"`` the tool call is
        skipped and a ``ToolMessage`` with ``INTERRUPT_CANCEL_MESSAGE`` is returned so
        that ``cancel_human_validation_middleware`` can end the graph gracefully.
-    4. On confirmation the real tool is executed and any associated UI tools (e.g.
-       YAML diff viewers) are dispatched via ``_dispatch_ui_tools``.
+    4. On confirmation the real tool is executed.
     """
 
     @wrap_tool_call
@@ -72,16 +73,20 @@ def human_validation_middleware(
             try:
                 ui_tools_list = _build_interrupt_ui_tools(interrupt_message, state, config)
             except Exception as e:
-                logging.debug(
-                    f"Could not extract precomputed fields from interrupt message "
-                    f"and dispatch UI tools: {e}"
-                )
+                logging.debug(f"Could not build UI tools from interrupt message: {e}")
             additional_kwargs["ui_tools"] = ui_tools_list
             
-            response = langgraph.types.interrupt({
-                "message": interrupt_message,
-                "ui_tools": ui_tools_list,
-            })
+            try:
+                response = langgraph.types.interrupt({
+                    "message": interrupt_message,
+                    "ui_tools": ui_tools_list,
+                })
+            except GraphInterrupt:
+                # First pass only: on resume the node re-runs and interrupt() returns the
+                # answer instead of raising, so the UI tools are not dispatched a second time.
+                if ui_tools_list:
+                    _dispatch_ui_tools(ui_tools_list)
+                raise
             additional_kwargs["interrupt_message"] = interrupt_message
             additional_kwargs["created_at"] = datetime.now().isoformat()
 
@@ -168,7 +173,7 @@ def _build_interrupt_ui_tools(
     state: dict,
     config: dict,
 ) -> list[dict]:
-    """Build preprocessed UI tools from the interrupt payload and dispatch them."""
+    """Build preprocessed UI tools from the interrupt payload (without dispatching them)."""
     ui_tools_list: list[dict] = []
 
     request_metadata = config.get("configurable", {}).get("request_metadata", {})
@@ -200,9 +205,7 @@ def _build_interrupt_ui_tools(
 
     tool_input = {k: v for k, v in tool_input.items() if v is not None}
 
-    ui_tools_list = [{"toolName": ui_tool_name, "input": tool_input}]
-    _dispatch_ui_tools(ui_tools_list)
-    return ui_tools_list
+    return [{"toolName": ui_tool_name, "input": tool_input}]
 
 def _process_tool_result(tool_result: str | list, state: dict) -> tuple[str, str | None, str | None]:
     """Process the raw tool result, extracting UI context and doc links if present.

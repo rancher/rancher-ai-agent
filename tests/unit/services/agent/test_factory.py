@@ -713,7 +713,7 @@ async def test_create_mcp_client_ca_bundle_ref_failure_logs_and_continues(mock_g
 def test_make_ca_httpx_factory_returns_async_client():
     """Verify _make_ca_httpx_factory returns a factory that produces httpx.AsyncClient."""
     import httpx
-    with patch('app.services.agent.factory.ssl') as mock_ssl:
+    with patch('app.services.agent.loader.ssl') as mock_ssl:
         mock_ctx = MagicMock()
         mock_ssl.create_default_context.return_value = mock_ctx
 

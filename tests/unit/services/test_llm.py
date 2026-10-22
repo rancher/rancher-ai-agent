@@ -31,8 +31,8 @@ def test_get_llm_openai(mock_openai):
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.httpx')
-@patch('app.services.llm.ssl.create_default_context')
-@patch('app.services.agent.loader.get_ca_cert_from_secret', return_value="PEM")
+@patch('app.services.agent.loader.ssl.create_default_context')
+@patch('app.services.llm.get_ca_cert_from_secret', return_value="PEM")
 @patch('app.services.llm.ChatOpenAI')
 def test_get_llm_openai_with_custom_ca(mock_openai, mock_get_ca, mock_ssl_ctx, mock_httpx):
     with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_URL": "https://openai.example.com", "OPENAI_CA_SECRET_NAME": "openai-ca", "OPENAI_CA_SECRET_KEY": "my-ca.crt"}, clear=True):
@@ -49,7 +49,7 @@ def test_get_llm_openai_with_custom_ca(mock_openai, mock_get_ca, mock_ssl_ctx, m
         )
         assert llm == mock_openai.return_value
 
-@patch('app.services.agent.loader.get_ca_cert_from_secret', side_effect=RuntimeError("not found"))
+@patch('app.services.llm.get_ca_cert_from_secret', side_effect=RuntimeError("not found"))
 @patch('app.services.llm.ChatOpenAI')
 def test_get_llm_openai_custom_ca_load_failure(mock_openai, mock_get_ca):
     with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca"}, clear=True):

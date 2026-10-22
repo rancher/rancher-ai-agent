@@ -3,6 +3,7 @@
 import logging
 import base64
 import os
+import ssl
 import urllib3
 
 from enum import Enum
@@ -298,6 +299,13 @@ def get_ca_cert_from_secret(secret_name: str, key: str = "ca.crt") -> str:
         )
 
     return base64.b64decode(secret.data[key]).decode('utf-8')
+
+
+def build_ca_ssl_context(ca_pem: str) -> ssl.SSLContext:
+    """Return an SSL context that trusts both the system CAs and the given PEM CA."""
+    ctx = ssl.create_default_context()
+    ctx.load_verify_locations(cadata=ca_pem)
+    return ctx
 
 
 def _crd_to_agent_config(crd_obj: dict) -> AgentConfig:

@@ -1,5 +1,4 @@
 import os
-import ssl
 import logging
 
 import httpx
@@ -10,6 +9,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.language_models.llms import BaseLanguageModel
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_aws import ChatBedrockConverse
+
+from .agent.loader import get_ca_cert_from_secret, build_ca_ssl_context
 
 class LLMManager:
     """
@@ -119,13 +120,9 @@ def _get_openai_ca_kwargs() -> dict:
     if not secret_name:
         return {}
 
-    # Imported lazily to avoid a circular import (app.services.agent imports this module).
-    from .agent.loader import get_ca_cert_from_secret
-
     try:
         ca_pem = get_ca_cert_from_secret(secret_name, os.environ.get("OPENAI_CA_SECRET_KEY", "ca.crt"))
-        ctx = ssl.create_default_context()  # loads system CAs
-        ctx.load_verify_locations(cadata=ca_pem)
+        ctx = build_ca_ssl_context(ca_pem)
     except Exception as e:
         logging.error(f"Failed to load OpenAI CA cert from secret '{secret_name}': {e}")
         return {}

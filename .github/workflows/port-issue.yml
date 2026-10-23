@@ -72,7 +72,7 @@ jobs:
           # rancher/rke2 title
           # MAJOR_MINOR_MILESTONE=$(echo $MILESTONE | cut -d. -f1,2)
           # NEW_TITLE="[${TYPE} release-${MAJOR_MINOR_MILESTONE}] ${ORIGINAL_TITLE}"
-          ORIGINAL_LABELS=$(gh issue view -R ${GITHUB_REPOSITORY} ${ORIGINAL_ISSUE_NUMBER} --json labels --jq '.labels[].name' | grep -v '^\[zube\]:' | paste -sd "," -)
+          ORIGINAL_LABELS=$(gh issue view -R ${GITHUB_REPOSITORY} ${ORIGINAL_ISSUE_NUMBER} --json labels --jq '[.labels[].name | select(startswith("[zube]:") | not)] | join(",")')
           if [ -n "$ORIGINAL_LABELS" ]; then
               additional_cmd+=("--label")
               additional_cmd+=("${ORIGINAL_LABELS}")

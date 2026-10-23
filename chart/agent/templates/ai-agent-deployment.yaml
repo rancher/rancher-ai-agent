@@ -62,12 +62,18 @@ spec:
                 name: llm-secret
                 key: OPENAI_URL
                 optional: true
-          {{- if .Values.openaiCaSecret.name }}
           - name: OPENAI_CA_SECRET_NAME
-            value: "{{ .Values.openaiCaSecret.name }}"
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: OPENAI_CA_SECRET_NAME
+                optional: true
           - name: OPENAI_CA_SECRET_KEY
-            value: "{{ .Values.openaiCaSecret.key | default "ca.crt" }}"
-          {{- end }}
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: OPENAI_CA_SECRET_KEY
+                optional: true
           - name: OLLAMA_MODEL
             valueFrom:
               configMapKeyRef:

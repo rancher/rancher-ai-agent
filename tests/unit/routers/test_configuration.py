@@ -448,6 +448,40 @@ async def test_update_settings_partial_fields(mock_request):
 
 
 @pytest.mark.asyncio
+async def test_update_settings_openai_ca_secret_stored_in_configmap(mock_request):
+    """Test that the OpenAI CA secret reference is stored in the ConfigMap, not the Secret."""
+    settings = SettingsUpdate(
+        OPENAI_CA_SECRET_NAME="openai-ca",
+        OPENAI_CA_SECRET_KEY="my-ca.crt",
+    )
+
+    mock_configmap = MagicMock()
+    mock_configmap.data = {
+        "OPENAI_CA_SECRET_NAME": "",
+        "OPENAI_CA_SECRET_KEY": "ca.crt",
+    }
+
+    with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
+        with patch("app.routers.configuration.check_k8s_permission", AsyncMock(return_value=True)):
+            with patch("app.routers.configuration.k8s_config.load_incluster_config"):
+                with patch("app.routers.configuration.client.CoreV1Api") as mock_api:
+                    mock_instance = MagicMock()
+                    mock_api.return_value = mock_instance
+                    mock_instance.read_namespaced_secret.return_value = MagicMock(data={})
+                    mock_instance.read_namespaced_config_map.return_value = mock_configmap
+
+                    resp = await config_router.update_settings(settings, mock_request)
+
+                    assert resp.status_code == status.HTTP_200_OK
+                    mock_instance.patch_namespaced_config_map.assert_called_once()
+                    mock_instance.patch_namespaced_secret.assert_not_called()
+                    assert mock_configmap.data == {
+                        "OPENAI_CA_SECRET_NAME": "openai-ca",
+                        "OPENAI_CA_SECRET_KEY": "my-ca.crt",
+                    }
+
+
+@pytest.mark.asyncio
 async def test_update_settings_nonexistent_field(mock_request):
     """Test updating a field that doesn't exist in the secret or configmap."""
     settings = SettingsUpdate(OPENAI_API_KEY="new-key")

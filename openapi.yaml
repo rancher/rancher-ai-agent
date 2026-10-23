@@ -953,6 +953,12 @@ components:
         PLAN_APPROVAL_ENABLED:
           type: string
           description: Whether plan approval is required before execution
+        OPENAI_CA_SECRET_NAME:
+          type: string
+          description: Name of the secret in cattle-ai-agent-system containing a PEM CA for the OpenAI endpoint
+        OPENAI_CA_SECRET_KEY:
+          type: string
+          description: Key in the OpenAI CA secret holding the PEM CA (defaults to ca.crt)
       example:
         ACTIVE_LLM: openai
         OPENAI_API_KEY: sk-...

@@ -12,3 +12,5 @@ data:
   ACTIVE_LLM: "{{ .Values.activeLlm }}"
   PLAN_ENABLED: "{{ .Values.plan.enabled }}"
   PLAN_APPROVAL_ENABLED: "{{ .Values.planApproval.enabled }}"
+  OPENAI_CA_SECRET_NAME: "{{ .Values.openaiCaSecret.name }}"
+  OPENAI_CA_SECRET_KEY: "{{ .Values.openaiCaSecret.key | default "ca.crt" }}"

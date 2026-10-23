@@ -125,7 +125,7 @@ def _get_openai_ca_kwargs() -> dict:
     if not secret_name:
         return {}
 
-    cache_key = (secret_name, os.environ.get("OPENAI_CA_SECRET_KEY", "ca.crt"))
+    cache_key = (secret_name, os.environ.get("OPENAI_CA_SECRET_KEY") or "ca.crt")
     if cache_key not in _openai_ca_clients:
         try:
             ca_pem = get_ca_cert_from_secret(*cache_key)

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import asynccontextmanager
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
+from .services.llm import close_openai_ca_clients
 from .routers import agent, configuration, chat, llm, websocket, ui, oauth2
 from .controllers.ai_agent_config import create_kopf_manager
 
@@ -101,6 +102,7 @@ async def lifespan(app: FastAPI):
 
     app.kopf_manager.stop()
     await app.memory_manager.destroy()
+    await close_openai_ca_clients()
     
 app = FastAPI(lifespan=lifespan)
 

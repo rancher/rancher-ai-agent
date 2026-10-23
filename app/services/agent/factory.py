@@ -1,11 +1,22 @@
 import os
-import ssl
 import logging
 from datetime import datetime, timezone
 
 import httpx
 from kubernetes import client
-from .loader import AuthenticationType, load_agent_configs, AgentConfig, get_basic_auth_credentials, get_header_auth_headers, get_ca_cert_from_secret, _load_k8s_config
+
+from .loader import (
+    AuthenticationType,
+    load_agent_configs,
+    AgentConfig,
+    get_basic_auth_credentials,
+    get_header_auth_headers,
+    get_ca_cert_from_secret,
+    build_ca_ssl_context,
+    _load_k8s_config,
+)
+from .planner import create_planner_agent
+from ..rbac import accessible_agent_configs, rbac_enabled, RBACError
 from ..oauth2 import get_oauth_cookie_names
 from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
@@ -282,8 +293,7 @@ def _make_ca_httpx_factory(ca_pem: str):
     The factory follows the ``McpHttpClientFactory`` protocol expected by
     ``langchain-mcp-adapters`` / the MCP Python SDK.
     """
-    ctx = ssl.create_default_context()  # loads system CAs
-    ctx.load_verify_locations(cadata=ca_pem)
+    ctx = build_ca_ssl_context(ca_pem)
 
     def factory(
         headers: dict[str, str] | None = None,

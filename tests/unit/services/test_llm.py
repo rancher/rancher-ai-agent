@@ -1,13 +1,21 @@
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 
+import app.services.llm as llm_module
 from app.services.llm import (
     get_llm,
     get_active_llm,
     get_llm_model,
+    close_openai_ca_clients,
 )
+
+@pytest.fixture(autouse=True)
+def clear_openai_ca_clients():
+    llm_module._openai_ca_clients.clear()
+    yield
+    llm_module._openai_ca_clients.clear()
 
 @patch('app.services.llm.ChatOllama')
 def test_get_llm_ollama(mock_chat_ollama):
@@ -29,6 +37,87 @@ def test_get_llm_openai(mock_openai):
         llm = get_llm()
         mock_openai.assert_called_once_with(model="gpt-4")
         assert llm == mock_openai.return_value
+
+@patch('app.services.llm.httpx')
+@patch('app.services.agent.loader.ssl.create_default_context')
+@patch('app.services.llm.get_ca_cert_from_secret', return_value="PEM")
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_with_custom_ca(mock_openai, mock_get_ca, mock_ssl_ctx, mock_httpx):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_URL": "https://openai.example.com", "OPENAI_CA_SECRET_NAME": "openai-ca", "OPENAI_CA_SECRET_KEY": "my-ca.crt"}, clear=True):
+        llm = get_llm()
+        mock_get_ca.assert_called_once_with("openai-ca", "my-ca.crt")
+        mock_ssl_ctx.return_value.load_verify_locations.assert_called_once_with(cadata="PEM")
+        mock_httpx.Client.assert_called_once_with(verify=mock_ssl_ctx.return_value)
+        mock_httpx.AsyncClient.assert_called_once_with(verify=mock_ssl_ctx.return_value)
+        mock_openai.assert_called_once_with(
+            model="gpt-4",
+            base_url="https://openai.example.com",
+            http_client=mock_httpx.Client.return_value,
+            http_async_client=mock_httpx.AsyncClient.return_value,
+        )
+        assert llm == mock_openai.return_value
+
+@patch('app.services.llm.get_ca_cert_from_secret', side_effect=RuntimeError("not found"))
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_custom_ca_load_failure(mock_openai, mock_get_ca):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca"}, clear=True):
+        llm = get_llm()
+        mock_get_ca.assert_called_once_with("openai-ca", "ca.crt")
+        mock_openai.assert_called_once_with(model="gpt-4")
+        assert llm == mock_openai.return_value
+
+@patch('app.services.llm.httpx')
+@patch('app.services.agent.loader.ssl.create_default_context')
+@patch('app.services.llm.get_ca_cert_from_secret', return_value="PEM")
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_custom_ca_empty_key_defaults(mock_openai, mock_get_ca, mock_ssl_ctx, mock_httpx):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca", "OPENAI_CA_SECRET_KEY": ""}, clear=True):
+        get_llm()
+        mock_get_ca.assert_called_once_with("openai-ca", "ca.crt")
+
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_custom_ca_empty_name_skipped(mock_openai):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "", "OPENAI_CA_SECRET_KEY": "ca.crt"}, clear=True):
+        get_llm()
+        mock_openai.assert_called_once_with(model="gpt-4")
+
+@patch('app.services.llm.httpx')
+@patch('app.services.agent.loader.ssl.create_default_context')
+@patch('app.services.llm.get_ca_cert_from_secret', return_value="PEM")
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_custom_ca_clients_are_shared(mock_openai, mock_get_ca, mock_ssl_ctx, mock_httpx):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca"}, clear=True):
+        get_llm()
+        get_llm(model_override="gpt-4o")
+        mock_get_ca.assert_called_once_with("openai-ca", "ca.crt")
+        mock_httpx.Client.assert_called_once()
+        mock_httpx.AsyncClient.assert_called_once()
+        assert mock_openai.call_count == 2
+        for call in mock_openai.call_args_list:
+            assert call.kwargs["http_client"] is mock_httpx.Client.return_value
+            assert call.kwargs["http_async_client"] is mock_httpx.AsyncClient.return_value
+
+@patch('app.services.llm.get_ca_cert_from_secret', side_effect=RuntimeError("not found"))
+@patch('app.services.llm.ChatOpenAI')
+def test_get_llm_openai_custom_ca_load_failure_is_retried(mock_openai, mock_get_ca):
+    with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca"}, clear=True):
+        get_llm()
+        get_llm()
+        assert mock_get_ca.call_count == 2
+        assert llm_module._openai_ca_clients == {}
+
+@pytest.mark.asyncio
+async def test_close_openai_ca_clients():
+    http_client = MagicMock()
+    http_async_client = MagicMock()
+    http_async_client.aclose = AsyncMock()
+    llm_module._openai_ca_clients[("openai-ca", "ca.crt")] = (http_client, http_async_client)
+
+    await close_openai_ca_clients()
+
+    http_client.close.assert_called_once()
+    http_async_client.aclose.assert_awaited_once()
+    assert llm_module._openai_ca_clients == {}
 
 @patch('app.services.llm.ChatOpenAI')
 def test_get_llm_generic_openai(mock_openai):

@@ -62,6 +62,18 @@ spec:
                 name: llm-secret
                 key: OPENAI_URL
                 optional: true
+          - name: OPENAI_CA_SECRET_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: OPENAI_CA_SECRET_NAME
+                optional: true
+          - name: OPENAI_CA_SECRET_KEY
+            valueFrom:
+              configMapKeyRef:
+                name: llm-config
+                key: OPENAI_CA_SECRET_KEY
+                optional: true
           - name: OLLAMA_MODEL
             valueFrom:
               configMapKeyRef:

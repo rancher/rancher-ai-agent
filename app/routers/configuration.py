@@ -17,7 +17,7 @@ AGENT_NAMESPACE = "cattle-ai-agent-system"
 SETTINGS_SECRET_NAME = "llm-secret"
 SETTINGS_CONFIGMAP_NAME = "llm-config"
 # Fields stored in the ConfigMap (plain text) rather than the Secret
-CONFIGMAP_FIELDS = {"OLLAMA_MODEL", "BEDROCK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "GENERIC_OPENAI_MODEL", "ACTIVE_LLM"}
+CONFIGMAP_FIELDS = {"OLLAMA_MODEL", "BEDROCK_MODEL", "OPENAI_MODEL", "GEMINI_MODEL", "GENERIC_OPENAI_MODEL", "ACTIVE_LLM", "OPENAI_CA_SECRET_NAME", "OPENAI_CA_SECRET_KEY"}
 
 AVAILABLE_LLM_PROVIDERS = {"ollama", "openai", "gemini", "bedrock", "generic-openai"}
 
@@ -80,6 +80,8 @@ class SettingsUpdate(BaseModel):
     AWS_BEARER_TOKEN_BEDROCK: str = None
     GENERIC_OPENAI_URL: str = None
     GENERIC_OPENAI_API_KEY: str = None
+    OPENAI_CA_SECRET_NAME: str = None
+    OPENAI_CA_SECRET_KEY: str = None
 async def check_k8s_permission(
     user_id: str,
     verb: str,

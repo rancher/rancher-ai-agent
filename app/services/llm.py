@@ -105,12 +105,17 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
     raise ValueError(f"Unsupported LLM provider: {activeLlm}")
 
 
+# Shared HTTP clients for ChatOpenAI with a custom CA, keyed by (secret name, secret key).
+_openai_ca_clients: dict[tuple[str, str], tuple[httpx.Client, httpx.AsyncClient]] = {}
+
+
 def _get_openai_ca_kwargs() -> dict:
     """
     Builds the HTTP client kwargs for ChatOpenAI when a custom CA is configured.
 
     The CA is read from the secret referenced by OPENAI_CA_SECRET_NAME (key OPENAI_CA_SECRET_KEY,
-    defaults to ``ca.crt``) and trusted in addition to the system CAs.
+    defaults to ``ca.crt``) and trusted in addition to the system CAs. The clients are created
+    once and shared by every ChatOpenAI instance; they are closed by ``close_openai_ca_clients``.
 
     Returns:
         A dict with ``http_client`` and ``http_async_client``, or an empty dict if no CA is
@@ -120,17 +125,29 @@ def _get_openai_ca_kwargs() -> dict:
     if not secret_name:
         return {}
 
-    try:
-        ca_pem = get_ca_cert_from_secret(secret_name, os.environ.get("OPENAI_CA_SECRET_KEY", "ca.crt"))
-        ctx = build_ca_ssl_context(ca_pem)
-    except Exception as e:
-        logging.error(f"Failed to load OpenAI CA cert from secret '{secret_name}': {e}")
-        return {}
+    cache_key = (secret_name, os.environ.get("OPENAI_CA_SECRET_KEY", "ca.crt"))
+    if cache_key not in _openai_ca_clients:
+        try:
+            ca_pem = get_ca_cert_from_secret(*cache_key)
+            ctx = build_ca_ssl_context(ca_pem)
+        except Exception as e:
+            logging.error(f"Failed to load OpenAI CA cert from secret '{secret_name}': {e}")
+            return {}
+        _openai_ca_clients[cache_key] = (httpx.Client(verify=ctx), httpx.AsyncClient(verify=ctx))
 
+    http_client, http_async_client = _openai_ca_clients[cache_key]
     return {
-        "http_client": httpx.Client(verify=ctx),
-        "http_async_client": httpx.AsyncClient(verify=ctx),
+        "http_client": http_client,
+        "http_async_client": http_async_client,
     }
+
+
+async def close_openai_ca_clients() -> None:
+    """Closes the shared OpenAI custom-CA HTTP clients, if any were created."""
+    for http_client, http_async_client in _openai_ca_clients.values():
+        http_client.close()
+        await http_async_client.aclose()
+    _openai_ca_clients.clear()
 
 
 def get_llm_with_model(model: str) -> BaseChatModel:

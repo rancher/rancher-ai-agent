@@ -10,3 +10,5 @@ data:
   BEDROCK_MODEL: "{{ .Values.bedrockLlmModel }}"
   GENERIC_OPENAI_MODEL: "{{ .Values.genericOpenaiLlmModel }}"
   ACTIVE_LLM: "{{ .Values.activeLlm }}"
+  OPENAI_CA_SECRET_NAME: "{{ .Values.openaiCaSecret.name }}"
+  OPENAI_CA_SECRET_KEY: "{{ .Values.openaiCaSecret.key | default "ca.crt" }}"

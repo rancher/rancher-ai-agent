@@ -7,15 +7,15 @@ on:
 
 permissions: {}
 
-# Serializes runs that write to the same supported-versions.txt on main
 concurrency:
-  group: update-supported-versions-${{ github.ref_name }} # or a static string if updating the same target branch
+  group: update-supported-versions-main
   cancel-in-progress: false
 
 jobs:
   update-versions:
     permissions:
       contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout supported-versions.txt from main
@@ -28,29 +28,36 @@ jobs:
             supported-versions.txt
           sparse-checkout-cone-mode: false
 
-      - name: Append and sort tag
+      - name: Update versions, push branch, and open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          BRANCH="chore/update-versions-${TAG}"
           FILE="supported-versions.txt"
-          touch "${FILE}"
 
-          # Append if tag is not already present
+          touch "${FILE}"
           if ! grep -Fxq "${TAG}" "${FILE}"; then
             echo "${TAG}" >> "${FILE}"
           fi
-
-          # Sort uniquely using version-sort
           sort -u -V "${FILE}" -o "${FILE}"
 
-      - name: Commit and push changes
-        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add supported-versions.txt
+          git checkout -b "${BRANCH}"
+          git add "${FILE}"
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update supported-versions.txt with ${GITHUB_REF_NAME} [skip ci]"
-            # Fetch and rebase before pushing in case another run just finished
-            git pull --rebase origin main
-            git push origin main
+            git commit -m "chore: update supported-versions.txt with ${TAG} [skip ci]"
+            git push -u origin "${BRANCH}" --force
+
+            # Create PR if one does not already exist for this branch
+            if ! gh pr view "${BRANCH}" &>/dev/null; then
+              gh pr create \
+                --base main \
+                --head "${BRANCH}" \
+                --title "chore: update supported-versions.txt with ${TAG}" \
+                --body "Automated PR created on tag push \`${TAG}\` to update \`supported-versions.txt\`."
+            fi
           fi

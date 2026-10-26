@@ -13,7 +13,7 @@ from langchain_core.language_models.base import LanguageModelInput
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.tools import BaseTool
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from app.main import app
 from app.services.agent.child import CHILD_TOOL_USE_INSTRUCTIONS as _CHILD_TOOL_USE_INSTRUCTIONS
@@ -65,7 +65,7 @@ def serve_mock_mcp(name: str, port: int, tools: list[Callable], require_bearer: 
     """
     import uvicorn
 
-    mcp = FastMCP(name)
+    mcp = MCPServer(name)
     for tool in tools:
         mcp.add_tool(tool)
     asgi_app = mcp.streamable_http_app()

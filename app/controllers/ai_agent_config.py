@@ -173,7 +173,7 @@ async def _validate(agent_config: AgentConfig) -> None:
     client = await create_mcp_client(agent_config)
 
     # Test the connection by fetching available tools
-    await client.get_tools()
+    await client.list_tools()
 
 
 @kopf.on.resume('ai.cattle.io', 'v1alpha1', 'aiagentconfigs',  backoff=5.0, timeout=3600.0)

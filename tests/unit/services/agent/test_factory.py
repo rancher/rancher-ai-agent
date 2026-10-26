@@ -11,9 +11,10 @@ from contextlib import AsyncExitStack
 from app.services.agent.factory import (
     build_agent,
     NoAgentAvailableError,
+    NeedsOauth2,
     create_mcp_client,
     _load_mcp_tools,
-    _make_ca_httpx_factory,
+    _OAuth2BearerAuth,
 )
 from app.services.agent.loader import AuthenticationType
 
@@ -105,7 +106,7 @@ async def test_build_agent_three_agents(mock_update_status, mock_create_client, 
     # Mock MCP client
     mock_client_instance = MagicMock()
     mock_tools = [MagicMock()]
-    mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
+    mock_client_instance.list_tools = AsyncMock(return_value=mock_tools)
     mock_create_client.return_value = mock_client_instance
     
     mock_parent_agent = MagicMock()
@@ -170,15 +171,15 @@ async def test_build_agent_filters_tools_by_toolset(mock_update_status, mock_cre
     # Create mock tools with metadata
     tool_rancher_core = MagicMock()
     tool_rancher_core.name = "rancher_tool"
-    tool_rancher_core.metadata = {"_meta": {"toolset": "rancher-core"}}
+    tool_rancher_core.metadata = {"mcp": {"tool": {"_meta": {"toolset": "rancher-core"}}}}
     
     tool_rancher_extensions = MagicMock()
     tool_rancher_extensions.name = "extensions_tool"
-    tool_rancher_extensions.metadata = {"_meta": {"toolset": "rancher-extensions"}}
+    tool_rancher_extensions.metadata = {"mcp": {"tool": {"_meta": {"toolset": "rancher-extensions"}}}}
     
     tool_fleet = MagicMock()
     tool_fleet.name = "fleet_tool"
-    tool_fleet.metadata = {"_meta": {"toolset": "fleet"}}
+    tool_fleet.metadata = {"mcp": {"tool": {"_meta": {"toolset": "fleet"}}}}
     
     tool_no_toolset = MagicMock()
     tool_no_toolset.name = "generic_tool"
@@ -187,7 +188,7 @@ async def test_build_agent_filters_tools_by_toolset(mock_update_status, mock_cre
     all_tools = [tool_rancher_core, tool_rancher_extensions, tool_fleet, tool_no_toolset]
     
     mock_client_instance = MagicMock()
-    mock_client_instance.get_tools = AsyncMock(return_value=all_tools)
+    mock_client_instance.list_tools = AsyncMock(return_value=all_tools)
     mock_create_client.return_value = mock_client_instance
     
     mock_parent_agent = MagicMock()
@@ -263,14 +264,14 @@ async def test_build_agent_one_fails_mcp_connection(mock_update_status, mock_cre
     # Mock MCP client - first one fails, others succeed
     # Create three different client instances
     mock_client_fail = MagicMock()
-    mock_client_fail.get_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
+    mock_client_fail.list_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
     
     mock_client_success1 = MagicMock()
     mock_tools = [MagicMock()]
-    mock_client_success1.get_tools = AsyncMock(return_value=mock_tools)
+    mock_client_success1.list_tools = AsyncMock(return_value=mock_tools)
     
     mock_client_success2 = MagicMock()
-    mock_client_success2.get_tools = AsyncMock(return_value=mock_tools)
+    mock_client_success2.list_tools = AsyncMock(return_value=mock_tools)
     
     # Return different clients on each call
     mock_create_client.side_effect = [mock_client_fail, mock_client_success1, mock_client_success2]
@@ -340,7 +341,7 @@ async def test_build_agent_all_fail_mcp_connection(mock_update_status, mock_crea
     
     # Mock MCP client - all fail
     mock_client_fail = MagicMock()
-    mock_client_fail.get_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
+    mock_client_fail.list_tools = AsyncMock(side_effect=Exception("Connection refused: invalid MCP URL"))
     
     mock_create_client.return_value = mock_client_fail
     
@@ -375,32 +376,39 @@ async def test_build_agent_no_configs_raises_error(mock_load_configs):
 # create_mcp_client Tests
 # ============================================================================
 
+@pytest.fixture
+def mock_adapter():
+    """Stub out the FastMCP client and MCPAdapter wrapping the transport built by create_mcp_client."""
+    with patch('app.services.agent.factory.Client') as mock_client_cls, \
+         patch('app.services.agent.factory.MCPAdapter') as mock_adapter_cls:
+        yield mock_adapter_cls, mock_client_cls
+
+
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
-async def test_create_mcp_client_none_auth(mock_mcp_client):
+@patch('app.services.agent.factory.StreamableHttpTransport')
+async def test_create_mcp_client_none_auth(mock_transport, mock_adapter):
     """Verify create_mcp_client with no authentication."""
+    mock_adapter_cls, mock_client_cls = mock_adapter
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.NONE
     mock_config.mcp_url = "http://test:8080"
-    
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
-    
+    mock_config.ca_bundle_ref = None
+
     result = await create_mcp_client(mock_config)
-    
-    assert result == mock_client_instance
-    mock_mcp_client.assert_called_once()
-    call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "http://test:8080"
-    assert call_args["TestAgent"]["headers"] == {}
+
+    assert result is mock_adapter_cls.return_value
+    mock_client_cls.assert_called_once_with(mock_transport.return_value)
+    mock_adapter_cls.assert_called_once_with(mock_client_cls.return_value)
+    mock_transport.assert_called_once_with("http://test:8080", headers={}, auth=None, verify=None)
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch.dict(os.environ, {'RANCHER_URL': 'https://rancher.example.com', 'RANCHER_API_TOKEN': 'test-token', 'INSECURE_SKIP_TLS': 'false'})
-async def test_create_mcp_client_rancher_auth_with_websocket(mock_mcp_client):
+async def test_create_mcp_client_rancher_auth_with_websocket(mock_transport, mock_adapter):
     """Verify create_mcp_client handles Rancher authentication correctly."""
+    mock_adapter_cls, _ = mock_adapter
     mock_websocket = MagicMock()
     mock_websocket.cookies = {"R_SESS": "cookie-token"}
     mock_websocket.url.hostname = "rancher.local"
@@ -409,80 +417,71 @@ async def test_create_mcp_client_rancher_auth_with_websocket(mock_mcp_client):
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.RANCHER
     mock_config.mcp_url = "mcp-service:8080"
-    
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
+    mock_config.ca_bundle_ref = None
     
     result = await create_mcp_client(mock_config, mock_websocket)
     
-    assert result == mock_client_instance
-    call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "https://mcp-service:8080"
-    assert call_args["TestAgent"]["headers"]['R_token'] == 'test-token'
+    assert result is mock_adapter_cls.return_value
+    call_args = mock_transport.call_args
+    assert call_args.args[0] == "https://mcp-service:8080"
+    assert call_args.kwargs["headers"]['R_token'] == 'test-token'
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch.dict(os.environ, {'INSECURE_SKIP_TLS': 'true', 'MCP_URL': 'mcp:8080'})
-async def test_create_mcp_client_insecure(mock_mcp_client):
+async def test_create_mcp_client_insecure(mock_transport, mock_adapter):
     """Verify create_mcp_client respects INSECURE_SKIP_TLS by disabling TLS verification."""
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.RANCHER
     mock_config.mcp_url = "mcp-service:8080"
 
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
+    await create_mcp_client(mock_config)
 
-    result = await create_mcp_client(mock_config)
-
-    call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "http://mcp:8080"
-    assert call_args["TestAgent"]["httpx_client_factory"] is not None
+    call_args = mock_transport.call_args
+    assert call_args.args[0] == "http://mcp:8080"
+    assert call_args.kwargs["verify"] is False
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch.dict(os.environ, {'INSECURE_SKIP_TLS': 'true', 'MCP_URL': 'https://mcp:8080'})
-async def test_create_mcp_client_insecure_with_existing_scheme(mock_mcp_client):
+async def test_create_mcp_client_insecure_with_existing_scheme(mock_transport, mock_adapter):
     """Verify create_mcp_client preserves an existing URL scheme."""
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.RANCHER
     mock_config.mcp_url = "mcp-service:8080"
     
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
+    await create_mcp_client(mock_config)
     
-    result = await create_mcp_client(mock_config)
-    
-    call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "https://mcp:8080"
-    assert call_args["TestAgent"]["httpx_client_factory"] is not None
+    call_args = mock_transport.call_args
+    assert call_args.args[0] == "https://mcp:8080"
+    assert call_args.kwargs["verify"] is False
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch('app.services.agent.factory.get_basic_auth_credentials')
-async def test_create_mcp_client_basic_auth(mock_get_creds, mock_mcp_client):
+async def test_create_mcp_client_basic_auth(mock_get_creds, mock_transport, mock_adapter):
     """Verify create_mcp_client handles basic authentication."""
+    mock_adapter_cls, _ = mock_adapter
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.BASIC
     mock_config.mcp_url = "http://test:8080"
     mock_config.authentication_secret = "my-secret"
+    mock_config.ca_bundle_ref = None
     
     mock_get_creds.return_value = "dXNlcjpwYXNz"  # base64 encoded
     
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
-    
     result = await create_mcp_client(mock_config)
     
-    assert result == mock_client_instance
-    call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "http://test:8080"
-    assert call_args["TestAgent"]["headers"]['Authorization'] == "Basic dXNlcjpwYXNz"
+    assert result is mock_adapter_cls.return_value
+    call_args = mock_transport.call_args
+    assert call_args.args[0] == "http://test:8080"
+    assert call_args.kwargs["headers"]['Authorization'] == "Basic dXNlcjpwYXNz"
     mock_get_creds.assert_called_once_with("my-secret")
 
 
@@ -503,7 +502,7 @@ async def test_load_mcp_tools_success(mock_update_status, mock_create_client):
     
     mock_client_instance = MagicMock()
     mock_tools = [MagicMock()]
-    mock_client_instance.get_tools = AsyncMock(return_value=mock_tools)
+    mock_client_instance.list_tools = AsyncMock(return_value=mock_tools)
     mock_create_client.return_value = mock_client_instance
     
     # Execute
@@ -525,7 +524,7 @@ async def test_load_mcp_tools_mcp_failure(mock_update_status, mock_create_client
     mock_config.name = "TestAgent"
     
     mock_client_instance = MagicMock()
-    mock_client_instance.get_tools = AsyncMock(side_effect=Exception("Connection failed"))
+    mock_client_instance.list_tools = AsyncMock(side_effect=Exception("Connection failed"))
     mock_create_client.return_value = mock_client_instance
     
     # Execute and verify exception
@@ -549,26 +548,26 @@ async def test_load_mcp_tools_filters_by_toolset(mock_update_status, mock_create
 
     tool_matching = MagicMock()
     tool_matching.name = "matching_tool"
-    tool_matching.metadata = {"_meta": {"toolset": "rancher-core"}}
+    tool_matching.metadata = {"mcp": {"tool": {"_meta": {"toolset": "rancher-core"}}}}
 
     tool_other = MagicMock()
     tool_other.name = "other_tool"
-    tool_other.metadata = {"_meta": {"toolset": "fleet"}}
+    tool_other.metadata = {"mcp": {"tool": {"_meta": {"toolset": "fleet"}}}}
 
     tool_multi_after = MagicMock()
     tool_multi_after.name = "multi_toolset_after"
-    tool_multi_after.metadata = {"_meta": {"toolset": "fleet, rancher-core"}}
+    tool_multi_after.metadata = {"mcp": {"tool": {"_meta": {"toolset": "fleet, rancher-core"}}}}
 
     tool_multi_before = MagicMock()
     tool_multi_before.name = "multi_toolset_before"
-    tool_multi_before.metadata = {"_meta": {"toolset": "rancher-core, harvester, fleet"}}
+    tool_multi_before.metadata = {"mcp": {"tool": {"_meta": {"toolset": "rancher-core, harvester, fleet"}}}}
 
     tool_no_meta = MagicMock()
     tool_no_meta.name = "generic_tool"
     tool_no_meta.metadata = {}
 
     mock_client_instance = MagicMock()
-    mock_client_instance.get_tools = AsyncMock(return_value=[tool_matching, tool_other, tool_multi_after, tool_multi_before, tool_no_meta])
+    mock_client_instance.list_tools = AsyncMock(return_value=[tool_matching, tool_other, tool_multi_after, tool_multi_before, tool_no_meta])
     mock_create_client.return_value = mock_client_instance
 
     result = await _load_mcp_tools(mock_config, mock_websocket)
@@ -580,40 +579,40 @@ async def test_load_mcp_tools_filters_by_toolset(mock_update_status, mock_create
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch('app.services.agent.factory.get_header_auth_headers')
-async def test_create_mcp_client_header_auth(mock_get_headers, mock_mcp_client):
+async def test_create_mcp_client_header_auth(mock_get_headers, mock_transport, mock_adapter):
     """Verify create_mcp_client handles header authentication."""
+    mock_adapter_cls, _ = mock_adapter
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.HEADER
     mock_config.mcp_url = "http://test:8080"
     mock_config.authentication_secret = "my-headers-secret"
+    mock_config.ca_bundle_ref = None
 
     mock_get_headers.return_value = {
         "X-Api-Key": "my-api-key",
         "Authorization": "Bearer tok123",
     }
 
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
-
     result = await create_mcp_client(mock_config)
 
-    assert result == mock_client_instance
-    call_args = mock_mcp_client.call_args[0][0]
-    assert call_args["TestAgent"]["url"] == "http://test:8080"
-    assert call_args["TestAgent"]["headers"]["X-Api-Key"] == "my-api-key"
-    assert call_args["TestAgent"]["headers"]["Authorization"] == "Bearer tok123"
+    assert result is mock_adapter_cls.return_value
+    call_args = mock_transport.call_args
+    assert call_args.args[0] == "http://test:8080"
+    assert call_args.kwargs["headers"]["X-Api-Key"] == "my-api-key"
+    assert call_args.kwargs["headers"]["Authorization"] == "Bearer tok123"
     mock_get_headers.assert_called_once_with("my-headers-secret")
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory._make_ca_httpx_factory')
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.build_ca_ssl_context')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch('app.services.agent.factory.get_ca_cert_from_secret')
-async def test_create_mcp_client_with_ca_bundle_ref(mock_get_ca, mock_mcp_client, mock_make_factory):
-    """Verify create_mcp_client sets httpx_client_factory when caBundleRef is configured."""
+async def test_create_mcp_client_with_ca_bundle_ref(mock_get_ca, mock_transport, mock_build_ctx, mock_adapter):
+    """Verify create_mcp_client verifies TLS with the caBundleRef CA when configured."""
+    mock_adapter_cls, _ = mock_adapter
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.NONE
@@ -623,27 +622,24 @@ async def test_create_mcp_client_with_ca_bundle_ref(mock_get_ca, mock_mcp_client
     ca_ref.key = "ca.crt"
     mock_config.ca_bundle_ref = ca_ref
 
-    mock_get_ca.return_value = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
-    mock_factory = MagicMock()
-    mock_make_factory.return_value = mock_factory
-
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
+    ca_pem = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
+    mock_get_ca.return_value = ca_pem
+    mock_ctx = MagicMock()
+    mock_build_ctx.return_value = mock_ctx
 
     result = await create_mcp_client(mock_config)
 
-    assert result == mock_client_instance
+    assert result is mock_adapter_cls.return_value
     mock_get_ca.assert_called_once_with("my-ca-secret", "ca.crt")
-    call_args = mock_mcp_client.call_args[0][0]
-    assert "httpx_client_factory" in call_args["TestAgent"]
-    assert call_args["TestAgent"]["httpx_client_factory"] == mock_factory
+    mock_build_ctx.assert_called_once_with(ca_pem)
+    assert mock_transport.call_args.kwargs["verify"] is mock_ctx
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory._make_ca_httpx_factory')
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.build_ca_ssl_context')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch('app.services.agent.factory.get_ca_cert_from_secret')
-async def test_create_mcp_client_with_ca_bundle_ref_custom_key(mock_get_ca, mock_mcp_client, mock_make_factory):
+async def test_create_mcp_client_with_ca_bundle_ref_custom_key(mock_get_ca, mock_transport, mock_build_ctx, mock_adapter):
     """Verify create_mcp_client passes a custom key from caBundleRef."""
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
@@ -656,38 +652,32 @@ async def test_create_mcp_client_with_ca_bundle_ref_custom_key(mock_get_ca, mock
 
     mock_get_ca.return_value = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
 
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
-
     await create_mcp_client(mock_config)
 
     mock_get_ca.assert_called_once_with("my-ca-secret", "tls.crt")
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
-async def test_create_mcp_client_without_ca_bundle_ref(mock_mcp_client):
-    """Verify create_mcp_client omits httpx_client_factory when no caBundleRef."""
+@patch('app.services.agent.factory.StreamableHttpTransport')
+async def test_create_mcp_client_without_ca_bundle_ref(mock_transport, mock_adapter):
+    """Verify create_mcp_client uses default TLS verification when no caBundleRef."""
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.NONE
     mock_config.mcp_url = "https://mcp:8080"
     mock_config.ca_bundle_ref = None
 
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
-
     await create_mcp_client(mock_config)
 
-    call_args = mock_mcp_client.call_args[0][0]
-    assert "httpx_client_factory" not in call_args["TestAgent"]
+    assert mock_transport.call_args.kwargs["verify"] is None
 
 
 @pytest.mark.asyncio
-@patch('app.services.agent.factory.MultiServerMCPClient')
+@patch('app.services.agent.factory.StreamableHttpTransport')
 @patch('app.services.agent.factory.get_ca_cert_from_secret')
-async def test_create_mcp_client_ca_bundle_ref_failure_logs_and_continues(mock_get_ca, mock_mcp_client):
+async def test_create_mcp_client_ca_bundle_ref_failure_logs_and_continues(mock_get_ca, mock_transport, mock_adapter):
     """Verify create_mcp_client gracefully handles CA secret loading failure."""
+    mock_adapter_cls, _ = mock_adapter
     mock_config = MagicMock()
     mock_config.name = "TestAgent"
     mock_config.authentication = AuthenticationType.NONE
@@ -699,29 +689,96 @@ async def test_create_mcp_client_ca_bundle_ref_failure_logs_and_continues(mock_g
 
     mock_get_ca.side_effect = RuntimeError("secret not found")
 
-    mock_client_instance = MagicMock()
-    mock_mcp_client.return_value = mock_client_instance
-
     result = await create_mcp_client(mock_config)
 
     # Should still return a client, just without custom CA
-    assert result == mock_client_instance
-    call_args = mock_mcp_client.call_args[0][0]
-    assert "httpx_client_factory" not in call_args["TestAgent"]
+    assert result is mock_adapter_cls.return_value
+    assert mock_transport.call_args.kwargs["verify"] is None
 
 
-def test_make_ca_httpx_factory_returns_async_client():
-    """Verify _make_ca_httpx_factory returns a factory that produces httpx.AsyncClient."""
-    import httpx
-    with patch('app.services.agent.loader.ssl') as mock_ssl:
-        mock_ctx = MagicMock()
-        mock_ssl.create_default_context.return_value = mock_ctx
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.StreamableHttpTransport')
+async def test_create_mcp_client_oauth2_sends_token_via_auth(mock_transport, mock_adapter):
+    """Verify create_mcp_client passes the OAuth2 cookie token through a 401-tracking auth."""
+    mock_adapter_cls, _ = mock_adapter
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.OAUTH2
+    mock_config.mcp_url = "https://mcp:8080"
+    mock_config.ca_bundle_ref = None
 
-        factory = _make_ca_httpx_factory("FAKE-PEM")
+    mock_websocket = MagicMock()
+    mock_websocket.cookies.get.return_value = "access-token"
 
-        mock_ssl.create_default_context.assert_called_once()
-        mock_ctx.load_verify_locations.assert_called_once_with(cadata="FAKE-PEM")
+    result = await create_mcp_client(mock_config, mock_websocket)
 
-        client = factory(headers={"X-Test": "val"}, timeout=httpx.Timeout(10))
-        assert isinstance(client, httpx.AsyncClient)
-        assert client._transport._pool._ssl_context == mock_ctx
+    auth = mock_transport.call_args.kwargs["auth"]
+    assert isinstance(auth, _OAuth2BearerAuth)
+    assert auth.token == "access-token"
+    assert mock_transport.call_args.kwargs["headers"] == {}
+    assert result.oauth2_auth is auth
+
+
+def _run_auth_flow(auth: _OAuth2BearerAuth, status_code: int):
+    import httpx2
+    request = httpx2.Request("POST", "https://mcp:8080/mcp")
+    flow = auth.auth_flow(request)
+    sent = next(flow)
+    with pytest.raises(StopIteration):
+        flow.send(httpx2.Response(status_code, request=request))
+    return sent
+
+
+@pytest.mark.parametrize("token,status_code,expected_header,expected_unauthorized", [
+    ("tok", 200, "Bearer tok", False),
+    ("tok", 401, "Bearer tok", True),
+    (None, 401, None, True),
+])
+def test_oauth2_bearer_auth(token, status_code, expected_header, expected_unauthorized):
+    """Verify _OAuth2BearerAuth sets the bearer header when it has a token and records 401 replies."""
+    auth = _OAuth2BearerAuth(token)
+
+    sent = _run_auth_flow(auth, status_code)
+
+    assert sent.headers.get("Authorization") == expected_header
+    assert auth.unauthorized is expected_unauthorized
+
+
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.create_mcp_client')
+@patch('app.services.agent.factory._update_agent_status')
+async def test_load_mcp_tools_oauth2_unauthorized_raises_needs_oauth2(mock_update_status, mock_create_client):
+    """Verify a 401 seen by the OAuth2 auth triggers NeedsOauth2 even though the MCP error hides the status code."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.OAUTH2
+
+    auth = _OAuth2BearerAuth(None)
+    auth.unauthorized = True
+    mock_client_instance = MagicMock()
+    mock_client_instance.oauth2_auth = auth
+    mock_client_instance.list_tools = AsyncMock(side_effect=Exception("Server returned an error response"))
+    mock_create_client.return_value = mock_client_instance
+
+    with pytest.raises(NeedsOauth2):
+        await _load_mcp_tools(mock_config, MagicMock())
+
+    mock_update_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch('app.services.agent.factory.create_mcp_client')
+@patch('app.services.agent.factory._update_agent_status')
+async def test_load_mcp_tools_oauth2_other_error_raises_no_agent(mock_update_status, mock_create_client):
+    """Verify non-401 failures for OAuth2 agents still raise NoAgentAvailableError."""
+    mock_config = MagicMock()
+    mock_config.name = "TestAgent"
+    mock_config.authentication = AuthenticationType.OAUTH2
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.oauth2_auth = _OAuth2BearerAuth("tok")
+    mock_client_instance.list_tools = AsyncMock(side_effect=Exception("Server returned an error response"))
+    mock_create_client.return_value = mock_client_instance
+
+    with pytest.raises(NoAgentAvailableError):
+        await _load_mcp_tools(mock_config, MagicMock())

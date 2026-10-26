@@ -330,18 +330,23 @@ class MemoryManager:
                     "tags": tags,
                     "createdAt": message.additional_kwargs.get("created_at"),
                 })
-            elif message.type == 'ai' and (message.content != "" or message.additional_kwargs.get("stopped")):
+            elif message.type == 'ai' and (
+                # .text skips non-text content blocks (e.g. tool_use-only messages from Bedrock/Anthropic)
+                str(message.text) or message.additional_kwargs.get("mcp_response") or message.additional_kwargs.get("stopped")
+            ):
                 request_metadata = message.additional_kwargs.get("request_metadata", {})
+                text = str(message.text)
+                mcp_response = message.additional_kwargs.get("mcp_response") or ""
 
                 # A stopped message is emitted as two rows (partial text, then an empty marker with
                 # "stopped") so the UI gets the same two messages as the live stream. Written by
                 # _record_stopped_in_history in routers/websocket.py. Keep both in sync.
-                if message.content != "":
+                if text or mcp_response:
                     rows.append({
                         "chatId": chat_id,
                         "role": "agent",
                         "agent": request_metadata.get("agent", None),
-                        "message": (message.additional_kwargs.get("mcp_response") or "") + str(message.text),
+                        "message": mcp_response + text,
                         "tools": message.additional_kwargs.get("ui_tools", []),
                         "tags": request_metadata.get("tags", []),
                         "createdAt": message.additional_kwargs.get("created_at"),

@@ -30,6 +30,8 @@ Rules you MUST follow:
   provided as "key:value" pairs separated by ";". When a subtask needs one of these
   parameters to be carried out, include it explicitly in that subtask's task
   description. 
+- Never return an empty plan: the JSON object must contain at least one subtask, a
+  non-empty "reply", or "cancel": true.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,
   markdown code fences, or any text before or after the JSON.
 """
@@ -112,7 +114,11 @@ Also fill in:
 - "changes": a brief, user-facing explanation (one or two sentences) of what you modified
   compared to the latest version of the plan shown above.
 - "cancel": true, with an empty "subtasks" list, ONLY if the latest feedback asks to stop,
-  cancel or abort the plan instead of changing it. Otherwise false.
+  cancel or abort the plan instead of changing it (e.g. "stop", "cancel", "abort",
+  "never mind", "forget it"). Otherwise false.
+
+Never return an empty "subtasks" list with "cancel" set to false: either return the
+revised subtasks, or set "cancel" to true.
 """
 
 PLANNER_RETRY_SUFFIX = """\

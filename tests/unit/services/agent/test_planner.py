@@ -36,6 +36,7 @@ from app.services.agent.planner.prompts import (
     PLAN_CANCELLED_REPLY,
     PLAN_CANCELLED_PREFIX,
     PLAN_FAILED_PREFIX,
+    PLAN_FAILED_REPLY,
     REQUEST_FAILURE_DETAILS,
     RESTART_PLAN_REQUEST,
     RETRY_SUBTASK_REQUEST,
@@ -47,7 +48,7 @@ from app.services.agent.planner.subtasks import (
     _extract_text,
     _fail_plan,
     _format_plan,
-    _is_cancelled,
+    _cancelled_tool_message,
     _is_direct_handoff,
     _next_subtask_index,
     _plan_status,
@@ -339,11 +340,11 @@ class TestRetryHelpers:
 
 
 class TestMessageStateHelpers:
-    def test_is_cancelled_checks_most_recent_tool_message(self):
+    def test_cancelled_tool_message_checks_most_recent_tool_message(self):
         cancelled = ToolMessage(content=INTERRUPT_CANCEL_MESSAGE, tool_call_id="cancel")
 
-        assert _is_cancelled({"messages": [AIMessage(content="ignored"), cancelled]})
-        assert not _is_cancelled({"messages": [AIMessage(content=INTERRUPT_CANCEL_MESSAGE)]})
+        assert _cancelled_tool_message({"messages": [AIMessage(content="ignored"), cancelled]}) is cancelled
+        assert _cancelled_tool_message({"messages": [AIMessage(content=INTERRUPT_CANCEL_MESSAGE)]}) is None
 
     def test_last_user_request_skips_non_human_messages(self):
         state = cast(
@@ -768,6 +769,32 @@ class TestRunPendingSubtask:
         assert subtasks[0]["status"] == "cancelled"
         assert subtasks[0]["actions"] == [RETRY_SUBTASK_REQUEST, RESTART_PLAN_REQUEST]
         dispatch.assert_called_once()
+        assert outcome["messages_history"][0].content == "Plan was canceled."
+
+    @pytest.mark.asyncio
+    async def test_declined_confirmation_in_direct_handoff_records_confirmation(self, dispatch):
+        """A single-subtask plan stores the declined confirmation in the history, not a plan cancellation."""
+        cancel_message = ToolMessage(
+            content=INTERRUPT_CANCEL_MESSAGE,
+            tool_call_id="c",
+            additional_kwargs={"interrupt_message": "<confirmation-response>{}</confirmation-response>", "confirmation": False},
+        )
+        child = _mock_child("rancher", {"messages": [cancel_message]})
+        child.agent.aget_state.side_effect = [SimpleNamespace(interrupts=[SimpleNamespace(value="confirm?")])]
+        subtasks = self._plan("rancher")
+        subtasks[0]["status"] = "in_progress"
+
+        with patch("langgraph.types.interrupt", return_value="no"):
+            outcome = await _run_pending_subtask(
+                _mock_llm(), {"rancher": child}, subtasks, [], _AgentCallCounter(), emit_plan=False
+            )
+
+        assert outcome["cancelled"] is True
+        [history_message] = outcome["messages_history"]
+        assert isinstance(history_message, ToolMessage)
+        assert history_message.additional_kwargs["interrupt_message"] == "<confirmation-response>{}</confirmation-response>"
+        assert history_message.additional_kwargs["confirmation"] is False
+        dispatch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_child_error_during_resume_fails_plan(self, dispatch):
@@ -1018,6 +1045,23 @@ class TestPlanFeedback:
         assert event_name == "planner-plan-created"
         assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))["status"] == "cancelled"
         assert (await graph.aget_state(config)).interrupts == ()
+
+    @pytest.mark.asyncio
+    async def test_empty_plan_in_feedback_cancels_plan(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
+        graph = self._graph(self.INITIAL, Plan(subtasks=[]))
+        config = {"configurable": {"thread_id": "t"}}
+
+        with patch("app.services.agent.planner.agent.dispatch_custom_event") as dispatch:
+            await graph.ainvoke({"messages": [HumanMessage(content="do it")]}, config)
+            state = await graph.ainvoke(Command(resume="stop"), config)
+
+        assert state["cancelled"] is True
+        assert state["subtasks"] == []
+        event_name, payload = dispatch.call_args.args
+        assert event_name == "planner-plan-created"
+        assert json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))["status"] == "cancelled"
+        assert PLAN_FAILED_REPLY not in [m.content for m in state["messages"]]
 
 
 class TestStoppedPlanEvent:

@@ -67,7 +67,9 @@ class SubTask(BaseModel):
 class Plan(BaseModel):
     """The full plan produced by the planner: an ordered list of subtasks."""
 
-    subtasks: list[SubTask] = Field(description="Ordered list of subtasks to execute.")
+    subtasks: list[SubTask] = Field(
+        default_factory=list, description="Ordered list of subtasks to execute."
+    )
     reply: str | None = Field(
         default=None, description="Direct answer to the user when no subtasks are needed."
     )
@@ -162,9 +164,11 @@ def create_planner_agent(
             previous_plan_cancellation_message,
         )
 
-        if feedback and plan is not None and plan.cancel:
+        # While revising a plan, an empty answer (e.g. the user said "stop" and the LLM
+        # omitted the cancel flag) means there is no plan left to run: cancel it.
+        if feedback and (plan is None or plan.cancel or not (plan.subtasks or plan.reply)):
             logging.debug("Planner plan was cancelled by the user while giving feedback.")
-            return _reject_plan(state.get("subtasks") or [])
+            return _reject_plan(state.get("subtasks") or [], "Plan has been canceled.")
 
         additional_kwargs = {"created_at": datetime.now().isoformat()}
         messages = state.get("messages", [])
@@ -197,6 +201,12 @@ def create_planner_agent(
                 "messages": [reply],
                 "messages_history": [request_message, reply],
             }
+
+        if plan is not None and plan.cancel:
+            logging.debug("Planner plan was cancelled.")
+            if plan.changes:
+                dispatch_custom_event("planner-plan-changes", plan.changes)
+            return _reject_plan(state.get("subtasks") or [], "Plan has been canceled.")
 
         if plan is None or plan.subtasks is None or not plan.subtasks:
             logging.error("Planner failed to produce a valid plan.")
@@ -255,7 +265,7 @@ def create_planner_agent(
 
         if normalized == "no":
             logging.debug("Planner plan was rejected by the user.")
-            return _reject_plan(subtasks)
+            return _reject_plan(subtasks, "Plan was not approved.")
 
         # Any other response is treated as feedback: accumulate it so successive rounds of
         # feedback all apply, then route back to plan_node to regenerate the plan.
@@ -402,7 +412,7 @@ def create_planner_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
-def _reject_plan(subtasks: list[dict]) -> dict:
+def _reject_plan(subtasks: list[dict], history_message: str) -> dict:
     """Cancel a plan the user did not approve and notify the client."""
     # Dispatch cancelled plan event so client receives <plan> update with status='cancelled'
     dispatch_custom_event(
@@ -415,7 +425,7 @@ def _reject_plan(subtasks: list[dict]) -> dict:
         "cancelled": True,
         "feedback": [],
         "messages": [AIMessage(content="Plan was not approved by the user.")],
-        "messages_history": [AIMessage(content="Plan was not approved by the user.", additional_kwargs={"created_at": datetime.now().isoformat()})],
+        "messages_history": [AIMessage(content=history_message, additional_kwargs={"created_at": datetime.now().isoformat()})],
     }
 
 

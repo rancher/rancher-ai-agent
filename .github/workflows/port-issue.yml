@@ -79,8 +79,11 @@ jobs:
           fi
           ORIGINAL_PROJECT=$(gh issue view -R ${GITHUB_REPOSITORY} ${ORIGINAL_ISSUE_NUMBER} --json projectItems --jq '.projectItems[].title')
           if [ -n "$ORIGINAL_PROJECT" ]; then
-              additional_cmd+=("--project")
-              additional_cmd+=("${ORIGINAL_PROJECT}")
+              while IFS= read -r PROJECT; do
+                  [ -z "$PROJECT" ] && continue
+                  additional_cmd+=("--project")
+                  additional_cmd+=("${PROJECT}")
+              done <<< "$ORIGINAL_PROJECT"
           fi
           ASSIGNEES=$(echo "${ORIGINAL_ISSUE}" | jq -r .assignees[].login)
           if [ -n "$ASSIGNEES" ]; then

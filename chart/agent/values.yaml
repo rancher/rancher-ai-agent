@@ -5,7 +5,7 @@ global:
 aiAgent:
   image:
     repository: rancher/rancher-ai-agent
-    tag: v1.2.0-alpha.4
+    tag: v1.2.0-alpha.5
     pullPolicy: IfNotPresent
   rbac:
     enabled: true

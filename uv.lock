@@ -1523,7 +1523,7 @@ wheels = [
 
 [[package]]
 name = "kopf"
-version = "1.44.6"
+version = "1.45.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1533,9 +1533,9 @@ dependencies = [
     { name = "python-json-logger" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/21/9cf76b5946186f8c5075794daf535031c0e3a15494e7aad62daa71a12992/kopf-1.44.6.tar.gz", hash = "sha256:39c32d172394f0a891c19bfa2382c0e4bab783a63fdd1f0d9209aa043856127a", size = 1255087, upload-time = "2026-06-03T13:01:50.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/95/9d9b62ae209eb49683a7375cd748bbff386e4c474a716976c5a97befea13/kopf-1.45.1.tar.gz", hash = "sha256:12ab33251a2d250ae59d415fede7bc6ca2a95267125dc7bd6ad8f29ed29fde4a", size = 1277396, upload-time = "2026-10-14T08:39:35.169Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/77/3ec5f44d6dc73aa9b709d261a9b6849f1cc5eb2e65ca26db43e4efc02125/kopf-1.44.6-py3-none-any.whl", hash = "sha256:793b6a403be5fe389365172b117a8e1385a5d18eb80fdb1dfe0f50e9c7d7862d", size = 222717, upload-time = "2026-06-03T13:01:49.15Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/db/f9b88472004fcacd0abec945d5ff7b2844f170bb0d1b7f766b428388565d/kopf-1.45.1-py3-none-any.whl", hash = "sha256:7355b9ca1932303afc48fce3cd282472edcac3fed534d11c0db82d545fccb828", size = 228888, upload-time = "2026-10-14T08:39:33.381Z" },
 ]
 
 [[package]]
@@ -3023,7 +3023,7 @@ requires-dist = [
     { name = "authlib", specifier = "==1.9.1" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.141.1" },
     { name = "fastmcp", specifier = "==3.4.10" },
-    { name = "kopf", specifier = "==1.44.6" },
+    { name = "kopf", specifier = "==1.45.1" },
     { name = "kubernetes", specifier = "==36.0.3" },
     { name = "langchain", specifier = "==1.4.6" },
     { name = "langchain-aws", specifier = "==1.9.0" },

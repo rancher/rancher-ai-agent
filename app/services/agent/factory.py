@@ -197,15 +197,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     except* Exception as eg:
         error_message = " ".join(str(e) for e in eg.exceptions)
 
-        _error_lower = error_message.lower()
-        oauth2_auth = getattr(mcp_client, "oauth2_auth", None)
-        if agent_cfg.authentication == AuthenticationType.OAUTH2 and (
-            (isinstance(oauth2_auth, _OAuth2BearerAuth) and oauth2_auth.unauthorized)
-            or "401" in error_message
-            or "unauthorized" in _error_lower
-            or "not authorized" in _error_lower
-            or "access denied" in _error_lower
-        ):
+        if needs_oauth2_login(agent_cfg, mcp_client, error_message):
             raise NeedsOauth2(agent_cfg)
         else:
             _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
@@ -227,6 +219,26 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     _update_agent_status(agent_cfg, True, 'MCPConnectionSucceeded', 'MCP tools loaded successfully')
     return tools
 
+
+
+def needs_oauth2_login(agent_cfg: AgentConfig, mcp_client: MCPAdapter, error_message: str) -> bool:
+    """
+    Return True if an OAuth2 agent's MCP server rejected the (missing or expired) token.
+
+    The 401 is read from the client's ``_OAuth2BearerAuth`` because MCP SDK 2 errors
+    no longer carry the HTTP status; the message checks are kept as a fallback.
+    """
+    if agent_cfg.authentication != AuthenticationType.OAUTH2:
+        return False
+    oauth2_auth = getattr(mcp_client, "oauth2_auth", None)
+    error_lower = error_message.lower()
+    return (
+        (isinstance(oauth2_auth, _OAuth2BearerAuth) and oauth2_auth.unauthorized)
+        or "401" in error_message
+        or "unauthorized" in error_lower
+        or "not authorized" in error_lower
+        or "access denied" in error_lower
+    )
 
 
 def _tool_meta(tool) -> dict:

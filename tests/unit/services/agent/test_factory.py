@@ -15,6 +15,7 @@ from app.services.agent.factory import (
     create_mcp_client,
     _load_mcp_tools,
     _OAuth2BearerAuth,
+    needs_oauth2_login,
 )
 from app.services.agent.loader import AuthenticationType
 
@@ -782,3 +783,18 @@ async def test_load_mcp_tools_oauth2_other_error_raises_no_agent(mock_update_sta
 
     with pytest.raises(NoAgentAvailableError):
         await _load_mcp_tools(mock_config, MagicMock())
+
+
+def test_needs_oauth2_login_ignores_non_oauth2_agents():
+    """Verify a recorded 401 only means 'needs login' for OAuth2 agents."""
+    auth = _OAuth2BearerAuth(None)
+    auth.unauthorized = True
+    mock_client = MagicMock()
+    mock_client.oauth2_auth = auth
+
+    oauth2_cfg = MagicMock(authentication=AuthenticationType.OAUTH2)
+    none_cfg = MagicMock(authentication=AuthenticationType.NONE)
+
+    assert needs_oauth2_login(oauth2_cfg, mock_client, "Server returned an error response") is True
+    assert needs_oauth2_login(none_cfg, mock_client, "Server returned an error response") is False
+    assert needs_oauth2_login(none_cfg, mock_client, "401 Unauthorized") is False

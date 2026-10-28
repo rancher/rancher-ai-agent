@@ -33,7 +33,7 @@ planApproval:
 - Synthesizes outputs from tools into clear, human-readable responses.  
 
 #### ⚙️ Agent (Orchestrator)
-- Wraps the LLM with the **ReAct (Reason + Act)** loop, or with an explicit plan → execute → reduce flow in planner mode.
+- Wraps the LLM with the **ReAct (Reason + Act)** loop in single-agent and supervisor modes, or with an explicit plan → execute → reduce flow in planner mode.
 - Decides when to let the LLM keep reasoning or when to **act** on its instructions, delegating work to the appropriate child agents.  
 - Calls external tools (via the MCP Server) as directed by the LLM.  
 - Ensures secure interactions by passing the user’s Rancher token to the MCP server for authentication and authorization.  

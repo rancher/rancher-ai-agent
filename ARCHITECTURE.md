@@ -47,11 +47,16 @@ graph LR
 
 ### Key Behaviours
 
+- **Agent assignment** — The planner LLM assigns each subtask to exactly one agent, picked from the agents available to the user based on their descriptions. When several agents could handle a subtask, the LLM chooses the one it considers best suited. A subtask assigned to an unknown agent fails.
 - **Direct handoff** — A plan with a single subtask is treated as a plain delegation: it skips approval, emits no plan events and returns the child's answer as-is, without the reducer.
 - **Sequential execution** — Subtasks run one after another, and each one receives the results of the previous subtasks as context.
 - **Subtask evaluation** — After each subtask, an LLM judges whether the child completed it, needs more information from the user (the plan pauses and the user's next message is forwarded to the child), or failed.
 - **Plan approval** — When `PLAN_APPROVAL_ENABLED=true` (Helm value `planApproval.enabled`), multi-step plans must be approved by the user first. Answering "yes" runs the plan, "no" cancels it, and any other answer is treated as feedback to regenerate the plan.
-- **Failure recovery** — When a subtask fails or is cancelled, the plan stops and the user is offered quick actions: retry the failed step, restart the whole plan, request more details about the failure, or cancel.
+- **Failure recovery** — When a subtask fails or is cancelled, the plan stops and the remaining subtasks are not run, since they may depend on it. There is no automatic retry: the user is offered quick actions instead:
+  - *Retry the failed step* — resumes the same plan from the failed subtask, keeping the results of the subtasks that already completed.
+  - *Restart the whole plan* — re-runs every subtask of the same plan from the beginning.
+  - *Request more details about the failure* or *cancel* the plan.
+  - Any other message is treated as new information, and a new plan is generated taking the failure into account.
 - **Human validation** — Confirmation prompts raised inside a child agent are relayed to the user, just like in supervisor mode (see [Human Validation](#human-validation-human-in-the-loop)).
 - **Progress streaming** — The plan and the status of each subtask are streamed to the UI as `<plan>` events, so the user can follow its execution.
 

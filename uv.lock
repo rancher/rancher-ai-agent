@@ -336,7 +336,6 @@ wheels = [
 [[package]]
 name = "certifi"
 version = "2026.10.23"
-version = "2026.10.23"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fd/11/b524cbd9bbdaca58608e4cf4053fd463417549e1959fa8d3aa18319f9555/certifi-2026.10.23.tar.gz", hash = "sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd", size = 136225, upload-time = "2026-10-23T11:36:16.478Z" }
 wheels = [
@@ -1556,7 +1555,12 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d1/6b/7147b4cfa86091e05e3c0189952d976e13ef27249c8cd9e46d8c742a5b5c/langchain-1.4.7.tar.gz", hash = "sha256:818275348cd707f7fbbe92ece0a725c25823140a054cf29865f420e0200fa2af", size = 762840, upload-time = "2026-10-21T21:39:01.141Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/5c/cbe6452c6e3e65988ed0177d8f549f035049f6ff1c61291d087b89bc9637/langchain-1.4.6-py3-none-any.whl", hash = "sha256:7c3fbd5460ddc180115c10bbd385fbbde335fa166dd525ad22c0f599d13a9fad", size = 170398, upload-time = "2026-10-14T17:27:47.652Z" },
+    { url = "https://files.pythonhosted.org/packages/93/2e/86a102e61fc88ede073aebdb795fef0eb058a887bed4aa862e8ca2697565/langchain-1.4.7-py3-none-any.whl", hash = "sha256:bc40d4a9a46f0c3d75e316c0e576931fe19bceef83912a71dc1e0df781eb8f82", size = 170549, upload-time = "2026-10-21T21:38:59.466Z" },
+]
+
+[package.optional-dependencies]
+mcp = [
+    { name = "fastmcp" },
 ]
 
 [[package]]
@@ -2986,12 +2990,12 @@ test = [
 requires-dist = [
     { name = "asyncio", specifier = "==4.0.0" },
     { name = "authlib", specifier = "==1.9.1" },
-    { name = "fastapi", extras = ["standard"], specifier = "==0.161.1" },
+    { name = "fastapi", extras = ["standard"], specifier = "==0.162.0" },
     { name = "fastmcp", specifier = "==4.1.4" },
     { name = "httpx2", specifier = "==2.12.0" },
     { name = "kopf", specifier = "==1.45.2" },
     { name = "kubernetes", specifier = "==37.0.1" },
-    { name = "langchain", extras = ["mcp"], specifier = "==1.4.6" },
+    { name = "langchain", extras = ["mcp"], specifier = "==1.4.7" },
     { name = "langchain-aws", specifier = "==1.9.0" },
     { name = "langchain-community", specifier = "==0.4.2" },
     { name = "langchain-google-genai", specifier = "==4.4.2" },

@@ -4,16 +4,22 @@ Unit tests for the AIAgentConfig kopf controller.
 Tests transient vs permanent error classification and retry behaviour.
 """
 import pytest
-import httpx
+import httpx2
 import kopf
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from mcp.shared.exceptions import MCPError
+
 from app.controllers.ai_agent_config import (
     create_fn,
+    _validate,
     _INITIAL_RETRY_DELAY,
     _MAX_RETRY_DELAY,
     _MAX_RETRIES,
 )
+from app.services.agent._constants import NeedsOauth2
+from app.services.agent.factory import _OAuth2BearerAuth
+from app.services.agent.loader import AgentConfig, AuthenticationType
 
 
 def _make_spec(**overrides):
@@ -71,16 +77,16 @@ async def test_create_fn_success(mock_validate):
         ConnectionResetError,
         TimeoutError,
         OSError,
-        httpx.ConnectError,
-        httpx.ConnectTimeout,
-        httpx.ReadTimeout,
+        httpx2.ConnectError,
+        httpx2.ConnectTimeout,
+        httpx2.ReadTimeout,
     ],
     ids=lambda c: c.__name__,
 )
 @patch("app.controllers.ai_agent_config._validate", new_callable=AsyncMock)
 async def test_transient_error_raises_temporary(mock_validate, exc_class):
     """Transient connection errors should raise TemporaryError with a retry delay."""
-    if issubclass(exc_class, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)):
+    if issubclass(exc_class, (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.ReadTimeout)):
         exc = exc_class("connection failed", request=MagicMock())
     else:
         exc = exc_class("connection failed")
@@ -204,3 +210,110 @@ async def test_status_fields_on_failure(mock_validate):
     assert condition["status"] == "False"
     assert condition["reason"] == "ConfigurationFailed"
     assert "bad url" in condition["message"]
+
+
+# ============================================================================
+# MCP SDK 2 raises plain exceptions (not ExceptionGroups)
+# ============================================================================
+
+@pytest.mark.asyncio
+@patch("app.controllers.ai_agent_config._validate", new_callable=AsyncMock)
+async def test_plain_transient_error_raises_temporary(mock_validate):
+    """A transient error raised on its own (not in a group) should still be retried."""
+    mock_validate.side_effect = httpx2.ConnectError("connection failed", request=MagicMock())
+
+    kwargs = _build_kwargs()
+    with pytest.raises(kopf.TemporaryError):
+        await create_fn(**kwargs)
+
+
+@pytest.mark.asyncio
+@patch("app.controllers.ai_agent_config._validate", new_callable=AsyncMock)
+async def test_wrapped_transient_error_raises_temporary(mock_validate):
+    """FastMCP wraps transport errors in RuntimeError; the httpx2 cause should mark it transient."""
+    cause = httpx2.ConnectError("All connection attempts failed", request=MagicMock())
+    exc = RuntimeError("Client failed to connect: All connection attempts failed")
+    exc.__cause__ = cause
+    mock_validate.side_effect = exc
+
+    kwargs = _build_kwargs()
+    with pytest.raises(kopf.TemporaryError):
+        await create_fn(**kwargs)
+
+
+@pytest.mark.asyncio
+@patch("app.controllers.ai_agent_config._validate", new_callable=AsyncMock)
+async def test_plain_mcp_error_raises_permanent(mock_validate):
+    """A non-transient MCPError should mark the config as failed and raise PermanentError."""
+    mock_validate.side_effect = MCPError(code=-32603, message="Server returned an error response")
+
+    kwargs = _build_kwargs()
+    with pytest.raises(kopf.PermanentError):
+        await create_fn(**kwargs)
+
+    condition = kwargs["patch"].status["conditions"][0]
+    assert condition["reason"] == "ConfigurationFailed"
+    assert "Server returned an error response" in condition["message"]
+
+
+# ============================================================================
+# OAuth2: a 401 during validation means the agent needs a user login
+# ============================================================================
+
+@pytest.mark.asyncio
+@patch("app.controllers.ai_agent_config._register_oauth_client")
+@patch("app.controllers.ai_agent_config._validate", new_callable=AsyncMock)
+async def test_needs_oauth2_marks_ready_and_registers_client(mock_validate, mock_register):
+    """NeedsOauth2 from validation should succeed the config and register the OAuth client."""
+    mock_validate.side_effect = NeedsOauth2(MagicMock())
+
+    kwargs = _build_kwargs(spec=_make_spec(authenticationType="OAUTH2"))
+    await create_fn(**kwargs)
+
+    condition = kwargs["patch"].status["conditions"][0]
+    assert condition["status"] == "True"
+    assert condition["reason"] == "ConfigurationSucceeded"
+    assert condition["message"] == "Needs OAuth2 authentication"
+    mock_register.assert_called_once()
+
+
+def _agent_config(authentication):
+    return AgentConfig(
+        name="test-agent",
+        displayName="Test Agent",
+        description="desc",
+        system_prompt="prompt",
+        mcp_url="https://mcp:8080/mcp",
+        authentication=authentication,
+        authentication_secret="",
+    )
+
+
+def _unauthorized_client():
+    """An MCP client whose OAuth2 auth saw a 401, failing with the generic MCP SDK 2 error."""
+    auth = _OAuth2BearerAuth(None)
+    auth.unauthorized = True
+    client = MagicMock()
+    client.oauth2_auth = auth
+    client.list_tools = AsyncMock(side_effect=MCPError(code=-32603, message="Server returned an error response"))
+    return client
+
+
+@pytest.mark.asyncio
+@patch("app.controllers.ai_agent_config.create_mcp_client", new_callable=AsyncMock)
+async def test_validate_oauth2_unauthorized_raises_needs_oauth2(mock_create_client):
+    """_validate should turn a 401 for an OAuth2 agent into NeedsOauth2."""
+    mock_create_client.return_value = _unauthorized_client()
+
+    with pytest.raises(NeedsOauth2):
+        await _validate(_agent_config(AuthenticationType.OAUTH2))
+
+
+@pytest.mark.asyncio
+@patch("app.controllers.ai_agent_config.create_mcp_client", new_callable=AsyncMock)
+async def test_validate_non_oauth2_reraises_original_error(mock_create_client):
+    """_validate should re-raise the original error for agents that don't use OAuth2."""
+    mock_create_client.return_value = _unauthorized_client()
+
+    with pytest.raises(MCPError):
+        await _validate(_agent_config(AuthenticationType.NONE))

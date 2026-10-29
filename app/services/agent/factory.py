@@ -2,7 +2,9 @@ import os
 import logging
 from datetime import datetime, timezone
 
-import httpx
+import httpx2
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 from kubernetes import client
 
 from .loader import (
@@ -22,11 +24,33 @@ from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
 from ._constants import NoAgentAvailableError, NeedsOauth2
 from fastapi import  WebSocket
+from langchain_core._api import suppress_langchain_beta_warning
 from langchain_core.language_models.llms import BaseLanguageModel
-from langchain_mcp_adapters.client import MultiServerMCPClient
+with suppress_langchain_beta_warning():
+    from langchain.mcp import MCPAdapter
 from langgraph.graph.state import Checkpointer, CompiledStateGraph
 
 NAMESPACE = "cattle-ai-agent-system"
+
+
+class _OAuth2BearerAuth(httpx2.Auth):
+    """
+    Sends the OAuth2 access token (if any) and records whether the MCP server
+    answered 401. MCP SDK 2 turns HTTP errors into a generic JSON-RPC error
+    without the status code, so this is how a rejected/missing token is detected.
+    """
+
+    def __init__(self, token: str | None):
+        self.token = token
+        self.unauthorized = False
+
+    def auth_flow(self, request: httpx2.Request):
+        if self.token:
+            request.headers["Authorization"] = f"Bearer {self.token}"
+        response = yield request
+        if response.status_code == 401:
+            self.unauthorized = True
+
 
 async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
@@ -169,17 +193,11 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
     mcp_client = await create_mcp_client(agent_cfg, websocket)
     
     try:
-        tools = await mcp_client.get_tools()
+        tools = await mcp_client.list_tools()
     except* Exception as eg:
         error_message = " ".join(str(e) for e in eg.exceptions)
 
-        _error_lower = error_message.lower()
-        if agent_cfg.authentication == AuthenticationType.OAUTH2 and (
-            "401" in error_message
-            or "unauthorized" in _error_lower
-            or "not authorized" in _error_lower
-            or "access denied" in _error_lower
-        ):
+        if needs_oauth2_login(agent_cfg, mcp_client, error_message):
             raise NeedsOauth2(agent_cfg)
         else:
             _update_agent_status(agent_cfg, False, 'MCPConnectionFailed', f"Failed to load MCP tools: {error_message}")
@@ -193,7 +211,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
             t for t in tools
             if agent_cfg.toolset in [
                 ts.strip() 
-                for ts in (((t.metadata or {}).get("_meta") or {}).get("toolset") or "").split(",")
+                for ts in (_tool_meta(t).get("toolset") or "").split(",")
             ]
         ]                
         logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
@@ -203,7 +221,32 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
 
 
 
-async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MultiServerMCPClient:
+def needs_oauth2_login(agent_cfg: AgentConfig, mcp_client: MCPAdapter, error_message: str) -> bool:
+    """
+    Return True if an OAuth2 agent's MCP server rejected the (missing or expired) token.
+
+    The 401 is read from the client's ``_OAuth2BearerAuth`` because MCP SDK 2 errors
+    no longer carry the HTTP status; the message checks are kept as a fallback.
+    """
+    if agent_cfg.authentication != AuthenticationType.OAUTH2:
+        return False
+    oauth2_auth = getattr(mcp_client, "oauth2_auth", None)
+    error_lower = error_message.lower()
+    return (
+        (isinstance(oauth2_auth, _OAuth2BearerAuth) and oauth2_auth.unauthorized)
+        or "401" in error_message
+        or "unauthorized" in error_lower
+        or "not authorized" in error_lower
+        or "access denied" in error_lower
+    )
+
+
+def _tool_meta(tool) -> dict:
+    """Return the MCP ``_meta`` of a tool loaded through ``langchain.mcp`` (stored under ``metadata["mcp"]["tool"]``)."""
+    return ((((tool.metadata or {}).get("mcp") or {}).get("tool") or {}).get("_meta")) or {}
+
+
+async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MCPAdapter:
     """
     Create an MCP client for the agent based on the agent configuration.
     
@@ -217,7 +260,7 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
                    If not provided, falls back to environment variables only.
     
     Returns:
-        MultiServerMCPClient: A configured MCP client ready to connect to the server.
+        MCPAdapter: A configured MCP adapter ready to connect to the server and load its tools.
     
     Note:
         - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
@@ -226,6 +269,7 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
         - For NONE authentication, creates client with no additional headers
     """
     headers = {}
+    oauth2_auth = None
 
     if agent_config.authentication == AuthenticationType.RANCHER:
         if websocket:
@@ -267,63 +311,30 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
         oauth_token = websocket.cookies.get(cookie_name) if websocket else None
 
         mcp_url = agent_config.mcp_url
-        if oauth_token:
-            headers = {
-                "Authorization": f"Bearer {oauth_token or ''}"
-            }
+        oauth2_auth = _OAuth2BearerAuth(oauth_token)
 
     else:
         mcp_url = agent_config.mcp_url
 
-    client_config: dict = {
-        "url": mcp_url,
-        "transport": "streamable_http",
-        "headers": headers,
-    }
+    verify = None
     if os.environ.get('INSECURE_SKIP_TLS', 'false').lower() == "true":
-        client_config["httpx_client_factory"] = _make_insecure_http_client
-        
+        verify = False
+
     elif agent_config.ca_bundle_ref:
         try:
             ca_pem = get_ca_cert_from_secret(
                 agent_config.ca_bundle_ref.name,
                 agent_config.ca_bundle_ref.key,
             )
-            client_config["httpx_client_factory"] = _make_ca_httpx_factory(ca_pem)
+            verify = build_ca_ssl_context(ca_pem)
         except Exception as e:
             logging.error(f"Failed to load CA cert from secret '{agent_config.ca_bundle_ref.name}': {e}")
 
-
-    return MultiServerMCPClient({
-        agent_config.name: client_config,
-    })
-
-
-def _make_ca_httpx_factory(ca_pem: str):
-    """
-    Return an httpx_client_factory that trusts *both* the system CAs and
-    the supplied PEM-encoded CA certificate.
-
-    The factory follows the ``McpHttpClientFactory`` protocol expected by
-    ``langchain-mcp-adapters`` / the MCP Python SDK.
-    """
-    ctx = build_ca_ssl_context(ca_pem)
-
-    def factory(
-        headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
-        kwargs: dict = {"follow_redirects": True, "verify": ctx}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        if headers is not None:
-            kwargs["headers"] = headers
-        if auth is not None:
-            kwargs["auth"] = auth
-        return httpx.AsyncClient(**kwargs)
-
-    return factory
+    transport = StreamableHttpTransport(mcp_url, headers=headers, auth=oauth2_auth, verify=verify)
+    adapter = MCPAdapter(Client(transport))
+    # Kept on the adapter so _load_mcp_tools can tell a 401 apart from other connection errors.
+    adapter.oauth2_auth = oauth2_auth
+    return adapter
 
 
 def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, message: str):
@@ -366,15 +377,6 @@ def _update_agent_status(agent_cfg: AgentConfig, is_ready: bool, reason: str, me
         logging.info(f"Updated status for AIAgentConfig '{agent_cfg.name}' to {status['phase']}")
     except Exception as e:
         logging.error(f"Failed to update status for AIAgentConfig '{agent_cfg.name}': {str(e)}")
-
-
-def _make_insecure_http_client(
-    headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
-    """httpx_client_factory that disables TLS certificate verification."""
-    return httpx.AsyncClient(headers=headers or {}, timeout=timeout, auth=auth, verify=False)
 
 
 async def _load_agents_for_user(websocket: WebSocket) -> list[AgentConfig]:

@@ -31,8 +31,13 @@ dependencies = [
 test = [
     "testcontainers==4.15.0",
     "mock==5.2.0",
+<<<<<<< HEAD
     "pytest==9.1.1",
     "pytest-asyncio==1.4.1",
+=======
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.0",
+>>>>>>> fadfba9 (Update dependency pytest to v9.2.0)
 ]
 
 [tool.pytest.ini_options]

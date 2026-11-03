@@ -13,6 +13,14 @@
       "description": "Group all GitHub Actions updates into a single PR",
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Automerge non-breaking patch and pin updates",
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "automerge": true
     }
-  ]
+  ],
+  "vulnerabilityAlerts": {
+    "automerge": true
+  }
 }

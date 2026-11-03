@@ -3220,13 +3220,8 @@ requires-dist = [
 [package.metadata.requires-dev]
 test = [
     { name = "mock", specifier = "==5.2.0" },
-<<<<<<< HEAD
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "pytest-asyncio", specifier = "==1.4.1" },
-=======
     { name = "pytest", specifier = "==9.2.0" },
-    { name = "pytest-asyncio", specifier = "==1.4.0" },
->>>>>>> fadfba9 (Update dependency pytest to v9.2.0)
+    { name = "pytest-asyncio", specifier = "==1.4.1" },
     { name = "testcontainers", specifier = "==4.15.0" },
 ]
 

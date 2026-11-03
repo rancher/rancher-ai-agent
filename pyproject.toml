@@ -13,8 +13,13 @@ dependencies = [
     "langchain-openai==1.7.3",
     "langchain-text-splitters==1.1.3",
     "langchain-community==0.4.2",
+<<<<<<< HEAD
     "langgraph==1.2.17",
     "langfuse==5.1.0",
+=======
+    "langgraph==1.2.19",
+    "langfuse==5.0.4",
+>>>>>>> 3c445cd (Update dependency langgraph to v1.2.19)
     "langgraph-checkpoint-postgres==3.2.0",
     "mcp==2.3.0",
     "httpx2==2.12.0",

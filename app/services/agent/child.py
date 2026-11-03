@@ -22,6 +22,7 @@ from .middleware import (
     planner_subtask_middleware,
     human_validation_middleware,
     cancel_human_validation_middleware,
+    tool_response_overflow_middleware,
 )
 from .system_prompts import SEQUENTIAL_TOOL_CALLS
 from ..llm import get_llm_with_model
@@ -62,6 +63,7 @@ def create_child_agent(
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm, only_when_direct=True),
         SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+        tool_response_overflow_middleware(),
     ]
 
     if agent_config.llm_model_enabled and agent_config.llm_model:

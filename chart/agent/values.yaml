@@ -15,6 +15,9 @@ mcp:
     repository: rancher/rancher-ai-mcp
     tag: v1.2.0-alpha.3
     pullPolicy: IfNotPresent
+  toolboxImage:
+    repository: registry.suse.com/bci/bci-init
+    tag: 16.0
 
 ollamaLlmModel: ""
 geminiLlmModel: ""

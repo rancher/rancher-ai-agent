@@ -363,6 +363,8 @@ def _get_default_ai_agent_config_crds() -> list:
                     "createKubernetesResource", 
                     "patchKubernetesResource",
                     "createProject"
+                    "createGlobalRole",
+                    "createGlobalRoleBinding",
                 ]
             }
         },

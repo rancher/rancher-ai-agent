@@ -34,7 +34,7 @@ RUN ln -sf python${PYTHON_VERSION} /target/usr/bin/python3
 # - --no-emit-project: the project itself is not a package; app code is copied later.
 # - --no-deps: install only what the lock lists, no resolution at build time.
 # - --require-hashes: verify every artifact against the hashes in uv.lock.
-RUN pip install --no-cache-dir uv==0.11.11
+RUN pip install --no-cache-dir uv==0.13.7
 COPY pyproject.toml uv.lock ./
 RUN uv export --locked --no-default-groups --no-emit-project --format requirements.txt -o /tmp/requirements.txt && \
     uv pip install --no-cache --system --no-deps --require-hashes \

@@ -22,6 +22,7 @@ class _NoisyEndpointFilter(logging.Filter):
         return not any(path in msg for path in self._NOISY_PATHS)
 
 
+
 class _SensitiveHeaderFilter(logging.Filter):
     """Redact sensitive HTTP headers (e.g. Authorization, X-Api-Key) from log messages.
 

@@ -7,8 +7,10 @@ Assign each subtask to exactly one of the available agents (use the agent name).
 Available agents:
 {agents}
 
-Return a plan where each subtask has a clear, self-contained task description and the
-name of the agent best suited to perform it.
+Return a plan where each subtask has:
+- "title": one short sentence summarizing the subtask, shown to the user.
+- "description": a clear, self-contained task description used to carry out the work.
+- "agent": the name of the agent best suited to perform it.
 
 Rules you MUST follow:
 - If the message does not need any agent (e.g. greetings, small talk, thanks, or
@@ -28,8 +30,8 @@ Rules you MUST follow:
   copied exactly (case-sensitive). Do not invent new agent names.
 - The user's request may end with a list of parameters (e.g. "cluster", "namespace")
   provided as "key:value" pairs separated by ";". When a subtask needs one of these
-  parameters to be carried out, include it explicitly in that subtask's task
-  description. 
+  parameters to be carried out, include it explicitly in that subtask's
+  "description".
 - Never return an empty plan: the JSON object must contain at least one subtask, a
   non-empty "reply", or "cancel": true.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,

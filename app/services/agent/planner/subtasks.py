@@ -66,7 +66,7 @@ async def _run_pending_subtask(
     index = _next_subtask_index(subtasks)
     subtask = subtasks[index]
     agent_name = subtask["agent"]
-    task = subtask["task"]
+    task = subtask["description"]
 
     child = agents_by_name.get(agent_name)
     if child is None:
@@ -372,10 +372,12 @@ def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None 
     The global ``status`` is derived from the subtasks unless given explicitly.
     """
     
-    # Convert any actions in the subtasks into a tool call format for the client.
+    # The client only gets the short title (as "task"), never the full description. Any
+    # actions in the subtasks are converted into a tool call format for the client.
     tasks = [
         {
-            **st,
+            "task": st["title"],
+            **{k: v for k, v in st.items() if k not in ("title", "description")},
             **({"tools": [
                 {
                     "toolName": "select-option",

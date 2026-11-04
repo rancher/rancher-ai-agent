@@ -84,7 +84,9 @@ def test_plan_executes_subtasks_and_reduces():
     """
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
+    first_title = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_title = "Multiply the sum."
     final_answer = "The final result is 20."
 
     fake_llm_responses = [
@@ -92,8 +94,8 @@ def test_plan_executes_subtasks_and_reduces():
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": MATH_AGENT_NAME},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"title": first_title, "description": first_task, "agent": MATH_AGENT_NAME},
+                {"title": second_title, "description": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
         AIMessage(content="sum is 5"),
@@ -121,8 +123,8 @@ def test_plan_executes_subtasks_and_reduces():
         assert plans, "Should contain plan progress events"
         assert plans[-1]["approval"] is False
         assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
-            (first_task, MATH_AGENT_NAME, "completed"),
-            (second_task, CALCULATOR_AGENT_NAME, "completed"),
+            (first_title, MATH_AGENT_NAME, "completed"),
+            (second_title, CALCULATOR_AGENT_NAME, "completed"),
         ]
 
         assert final_answer in full_message, "Should contain the reducer's final answer"
@@ -186,7 +188,9 @@ def test_plan_with_unknown_agent_fails():
     """
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
+    first_title = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_title = "Multiply the sum."
     unknown_agent_name = "ghost-agent"
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=[
@@ -194,8 +198,8 @@ def test_plan_with_unknown_agent_fails():
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": unknown_agent_name},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"title": first_title, "description": first_task, "agent": unknown_agent_name},
+                {"title": second_title, "description": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
     ])
@@ -212,8 +216,8 @@ def test_plan_with_unknown_agent_fails():
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
         assert plans, "Should contain plan progress events"
         assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
-            (first_task, unknown_agent_name, "failed"),
-            (second_task, CALCULATOR_AGENT_NAME, "pending"),
+            (first_title, unknown_agent_name, "failed"),
+            (second_title, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
         assert len(fake_llm.all_calls) == 1, \
@@ -236,15 +240,17 @@ def test_plan_approval_rejected(monkeypatch):
 
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
+    first_title = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_title = "Multiply the sum."
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=[
         AIMessage(content="", tool_calls=[{
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": MATH_AGENT_NAME},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"title": first_title, "description": first_task, "agent": MATH_AGENT_NAME},
+                {"title": second_title, "description": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
     ])
@@ -266,8 +272,8 @@ def test_plan_approval_rejected(monkeypatch):
         assert len(plans) == 1, "Should contain exactly the plan awaiting approval"
         assert plans[0]["approval"] is True
         assert [(t["task"], t["agent"], t["status"]) for t in plans[0]["tasks"]] == [
-            (first_task, MATH_AGENT_NAME, "pending"),
-            (second_task, CALCULATOR_AGENT_NAME, "pending"),
+            (first_title, MATH_AGENT_NAME, "pending"),
+            (second_title, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
         # The rejection ends the run with a cancelled plan event (tasks keep their original pending status).
@@ -276,8 +282,8 @@ def test_plan_approval_rejected(monkeypatch):
         assert rejection_plans[0]["approval"] is False
         assert rejection_plans[0]["status"] == "cancelled"
         assert [(t["task"], t["agent"], t["status"]) for t in rejection_plans[0]["tasks"]] == [
-            (first_task, MATH_AGENT_NAME, "pending"),
-            (second_task, CALCULATOR_AGENT_NAME, "pending"),
+            (first_title, MATH_AGENT_NAME, "pending"),
+            (second_title, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
         assert len(fake_llm.all_calls) == 1, \
@@ -311,7 +317,9 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
     from app.services.oauth2.store import oauth_store
 
     first_task = "add 2 and 3"
+    first_title = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_title = "Multiply the sum."
     final_answer = "The final result is 20."
 
     def agent_config(name, description, prompt, port, tool_name):
@@ -349,8 +357,8 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": MATH_AGENT_NAME},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"title": first_title, "description": first_task, "agent": MATH_AGENT_NAME},
+                {"title": second_title, "description": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
         AIMessage(content="sum is 5"),

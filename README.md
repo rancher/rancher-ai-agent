@@ -1,6 +1,7 @@
 # AI Assistant for Rancher
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/rancher/rancher-ai-agent/badge)](https://scorecard.dev/viewer/?uri=github.com/rancher/rancher-ai-agent)
 
+
 ## Architecture
 
 The system is composed of a **UI Extension** for user interaction, an **Agent** service for intelligent decision-making, and one or more **MCP Servers** that act as the intermediary between the agent and the Rancher API (or other backends). 

@@ -122,7 +122,7 @@ def test_plan_executes_subtasks_and_reduces():
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
         assert plans, "Should contain plan progress events"
         assert plans[-1]["approval"] is False
-        assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
+        assert [(t["title"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
             (first_title, MATH_AGENT_NAME, "completed"),
             (second_title, CALCULATOR_AGENT_NAME, "completed"),
         ]
@@ -215,7 +215,7 @@ def test_plan_with_unknown_agent_fails():
 
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
         assert plans, "Should contain plan progress events"
-        assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
+        assert [(t["title"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
             (first_title, unknown_agent_name, "failed"),
             (second_title, CALCULATOR_AGENT_NAME, "pending"),
         ]
@@ -271,7 +271,7 @@ def test_plan_approval_rejected(monkeypatch):
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", approval_message)]
         assert len(plans) == 1, "Should contain exactly the plan awaiting approval"
         assert plans[0]["approval"] is True
-        assert [(t["task"], t["agent"], t["status"]) for t in plans[0]["tasks"]] == [
+        assert [(t["title"], t["agent"], t["status"]) for t in plans[0]["tasks"]] == [
             (first_title, MATH_AGENT_NAME, "pending"),
             (second_title, CALCULATOR_AGENT_NAME, "pending"),
         ]
@@ -281,7 +281,7 @@ def test_plan_approval_rejected(monkeypatch):
         assert len(rejection_plans) == 1, "Should contain exactly the cancelled plan"
         assert rejection_plans[0]["approval"] is False
         assert rejection_plans[0]["status"] == "cancelled"
-        assert [(t["task"], t["agent"], t["status"]) for t in rejection_plans[0]["tasks"]] == [
+        assert [(t["title"], t["agent"], t["status"]) for t in rejection_plans[0]["tasks"]] == [
             (first_title, MATH_AGENT_NAME, "pending"),
             (second_title, CALCULATOR_AGENT_NAME, "pending"),
         ]

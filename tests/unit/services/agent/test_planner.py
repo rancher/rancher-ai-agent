@@ -127,6 +127,13 @@ class TestPlanParsing:
 
         assert plan == Plan(subtasks=[SubTask(title="List clusters", description="List clusters", agent="rancher")])
 
+    def test_parse_plan_defaults_missing_description_to_empty(self):
+        raw = AIMessage(content='{"subtasks":[{"title":"List clusters","agent":"rancher"}]}')
+
+        plan = _parse_plan_from_raw(raw)
+
+        assert plan == Plan(subtasks=[SubTask(title="List clusters", description="", agent="rancher")])
+
     @pytest.mark.parametrize(
         "raw",
         [
@@ -187,10 +194,10 @@ class TestFailureReporting:
         assert plan["status"] == "failed"
         assert len(plan["tasks"]) == 1
         task = plan["tasks"][0]
-        # Only the short title is sent to the client, as "task".
-        assert task["task"] == "Step"
-        assert "title" not in task
-        assert "description" not in task
+        # Both the title and the description are sent to the client.
+        assert task["title"] == "Step"
+        assert task["description"] == "step with a long description"
+        assert "task" not in task
         assert task["agent"] == "a"
         assert task["status"] == "failed"
         assert task["actions"] == FAILURE_ACTIONS
@@ -664,6 +671,21 @@ class TestRunPendingSubtask:
         assert config["configurable"]["planner_subtask"] is True
         # The in-progress plan is emitted before the child runs.
         assert dispatch.call_args_list[0].args[0] == "planner-plan-created"
+
+    @pytest.mark.asyncio
+    async def test_empty_description_sends_title_to_child(self, dispatch):
+        child = _mock_child("rancher", {"messages": [AIMessage(content="done")]})
+        subtasks = [{"title": "List all clusters.", "description": "", "agent": "rancher", "status": "pending"}]
+        results = []
+        llm = _mock_llm(response=AIMessage(content="yes"))
+
+        await _run_pending_subtask(
+            llm, {"rancher": child}, subtasks, results, _AgentCallCounter(), emit_plan=False
+        )
+
+        sent = child.agent.ainvoke.call_args.args[0]["messages"][0].content
+        assert "List all clusters." in sent
+        assert results[-1] == "Task: List all clusters.\nAgent: rancher\nResult: done"
 
     @pytest.mark.asyncio
     async def test_direct_handoff_does_not_flag_subtask_or_emit_plan(self, dispatch):

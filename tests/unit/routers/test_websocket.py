@@ -1230,12 +1230,7 @@ def _plan_subtasks():
 
 def _cancelled_plan_event():
     # Subtasks keep their original status when plan is cancelled (no status modification)
-    # The client gets the title as "task", without the description.
-    tasks = [
-        {"task": "a", "status": "completed", "agent": "rancher"},
-        {"task": "b", "status": "in_progress", "agent": "fleet"},
-        {"task": "c", "status": "pending", "agent": "rancher"},
-    ]
+    tasks = _plan_subtasks()
     return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled"})}</plan>'
 
 

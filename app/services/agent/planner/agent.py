@@ -59,7 +59,11 @@ class SubTask(BaseModel):
 
     title: str = Field(description="A short, user-facing sentence summarizing the subtask.")
     description: str = Field(
-        description="The clear, self-contained task description the agent will carry out."
+        default="",
+        description=(
+            "The clear, self-contained task description the agent will carry out. "
+            "Empty when the title alone is enough."
+        ),
     )
     status: Literal["pending", "in_progress", "completed", "cancelled", "failed"] = Field(
         default="pending", description="The current status of the subtask."

@@ -8,9 +8,38 @@ Available agents:
 {agents}
 
 Return a plan where each subtask has:
-- "title": one short sentence summarizing the subtask, shown to the user.
-- "description": a clear, self-contained task description used to carry out the work.
+- "title": one short sentence summarizing the subtask, shown to the user. Write it as
+  an instruction that can be carried out on its own.
+- "description": optional. MUST be an empty string ("") unless it adds concrete
+  information that is NOT already in the title. See "How to fill the description".
 - "agent": the name of the agent best suited to perform it.
+
+How to fill the description:
+1. Write the title first, including every name, resource, cluster and namespace
+   needed to carry out the subtask.
+2. List the facts you would put in the description. Remove every fact that is already
+   in the title, even if worded differently (e.g. "namespace named 'test2'" is the
+   same as "the 'test2' namespace").
+3. Remove generic words that add no information: "new", "Kubernetes", "resource",
+   "create and start", "make sure", "in the cluster", etc.
+4. If nothing is left, set "description" to "". Only if concrete facts remain
+   (e.g. image, tag, replicas, ports, labels, resource limits, filters, sort order,
+   output format, or how to use the result of a previous subtask), write them in the
+   description.
+Most simple subtasks (create/delete/list/get a single resource) MUST have an empty
+description.
+
+WRONG (the description just rewords the title):
+- {{"title": "Create the 'test2' namespace in the local cluster.",
+   "description": "Create a new Kubernetes namespace named 'test2' in the local cluster."}}
+- {{"title": "List all clusters.", "description": "Retrieve the list of all clusters."}}
+
+RIGHT:
+- {{"title": "Create the 'test2' namespace in the local cluster.", "description": ""}}
+- {{"title": "List all clusters.", "description": ""}}
+- {{"title": "Deploy nginx in the 'test2' namespace.", "description": "Create a
+   Deployment named 'web' in the 'test2' namespace of the local cluster using the
+   'nginx:1.27' image, with 3 replicas, exposing container port 80."}}
 
 Rules you MUST follow:
 - If the message does not need any agent (e.g. greetings, small talk, thanks, or
@@ -31,7 +60,9 @@ Rules you MUST follow:
 - The user's request may end with a list of parameters (e.g. "cluster", "namespace")
   provided as "key:value" pairs separated by ";". When a subtask needs one of these
   parameters to be carried out, include it explicitly in that subtask's
-  "description".
+  "description", or in its "title" when the description is empty.
+- A subtask's "description" MUST NOT repeat or reword its "title". When in doubt, leave
+  the description empty.
 - Never return an empty plan: the JSON object must contain at least one subtask, a
   non-empty "reply", or "cancel": true.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,

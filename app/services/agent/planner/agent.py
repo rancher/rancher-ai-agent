@@ -313,6 +313,9 @@ def create_planner_agent(
             "planner-plan-finished",
             _format_plan_event(subtasks, approval=False),
         )
+        # The next step (another subtask or the reducer's answer) streams in its own message.
+        dispatch_custom_event("planner-message-end", "</message>")
+        dispatch_custom_event("planner-message-start", "<message>")
         return {"subtasks": subtasks, "results": results, "awaiting_input": False}
 
     async def reduce_node(state: PlannerState) -> dict:

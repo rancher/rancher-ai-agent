@@ -962,6 +962,24 @@ class TestCallAgentStop:
         with pytest.raises(NeedsOauth2):
             await _call_agent(agent=agent, input_data={"messages": []}, config={"configurable": {}}, websocket=websocket)
 
+    @pytest.mark.asyncio
+    async def test_resume_does_not_open_message(self):
+        """When resuming after OAuth2 (open_message=False) no new <message> is sent."""
+        agent = _make_stream_agent([_text_event("hello")])
+
+        async def _block():
+            await asyncio.sleep(60)
+
+        websocket = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=_block)
+
+        await _call_agent(
+            agent=agent, input_data=None, config={"configurable": {}}, websocket=websocket, open_message=False
+        )
+
+        sent = [call.args[0] for call in websocket.send_text.await_args_list]
+        assert sent == ["hello"]
+
 
 class TestStreamPartialText:
     @pytest.mark.asyncio

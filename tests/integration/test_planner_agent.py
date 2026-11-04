@@ -374,14 +374,20 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
             websocket.send_text("add 2 and 3, then multiply by 4")
             authentication_requests = []
             messages = []
+            transcript = ""
             # Each subtask streams in its own message, followed by the reducer's answer.
             while len(messages) < 3:
                 text = _receive_until(websocket, "</authentication>", "</message>")
+                transcript += text
                 if text.endswith("</authentication>"):
                     authentication_requests.append(text)
                     websocket.send_text("authentication_confirmed")
                 else:
                     messages.append(text)
+
+        # Resuming after OAuth2 streams into the message left open, it never opens another.
+        tags = re.findall(r"</?message>", transcript)
+        assert tags == ["<message>", "</message>"] * 3, tags
 
         return authentication_requests, "".join(messages), fake_llm
     finally:

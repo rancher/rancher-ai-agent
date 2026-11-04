@@ -113,7 +113,8 @@ def test_plan_executes_subtasks_and_reduces():
             websocket.receive_text()
 
             websocket.send_text(fake_prompt)
-            full_message = collect_messages(websocket, 1)[0]
+            # Each subtask streams in its own message, followed by the reducer's answer.
+            full_message = "".join(collect_messages(websocket, 3))
 
         # The plan progress is streamed; the last update has every subtask completed.
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
@@ -303,7 +304,7 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
     token the callback would have stored is already in the OAuth store.
 
     Returns the text of every frame group received: the authentication requests, in
-    order, and the final message.
+    order, and the concatenated messages of the turn.
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.services.oauth2.cookies import get_oauth_cookie_names
@@ -372,14 +373,17 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
 
             websocket.send_text("add 2 and 3, then multiply by 4")
             authentication_requests = []
-            while True:
+            messages = []
+            # Each subtask streams in its own message, followed by the reducer's answer.
+            while len(messages) < 3:
                 text = _receive_until(websocket, "</authentication>", "</message>")
-                if not text.endswith("</authentication>"):
-                    break
-                authentication_requests.append(text)
-                websocket.send_text("authentication_confirmed")
+                if text.endswith("</authentication>"):
+                    authentication_requests.append(text)
+                    websocket.send_text("authentication_confirmed")
+                else:
+                    messages.append(text)
 
-        return authentication_requests, text, fake_llm
+        return authentication_requests, "".join(messages), fake_llm
     finally:
         LLMManager._instance = None
         for process in processes:

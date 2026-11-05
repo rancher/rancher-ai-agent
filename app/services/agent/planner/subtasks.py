@@ -66,8 +66,7 @@ async def _run_pending_subtask(
     index = _next_subtask_index(subtasks)
     subtask = subtasks[index]
     agent_name = subtask["agent"]
-    # Trivial subtasks have no description: the title alone is the task.
-    task = subtask.get("description") or subtask["title"]
+    task = subtask["task"]
 
     child = agents_by_name.get(agent_name)
     if child is None:

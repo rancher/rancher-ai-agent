@@ -120,33 +120,33 @@ class TestPlanParsing:
 
     def test_parse_plan_recovers_json_surrounded_by_markdown(self):
         raw = AIMessage(
-            content='```json\n{"subtasks":[{"title":"List clusters","description":"List clusters","agent":"rancher"}]}\n```'
+            content='```json\n{"subtasks":[{"summary":"List clusters","task":"List clusters","agent":"rancher"}]}\n```'
         )
 
         plan = _parse_plan_from_raw(raw)
 
-        assert plan == Plan(subtasks=[SubTask(title="List clusters", description="List clusters", agent="rancher")])
+        assert plan == Plan(subtasks=[SubTask(summary="List clusters", task="List clusters", agent="rancher")])
 
-    def test_parse_plan_defaults_missing_description_to_empty(self):
-        raw = AIMessage(content='{"subtasks":[{"title":"List clusters","agent":"rancher"}]}')
+    def test_parse_plan_defaults_missing_summary_to_empty(self):
+        raw = AIMessage(content='{"subtasks":[{"task":"List clusters","agent":"rancher"}]}')
 
         plan = _parse_plan_from_raw(raw)
 
-        assert plan == Plan(subtasks=[SubTask(title="List clusters", description="", agent="rancher")])
+        assert plan == Plan(subtasks=[SubTask(task="List clusters", summary="", agent="rancher")])
 
     @pytest.mark.parametrize(
         "raw",
         [
             AIMessage(content="not json"),
             AIMessage(content="{invalid json}"),
-            AIMessage(content='{"subtasks": [{"title": "missing agent", "description": "missing agent"}]}'),
+            AIMessage(content='{"subtasks": [{"summary": "missing agent", "task": "missing agent"}]}'),
         ],
     )
     def test_parse_plan_returns_none_for_unusable_content(self, raw):
         assert _parse_plan_from_raw(raw) is None
 
     def test_format_plan_returns_json(self):
-        subtasks = [{"title": "List clusters", "description": "List clusters", "agent": "rancher", "status": "pending"}]
+        subtasks = [{"summary": "List clusters", "task": "List clusters", "agent": "rancher", "status": "pending"}]
 
         assert json.loads(_format_plan(subtasks)) == subtasks
 
@@ -154,8 +154,8 @@ class TestPlanParsing:
 class TestFailureReporting:
     def test_fail_plan_marks_task_failed_and_returns_user_message(self):
         subtasks = [
-            {"title": "step one", "description": "step one", "agent": "a", "status": "in_progress"},
-            {"title": "step two", "description": "step two", "agent": "b", "status": "pending"},
+            {"summary": "step one", "task": "step one", "agent": "a", "status": "in_progress"},
+            {"summary": "step two", "task": "step two", "agent": "b", "status": "pending"},
         ]
         results = ["an earlier result"]
 
@@ -182,7 +182,7 @@ class TestFailureReporting:
         dispatch.assert_not_called()
 
     def test_fail_plan_emits_updated_plan_when_requested(self):
-        subtasks = [{"title": "Step", "description": "step with a long description", "agent": "a", "status": "in_progress"}]
+        subtasks = [{"summary": "Step", "task": "step with a long description", "agent": "a", "status": "in_progress"}]
 
         with patch("app.services.agent.planner.subtasks.dispatch_custom_event") as dispatch:
             _fail_plan(subtasks, [], 0, "step with a long description", "failed", emit_plan=True)
@@ -194,10 +194,9 @@ class TestFailureReporting:
         assert plan["status"] == "failed"
         assert len(plan["tasks"]) == 1
         task = plan["tasks"][0]
-        # Both the title and the description are sent to the client.
-        assert task["title"] == "Step"
-        assert task["description"] == "step with a long description"
-        assert "task" not in task
+        # Both the task and its summary are sent to the client.
+        assert task["summary"] == "Step"
+        assert task["task"] == "step with a long description"
         assert task["agent"] == "a"
         assert task["status"] == "failed"
         assert task["actions"] == FAILURE_ACTIONS
@@ -324,9 +323,9 @@ class TestRouting:
 
 class TestRetryHelpers:
     SUBTASKS = [
-        {"title": "one", "description": "one", "agent": "a", "status": "completed"},
-        {"title": "two", "description": "two", "agent": "b", "status": "failed", "actions": FAILURE_ACTIONS},
-        {"title": "three", "description": "three", "agent": "a", "status": "pending"},
+        {"summary": "one", "task": "one", "agent": "a", "status": "completed"},
+        {"summary": "two", "task": "two", "agent": "b", "status": "failed", "actions": FAILURE_ACTIONS},
+        {"summary": "three", "task": "three", "agent": "a", "status": "pending"},
     ]
 
     @pytest.mark.parametrize("helper", [_retry_failed_subtasks, _retry_all_subtasks])
@@ -339,7 +338,7 @@ class TestRetryHelpers:
 
         assert plan is not None
         assert [st.status for st in plan.subtasks] == ["completed", "pending", "pending"]
-        assert [st.description for st in plan.subtasks] == ["one", "two", "three"]
+        assert [st.task for st in plan.subtasks] == ["one", "two", "three"]
 
     def test_retry_all_subtasks_resets_every_subtask(self):
         plan = _retry_all_subtasks(cast(PlannerState, {"subtasks": self.SUBTASKS}))
@@ -455,8 +454,8 @@ class TestHandleFailureActions:
 
 class TestCreatePlan:
     FAILED_STATE_SUBTASKS = [
-        {"title": "one", "description": "one", "agent": "a", "status": "completed"},
-        {"title": "two", "description": "two", "agent": "b", "status": "failed"},
+        {"summary": "one", "task": "one", "agent": "a", "status": "completed"},
+        {"summary": "two", "task": "two", "agent": "b", "status": "failed"},
     ]
 
     @staticmethod
@@ -473,7 +472,7 @@ class TestCreatePlan:
 
     @pytest.mark.asyncio
     async def test_returns_parsed_plan(self):
-        expected = Plan(subtasks=[SubTask(title="List clusters", description="List clusters", agent="rancher")])
+        expected = Plan(subtasks=[SubTask(summary="List clusters", task="List clusters", agent="rancher")])
         llm = _mock_llm(structured_response={"raw": None, "parsed": expected})
 
         plan, retry = await _create_plan(llm, "- rancher: desc", self._state("list clusters"))
@@ -486,12 +485,12 @@ class TestCreatePlan:
 
     @pytest.mark.asyncio
     async def test_recovers_plan_from_raw_message(self):
-        raw = AIMessage(content='{"subtasks":[{"title":"List clusters","description":"List clusters","agent":"rancher"}]}')
+        raw = AIMessage(content='{"subtasks":[{"summary":"List clusters","task":"List clusters","agent":"rancher"}]}')
         llm = _mock_llm(structured_response={"raw": raw, "parsed": None})
 
         plan, retry = await _create_plan(llm, "", self._state("list clusters"))
 
-        assert plan == Plan(subtasks=[SubTask(title="List clusters", description="List clusters", agent="rancher")])
+        assert plan == Plan(subtasks=[SubTask(summary="List clusters", task="List clusters", agent="rancher")])
         assert retry is False
 
     @pytest.mark.asyncio
@@ -517,7 +516,7 @@ class TestCreatePlan:
 
     @pytest.mark.asyncio
     async def test_includes_feedback_in_prompt(self):
-        expected = Plan(subtasks=[SubTask(title="t", description="t", agent="a")])
+        expected = Plan(subtasks=[SubTask(summary="t", task="t", agent="a")])
         llm = _mock_llm(structured_response={"raw": None, "parsed": expected})
 
         await _create_plan(llm, "", self._state("list clusters"), feedback=["first", "second"])
@@ -530,7 +529,7 @@ class TestCreatePlan:
     @pytest.mark.asyncio
     async def test_includes_previous_plan_with_feedback(self):
         llm = _mock_llm(structured_response={"raw": None, "parsed": Plan(subtasks=[], cancel=True)})
-        state = self._state("list clusters", [{"title": "old step", "description": "old step", "agent": "a", "status": "pending"}])
+        state = self._state("list clusters", [{"summary": "old step", "task": "old step", "agent": "a", "status": "pending"}])
 
         plan, _ = await _create_plan(llm, "", state, feedback=["stop"])
 
@@ -539,7 +538,7 @@ class TestCreatePlan:
 
     @pytest.mark.asyncio
     async def test_includes_previous_failure_in_prompt(self):
-        expected = Plan(subtasks=[SubTask(title="t", description="t", agent="a")])
+        expected = Plan(subtasks=[SubTask(summary="t", task="t", agent="a")])
         llm = _mock_llm(structured_response={"raw": None, "parsed": expected})
 
         await _create_plan(
@@ -576,7 +575,7 @@ class TestCreatePlan:
 
     @pytest.mark.asyncio
     async def test_quick_actions_are_ignored_without_previous_failure(self):
-        expected = Plan(subtasks=[SubTask(title="t", description="t", agent="a")])
+        expected = Plan(subtasks=[SubTask(summary="t", task="t", agent="a")])
         llm = _mock_llm(structured_response={"raw": None, "parsed": expected})
         state = self._state(RETRY_SUBTASK_REQUEST, self.FAILED_STATE_SUBTASKS)
 
@@ -648,7 +647,7 @@ class TestRunPendingSubtask:
 
     @staticmethod
     def _plan(*agents: str) -> list[dict]:
-        return [{"title": f"Title {i}", "description": f"task {i}", "agent": agent, "status": "pending"} for i, agent in enumerate(agents)]
+        return [{"summary": f"Title {i}", "task": f"task {i}", "agent": agent, "status": "pending"} for i, agent in enumerate(agents)]
 
     @pytest.mark.asyncio
     async def test_completes_subtask_and_records_result(self, dispatch):
@@ -671,21 +670,6 @@ class TestRunPendingSubtask:
         assert config["configurable"]["planner_subtask"] is True
         # The in-progress plan is emitted before the child runs.
         assert dispatch.call_args_list[0].args[0] == "planner-plan-created"
-
-    @pytest.mark.asyncio
-    async def test_empty_description_sends_title_to_child(self, dispatch):
-        child = _mock_child("rancher", {"messages": [AIMessage(content="done")]})
-        subtasks = [{"title": "List all clusters.", "description": "", "agent": "rancher", "status": "pending"}]
-        results = []
-        llm = _mock_llm(response=AIMessage(content="yes"))
-
-        await _run_pending_subtask(
-            llm, {"rancher": child}, subtasks, results, _AgentCallCounter(), emit_plan=False
-        )
-
-        sent = child.agent.ainvoke.call_args.args[0]["messages"][0].content
-        assert "List all clusters." in sent
-        assert results[-1] == "Task: List all clusters.\nAgent: rancher\nResult: done"
 
     @pytest.mark.asyncio
     async def test_direct_handoff_does_not_flag_subtask_or_emit_plan(self, dispatch):
@@ -955,7 +939,7 @@ class TestAwaitingUserInput:
 
     @pytest.mark.asyncio
     async def test_direct_handoff_resumes_child_with_user_answer(self):
-        plan = Plan(subtasks=[SubTask(title="Create a namespace.", description="Create a namespace.", agent="rancher")])
+        plan = Plan(subtasks=[SubTask(summary="Create a namespace.", task="Create a namespace.", agent="rancher")])
         graph, llm, agent = self._graph(
             plan, evaluations=["input", "yes"], child_replies=["What is the name?", "Namespace test-ns created"]
         )
@@ -981,8 +965,8 @@ class TestAwaitingUserInput:
         monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "false")
         plan = Plan(
             subtasks=[
-                SubTask(title="Create a namespace.", description="Create a namespace.", agent="rancher"),
-                SubTask(title="Create a pod in the namespace.", description="Create a pod in the namespace.", agent="rancher"),
+                SubTask(summary="Create a namespace.", task="Create a namespace.", agent="rancher"),
+                SubTask(summary="Create a pod in the namespace.", task="Create a pod in the namespace.", agent="rancher"),
             ]
         )
         graph, llm, agent = self._graph(
@@ -1046,7 +1030,7 @@ class TestMessageSplit:
     @pytest.mark.asyncio
     async def test_splits_message_after_each_subtask(self, monkeypatch):
         monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "false")
-        plan = Plan(subtasks=[SubTask(title="one", description="one", agent="rancher"), SubTask(title="two", description="two", agent="rancher")])
+        plan = Plan(subtasks=[SubTask(summary="one", task="one", agent="rancher"), SubTask(summary="two", task="two", agent="rancher")])
 
         events = await self._run(plan, llm_replies=["yes", "yes", "final answer"], child_replies=["r1", "r2"])
 
@@ -1065,7 +1049,7 @@ class TestMessageSplit:
 
     @pytest.mark.asyncio
     async def test_direct_handoff_keeps_a_single_message(self):
-        plan = Plan(subtasks=[SubTask(title="one", description="one", agent="rancher")])
+        plan = Plan(subtasks=[SubTask(summary="one", task="one", agent="rancher")])
 
         events = await self._run(plan, llm_replies=["yes"], child_replies=["r1"])
 
@@ -1075,7 +1059,7 @@ class TestMessageSplit:
 class TestPlanFeedback:
     """End-to-end planner graph runs where the user gives feedback on the plan."""
 
-    INITIAL = Plan(subtasks=[SubTask(title="one", description="one", agent="rancher"), SubTask(title="two", description="two", agent="rancher")])
+    INITIAL = Plan(subtasks=[SubTask(summary="one", task="one", agent="rancher"), SubTask(summary="two", task="two", agent="rancher")])
 
     @staticmethod
     def _graph(*plans: Plan):
@@ -1093,7 +1077,7 @@ class TestPlanFeedback:
     async def test_sends_changes_without_storing_them(self, monkeypatch):
         monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "true")
         revised = Plan(
-            subtasks=[SubTask(title="one", description="one", agent="rancher"), SubTask(title="three", description="three", agent="rancher")],
+            subtasks=[SubTask(summary="one", task="one", agent="rancher"), SubTask(summary="three", task="three", agent="rancher")],
             changes="Replaced step two with step three.",
         )
         graph = self._graph(self.INITIAL, revised)
@@ -1105,7 +1089,7 @@ class TestPlanFeedback:
 
         dispatch.assert_called_once_with("planner-plan-changes", "Replaced step two with step three.")
         state = (await graph.aget_state(config)).values
-        assert [st["description"] for st in state["subtasks"]] == ["one", "three"]
+        assert [st["task"] for st in state["subtasks"]] == ["one", "three"]
         stored = [m.content for m in state["messages"] + state["messages_history"]]
         assert revised.changes not in stored
 
@@ -1150,9 +1134,9 @@ class TestStoppedPlanEvent:
 
     def test_unfinished_subtasks_are_cancelled(self):
         subtasks = [
-            {"title": "a", "description": "a", "status": "completed", "agent": "rancher"},
-            {"title": "b", "description": "b", "status": "in_progress", "agent": "fleet"},
-            {"title": "c", "description": "c", "status": "pending", "agent": "rancher"},
+            {"summary": "a", "task": "a", "status": "completed", "agent": "rancher"},
+            {"summary": "b", "task": "b", "status": "in_progress", "agent": "fleet"},
+            {"summary": "c", "task": "c", "status": "pending", "agent": "rancher"},
         ]
 
         payload = self._payload(format_stopped_plan_event(subtasks))
@@ -1166,8 +1150,8 @@ class TestStoppedPlanEvent:
 
     def test_global_status_is_cancelled_even_with_a_failed_subtask(self):
         subtasks = [
-            {"title": "a", "description": "a", "status": "failed", "agent": "rancher"},
-            {"title": "b", "description": "b", "status": "pending", "agent": "fleet"},
+            {"summary": "a", "task": "a", "status": "failed", "agent": "rancher"},
+            {"summary": "b", "task": "b", "status": "pending", "agent": "fleet"},
         ]
 
         payload = self._payload(format_stopped_plan_event(subtasks))
@@ -1179,10 +1163,10 @@ class TestStoppedPlanEvent:
     @pytest.mark.parametrize("subtasks", [
         None,
         [],
-        [{"title": "a", "description": "a", "status": "in_progress", "agent": "rancher"}],
+        [{"summary": "a", "task": "a", "status": "in_progress", "agent": "rancher"}],
         [
-            {"title": "a", "description": "a", "status": "completed", "agent": "rancher"},
-            {"title": "b", "description": "b", "status": "completed", "agent": "fleet"},
+            {"summary": "a", "task": "a", "status": "completed", "agent": "rancher"},
+            {"summary": "b", "task": "b", "status": "completed", "agent": "fleet"},
         ],
     ])
     def test_nothing_to_report(self, subtasks):

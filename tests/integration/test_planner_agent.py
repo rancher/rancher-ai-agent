@@ -115,8 +115,7 @@ def test_plan_executes_subtasks_and_reduces():
             websocket.receive_text()
 
             websocket.send_text(fake_prompt)
-            # Each subtask streams in its own message, followed by the reducer's answer.
-            full_message = "".join(collect_messages(websocket, 3))
+            full_message = collect_messages(websocket, 1)[0]
 
         # The plan progress is streamed; the last update has every subtask completed.
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
@@ -310,16 +309,14 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
     token the callback would have stored is already in the OAuth store.
 
     Returns the text of every frame group received: the authentication requests, in
-    order, and the concatenated messages of the turn.
+    order, and the final message.
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.services.oauth2.cookies import get_oauth_cookie_names
     from app.services.oauth2.store import oauth_store
 
     first_task = "add 2 and 3"
-    first_summary = "Add the numbers."
     second_task = "multiply 5 by 4"
-    second_summary = "Multiply the sum."
     final_answer = "The final result is 20."
 
     def agent_config(name, description, prompt, port, tool_name):
@@ -357,8 +354,8 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"summary": first_summary, "task": first_task, "agent": MATH_AGENT_NAME},
-                {"summary": second_summary, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"task": first_task, "agent": MATH_AGENT_NAME},
+                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
         AIMessage(content="sum is 5"),

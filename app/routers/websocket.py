@@ -142,13 +142,17 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
 
             # A run can need OAuth2 several times (e.g. a plan whose subtasks use
             # different agents), so authenticate and resume until it completes.
+            # The <message> opened by the first call (or reopened by the planner between
+            # subtasks) is still open when the run resumes, so only the first call opens one.
+            open_message = True
             while True:
                 try:
                     next_request = await _call_agent(
                         agent=target_agent,
                         input_data=input_data,
                         config=target_config,
-                        websocket=websocket)
+                        websocket=websocket,
+                        open_message=open_message)
                     break
                 except NeedsOauth2 as e:
                     try:
@@ -177,6 +181,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
                     # triggered OAuth). Passing None lets LangGraph retry from the
                     # saved state rather than starting a new turn.
                     input_data = None
+                    open_message = False
 
         except WebSocketDisconnect:
             logging.debug(f"Client disconnected.")
@@ -401,6 +406,7 @@ async def _call_agent(
     input_data: Any,
     config: dict,
     websocket: WebSocket,
+    open_message: bool = True,
 ) -> str | None:
     """
     Streams the agent's response to a WebSocket connection, handling interruptions.
@@ -420,13 +426,16 @@ async def _call_agent(
         input_data: The input data for the agent's run.
         config: The run configuration.
         websocket: The WebSocket connection.
+        open_message: Whether to open a new ``<message>``. False when resuming a run
+            after OAuth2, since the run's current message is still open.
 
     Returns:
         The raw message that preempted the run so the caller can process it next,
         or None if the run completed or was stopped.
     """
 
-    await websocket.send_text("<message>")
+    if open_message:
+        await websocket.send_text("<message>")
 
     partial_text: list[str] = []
     stream_task = asyncio.create_task(

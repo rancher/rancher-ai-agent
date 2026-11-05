@@ -992,6 +992,61 @@ class TestAwaitingUserInput:
         llm.with_structured_output.return_value.ainvoke.assert_awaited_once()
 
 
+class TestMessageSplit:
+    """Each subtask of a multi-subtask plan, and the reducer's answer, stream in their own message."""
+
+    @staticmethod
+    async def _run(plan: Plan, llm_replies: list[str], child_replies: list[str]) -> list[tuple[str, str]]:
+        llm = _mock_llm(
+            structured_response={"raw": None, "parsed": plan, "parsing_error": None},
+        )
+        llm.ainvoke.side_effect = [AIMessage(content=reply) for reply in llm_replies]
+        config = MagicMock()
+        config.name = "rancher"
+        config.description = "Rancher agent"
+        agent = MagicMock()
+        agent.ainvoke = AsyncMock(
+            side_effect=[{"messages": [AIMessage(content=reply)]} for reply in child_replies]
+        )
+        agent.aget_state = AsyncMock(return_value=SimpleNamespace(interrupts=[]))
+        graph = create_planner_agent(llm, [ChildAgent(config=config, agent=agent)], InMemorySaver())
+
+        # One parent mock records the events dispatched from both modules in order.
+        events = MagicMock()
+        with patch("app.services.agent.planner.agent.dispatch_custom_event", events.agent), \
+                patch("app.services.agent.planner.subtasks.dispatch_custom_event", events.subtasks):
+            await graph.ainvoke({"messages": [HumanMessage(content="do it")]}, {"configurable": {"thread_id": "t"}})
+        return [call.args for call in events.mock_calls]
+
+    @pytest.mark.asyncio
+    async def test_splits_message_after_each_subtask(self, monkeypatch):
+        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "false")
+        plan = Plan(subtasks=[SubTask(task="one", agent="rancher"), SubTask(task="two", agent="rancher")])
+
+        events = await self._run(plan, llm_replies=["yes", "yes", "final answer"], child_replies=["r1", "r2"])
+
+        assert [name for name, _ in events] == [
+            "planner-plan-created",
+            "planner-plan-finished",
+            "planner-message-end",
+            "planner-message-start",
+            "planner-plan-created",
+            "planner-plan-finished",
+            "planner-message-end",
+            "planner-message-start",
+        ]
+        assert events[2][1] == "</message>"
+        assert events[3][1] == "<message>"
+
+    @pytest.mark.asyncio
+    async def test_direct_handoff_keeps_a_single_message(self):
+        plan = Plan(subtasks=[SubTask(task="one", agent="rancher")])
+
+        events = await self._run(plan, llm_replies=["yes"], child_replies=["r1"])
+
+        assert all(payload not in ("</message>", "<message>") for _, payload in events)
+
+
 class TestPlanFeedback:
     """End-to-end planner graph runs where the user gives feedback on the plan."""
 

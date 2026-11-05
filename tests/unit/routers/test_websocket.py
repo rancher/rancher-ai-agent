@@ -793,6 +793,37 @@ class TestResolveTargetAgentOAuth2:
         auth_error_sent = any("<auth-error>" in str(call) for call in websocket.send_text.call_args_list)
         assert auth_error_sent
 
+    @pytest.mark.asyncio
+    async def test_clears_needs_oauth2_after_successful_auth(self):
+        """After a successful OAuth2 flow the child is reloaded and not asked to authenticate again."""
+        child_agent = MagicMock()
+        child_agent.needs_oauth2 = True
+        child_agent.config = MagicMock()
+        child_agent.config.name = "fleet"
+        reloaded_graph = MagicMock()
+
+        supervisor = SupervisorGraph(
+            graph=_idle_graph(),
+            child_agents={"fleet": child_agent},
+        )
+        config = {"configurable": {"thread_id": "t1", "request_id": "r1", "request_metadata": {}, "user_id": "u1"}}
+        ws_request = WebSocketRequest(
+            prompt="deploy", user_input="deploy", context={},
+            tags=[], labels={}, agent="fleet", ui_tools={}
+        )
+        websocket = AsyncMock()
+        llm = MagicMock()
+
+        with patch("app.routers.websocket.handle_oauth_authentication", new_callable=AsyncMock) as mock_auth, \
+             patch("app.routers.websocket.reload_agent_tools", new_callable=AsyncMock, return_value=reloaded_graph):
+            result_agent, result_config = await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
+            assert result_agent is reloaded_graph
+            assert child_agent.needs_oauth2 is False
+
+            await _resolve_target_agent(supervisor, config, ws_request, websocket, llm)
+
+        mock_auth.assert_awaited_once()
+
 
 # --- Tests for _call_agent stop functionality ---
 

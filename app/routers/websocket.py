@@ -794,6 +794,7 @@ async def _resolve_target_agent(
         
         await websocket.send_text("</message>")
         child_agent.agent = await reload_agent_tools(llm, child_agent.config, websocket)
+        child_agent.needs_oauth2 = False
 
 
     return child_agent.agent, config

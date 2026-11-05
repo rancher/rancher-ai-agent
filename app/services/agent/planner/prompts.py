@@ -9,9 +9,9 @@ Available agents:
 
 Return a plan where each subtask has:
 - "task": one short sentence saying what to do.
-- "additional_info": optional. Any other details the agent needs to carry out the work
+- "additional_info": optional. Any additional details the agent needs to carry out the work
   (names, images, replicas, ports, parameters...). Leave it empty ("") when the "task"
-  is enough. Never repeat information already given in the "task".
+  is enough. The additional info should only contain new, relevant details, never repeat information already given in the "task", the text should be a natural human-readable continuation of the "task".
 - "agent": the name of the agent best suited to perform it.
 
 Examples:

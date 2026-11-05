@@ -24,7 +24,7 @@ dependencies = [
     "langchain-aws==1.9.1",
     "psycopg[binary,pool]==3.3.6",
     "kopf==1.45.2",
-    "authlib==1.9.1",
+    "authlib==1.9.2",
 ]
 
 [dependency-groups]

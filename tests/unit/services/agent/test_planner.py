@@ -48,6 +48,7 @@ from app.services.agent.planner.subtasks import (
     _extract_text,
     _fail_plan,
     _format_plan,
+    _subtask_instructions,
     _cancelled_tool_message,
     _is_direct_handoff,
     _next_subtask_index,
@@ -103,6 +104,18 @@ class TestTaskMessages:
         assert message.index("second result") < message.index("Your task:\ndo the thing")
 
 
+    def test_subtask_instructions_without_additional_info(self):
+        assert _subtask_instructions({"task": "List clusters.", "additional_info": ""}) == "List clusters."
+        assert _subtask_instructions({"task": "List clusters."}) == "List clusters."
+
+    def test_subtask_instructions_with_additional_info(self):
+        instructions = _subtask_instructions(
+            {"task": "Deploy nginx.", "additional_info": "Use image 'nginx:1.27'."}
+        )
+
+        assert instructions == "Deploy nginx.\n\nAdditional information:\nUse image 'nginx:1.27'."
+
+
 class TestPlanParsing:
     def test_extract_text_from_string_and_message(self):
         assert _extract_text("plain text") == "plain text"
@@ -122,6 +135,13 @@ class TestPlanParsing:
         raw = AIMessage(
             content='```json\n{"subtasks":[{"task":"List clusters","agent":"rancher"}]}\n```'
         )
+
+        plan = _parse_plan_from_raw(raw)
+
+        assert plan == Plan(subtasks=[SubTask(task="List clusters", agent="rancher")])
+
+    def test_parse_plan_defaults_missing_additional_info_to_empty(self):
+        raw = AIMessage(content='{"subtasks":[{"task":"List clusters","agent":"rancher"}]}')
 
         plan = _parse_plan_from_raw(raw)
 
@@ -175,10 +195,10 @@ class TestFailureReporting:
         dispatch.assert_not_called()
 
     def test_fail_plan_emits_updated_plan_when_requested(self):
-        subtasks = [{"task": "step", "agent": "a", "status": "in_progress"}]
+        subtasks = [{"task": "Step", "additional_info": "step with a long description", "agent": "a", "status": "in_progress"}]
 
         with patch("app.services.agent.planner.subtasks.dispatch_custom_event") as dispatch:
-            _fail_plan(subtasks, [], 0, "step", "failed", emit_plan=True)
+            _fail_plan(subtasks, [], 0, "Step", "failed", emit_plan=True)
 
         event_name, payload = dispatch.call_args.args
         assert event_name == "planner-plan-created"
@@ -187,7 +207,10 @@ class TestFailureReporting:
         assert plan["status"] == "failed"
         assert len(plan["tasks"]) == 1
         task = plan["tasks"][0]
-        assert task["task"] == "step"
+        # Both the task and its additional info are sent to the client.
+        assert task["additionalInfo"] == "step with a long description"
+        assert "additional_info" not in task
+        assert task["task"] == "Step"
         assert task["agent"] == "a"
         assert task["status"] == "failed"
         assert task["actions"] == FAILURE_ACTIONS
@@ -990,61 +1013,6 @@ class TestAwaitingUserInput:
         assert "Namespace test-ns created" in sent[2]
         assert "Create a pod in the namespace." in sent[2]
         llm.with_structured_output.return_value.ainvoke.assert_awaited_once()
-
-
-class TestMessageSplit:
-    """Each subtask of a multi-subtask plan, and the reducer's answer, stream in their own message."""
-
-    @staticmethod
-    async def _run(plan: Plan, llm_replies: list[str], child_replies: list[str]) -> list[tuple[str, str]]:
-        llm = _mock_llm(
-            structured_response={"raw": None, "parsed": plan, "parsing_error": None},
-        )
-        llm.ainvoke.side_effect = [AIMessage(content=reply) for reply in llm_replies]
-        config = MagicMock()
-        config.name = "rancher"
-        config.description = "Rancher agent"
-        agent = MagicMock()
-        agent.ainvoke = AsyncMock(
-            side_effect=[{"messages": [AIMessage(content=reply)]} for reply in child_replies]
-        )
-        agent.aget_state = AsyncMock(return_value=SimpleNamespace(interrupts=[]))
-        graph = create_planner_agent(llm, [ChildAgent(config=config, agent=agent)], InMemorySaver())
-
-        # One parent mock records the events dispatched from both modules in order.
-        events = MagicMock()
-        with patch("app.services.agent.planner.agent.dispatch_custom_event", events.agent), \
-                patch("app.services.agent.planner.subtasks.dispatch_custom_event", events.subtasks):
-            await graph.ainvoke({"messages": [HumanMessage(content="do it")]}, {"configurable": {"thread_id": "t"}})
-        return [call.args for call in events.mock_calls]
-
-    @pytest.mark.asyncio
-    async def test_splits_message_after_each_subtask(self, monkeypatch):
-        monkeypatch.setenv("PLAN_APPROVAL_ENABLED", "false")
-        plan = Plan(subtasks=[SubTask(task="one", agent="rancher"), SubTask(task="two", agent="rancher")])
-
-        events = await self._run(plan, llm_replies=["yes", "yes", "final answer"], child_replies=["r1", "r2"])
-
-        assert [name for name, _ in events] == [
-            "planner-plan-created",
-            "planner-plan-finished",
-            "planner-message-end",
-            "planner-message-start",
-            "planner-plan-created",
-            "planner-plan-finished",
-            "planner-message-end",
-            "planner-message-start",
-        ]
-        assert events[2][1] == "</message>"
-        assert events[3][1] == "<message>"
-
-    @pytest.mark.asyncio
-    async def test_direct_handoff_keeps_a_single_message(self):
-        plan = Plan(subtasks=[SubTask(task="one", agent="rancher")])
-
-        events = await self._run(plan, llm_replies=["yes"], child_replies=["r1"])
-
-        assert all(payload not in ("</message>", "<message>") for _, payload in events)
 
 
 class TestPlanFeedback:

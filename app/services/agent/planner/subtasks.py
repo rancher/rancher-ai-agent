@@ -67,6 +67,8 @@ async def _run_pending_subtask(
     subtask = subtasks[index]
     agent_name = subtask["agent"]
     task = subtask["task"]
+    # The child (and the evaluator) get the short task plus its optional extra details.
+    instructions = _subtask_instructions(subtask)
 
     child = agents_by_name.get(agent_name)
     if child is None:
@@ -109,7 +111,7 @@ async def _run_pending_subtask(
                 # The subtask is already in progress: forward the user's answer.
                 message = user_reply
             else:
-                message = _build_task_message(task, results)
+                message = _build_task_message(instructions, results)
                 subtasks[index]["status"] = "in_progress"
                 if emit_plan:
                     dispatch_custom_event(
@@ -148,7 +150,7 @@ async def _run_pending_subtask(
     # and continuing with the remaining subtasks. If the child is asking the user for more
     # information, pause the plan with the subtask still in progress: the user's next
     # message is forwarded to the child as its answer.
-    evaluation = await _evaluate_subtask(llm, task, content, results)
+    evaluation = await _evaluate_subtask(llm, instructions, content, results)
     if evaluation == "needs_input":
         logging.debug("Planner subtask for agent '%s' is waiting for user input", agent_name)
         return {
@@ -179,7 +181,7 @@ async def _run_pending_subtask(
         call_counter.count = 0
 
     subtasks[index]["status"] = "completed"
-    results.append(f"Task: {task}\nAgent: {agent_name}\nResult: {content}")
+    results.append(f"Task: {instructions}\nAgent: {agent_name}\nResult: {content}")
     return content
 
 
@@ -332,6 +334,15 @@ def _cancel_plan(
     }
 
 
+def _subtask_instructions(subtask: dict) -> str:
+    """Return the subtask's short task followed by its additional information, if any."""
+    task = subtask["task"]
+    additional_info = (subtask.get("additional_info") or "").strip()
+    if not additional_info:
+        return task
+    return f"{task}\n\nAdditional information:\n{additional_info}"
+
+
 def _build_task_message(task: str, previous_results: list[str]) -> str:
     """Build the message sent to a child agent, including prior subtask outcomes.
 
@@ -373,9 +384,10 @@ def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None 
     """
     
     # Convert any actions in the subtasks into a tool call format for the client.
+    # Keys sent to the client are camelCase, so ``additional_info`` becomes ``additionalInfo``.
     tasks = [
         {
-            **st,
+            **{("additionalInfo" if key == "additional_info" else key): value for key, value in st.items()},
             **({"tools": [
                 {
                     "toolName": "select-option",

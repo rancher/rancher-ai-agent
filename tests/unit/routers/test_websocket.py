@@ -1117,7 +1117,7 @@ class TestCloseStoppedThread:
         agent = self._agent({
             "messages": [human],
             "messages_history": [human],
-            "subtasks": [{"task": "x", "status": "in_progress", "agent": "rancher"}],
+            "subtasks": [{"additional_info": "x", "task": "x", "status": "in_progress", "agent": "rancher"}],
             "results": ["r"],
             "awaiting_input": True,
         })
@@ -1170,7 +1170,7 @@ class TestCloseStoppedThread:
     async def test_forced_close_resets_thread_ending_with_reply(self):
         agent = self._agent({
             "messages": [HumanMessage(content="q"), AIMessage(content="Which namespace?")],
-            "subtasks": [{"task": "x", "status": "in_progress", "agent": "rancher"}],
+            "subtasks": [{"additional_info": "x", "task": "x", "status": "in_progress", "agent": "rancher"}],
             "awaiting_input": True,
         })
 
@@ -1222,15 +1222,19 @@ class TestCloseStoppedRun:
 
 def _plan_subtasks():
     return [
-        {"task": "a", "status": "completed", "agent": "rancher"},
-        {"task": "b", "status": "in_progress", "agent": "fleet"},
-        {"task": "c", "status": "pending", "agent": "rancher"},
+        {"additional_info": "a", "task": "Do a", "status": "completed", "agent": "rancher"},
+        {"additional_info": "b", "task": "Do b", "status": "in_progress", "agent": "fleet"},
+        {"additional_info": "c", "task": "Do c", "status": "pending", "agent": "rancher"},
     ]
 
 
 def _cancelled_plan_event():
-    # Subtasks keep their original status when plan is cancelled (no status modification)
-    tasks = _plan_subtasks()
+    # Subtasks keep their original status when plan is cancelled (no status modification).
+    # The client receives camelCase keys.
+    tasks = [
+        {("additionalInfo" if key == "additional_info" else key): value for key, value in st.items()}
+        for st in _plan_subtasks()
+    ]
     return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled"})}</plan>'
 
 

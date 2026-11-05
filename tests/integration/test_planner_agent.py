@@ -84,7 +84,9 @@ def test_plan_executes_subtasks_and_reduces():
     """
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
+    first_additional_info = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_additional_info = "Multiply the sum."
     final_answer = "The final result is 20."
 
     fake_llm_responses = [
@@ -92,8 +94,8 @@ def test_plan_executes_subtasks_and_reduces():
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": MATH_AGENT_NAME},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"additional_info": first_additional_info, "task": first_task, "agent": MATH_AGENT_NAME},
+                {"additional_info": second_additional_info, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
         AIMessage(content="sum is 5"),
@@ -145,7 +147,10 @@ def test_plan_executes_subtasks_and_reduces():
         assert math_call[0] == SystemMessage(
             content=MATH_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS + PLANNER_SUBTASK_INSTRUCTIONS
         )
-        assert math_call[1] == HumanMessage(content=first_task)
+        # The child receives both the short task and its additional information.
+        assert math_call[1] == HumanMessage(
+            content=f"{first_task}\n\nAdditional information:\n{first_additional_info}"
+        )
 
         # Call 3 — calculator-agent: receives the previous result as context
         calculator_call = fake_llm.all_calls[3]
@@ -153,7 +158,9 @@ def test_plan_executes_subtasks_and_reduces():
             content=CALCULATOR_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS + PLANNER_SUBTASK_INSTRUCTIONS
         )
         assert "sum is 5" in calculator_call[1].content
-        assert calculator_call[1].content.endswith(f"Your task:\n{second_task}")
+        assert calculator_call[1].content.endswith(
+            f"Your task:\n{second_task}\n\nAdditional information:\n{second_additional_info}"
+        )
 
         # Calls 2 and 4 — evaluator: judges each child's response
         for evaluation_call, task, response in [
@@ -186,7 +193,9 @@ def test_plan_with_unknown_agent_fails():
     """
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
+    first_additional_info = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_additional_info = "Multiply the sum."
     unknown_agent_name = "ghost-agent"
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=[
@@ -194,8 +203,8 @@ def test_plan_with_unknown_agent_fails():
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": unknown_agent_name},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"additional_info": first_additional_info, "task": first_task, "agent": unknown_agent_name},
+                {"additional_info": second_additional_info, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
     ])
@@ -236,15 +245,17 @@ def test_plan_approval_rejected(monkeypatch):
 
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
+    first_additional_info = "Add the numbers."
     second_task = "multiply 5 by 4"
+    second_additional_info = "Multiply the sum."
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=[
         AIMessage(content="", tool_calls=[{
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"task": first_task, "agent": MATH_AGENT_NAME},
-                {"task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"additional_info": first_additional_info, "task": first_task, "agent": MATH_AGENT_NAME},
+                {"additional_info": second_additional_info, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
     ])

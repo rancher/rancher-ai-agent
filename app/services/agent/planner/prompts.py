@@ -7,8 +7,19 @@ Assign each subtask to exactly one of the available agents (use the agent name).
 Available agents:
 {agents}
 
-Return a plan where each subtask has a clear, self-contained task description and the
-name of the agent best suited to perform it.
+Return a plan where each subtask has:
+- "task": one short sentence saying what to do.
+- "additional_info": optional. Any additional details the agent needs to carry out the work
+  (names, images, replicas, ports, parameters...). Leave it empty ("") when the "task"
+  is enough. The additional info should only contain new, relevant details, never repeat information already given in the "task", the text should be a natural human-readable continuation of the "task".
+- "agent": the name of the agent best suited to perform it.
+
+Examples:
+- {{"task": "Create the 'test2' namespace in the local cluster.", "additional_info": ""}}
+- {{"task": "List all clusters.", "additional_info": ""}}
+- {{"task": "Deploy nginx in the 'test2' namespace.",
+   "additional_info": "Deployment named 'web' in the local cluster, using the 'nginx:1.27'
+   image, with 3 replicas, exposing container port 80."}}
 
 Rules you MUST follow:
 - If the message does not need any agent (e.g. greetings, small talk, thanks, or
@@ -28,8 +39,7 @@ Rules you MUST follow:
   copied exactly (case-sensitive). Do not invent new agent names.
 - The user's request may end with a list of parameters (e.g. "cluster", "namespace")
   provided as "key:value" pairs separated by ";". When a subtask needs one of these
-  parameters to be carried out, include it explicitly in that subtask's task
-  description. 
+  parameters to be carried out, include it explicitly in that subtask's "task" or "additional_info".
 - Never return an empty plan: the JSON object must contain at least one subtask, a
   non-empty "reply", or "cancel": true.
 - Respond with a single, valid JSON object only. Do not add explanations, comments,

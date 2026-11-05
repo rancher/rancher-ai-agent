@@ -1229,8 +1229,12 @@ def _plan_subtasks():
 
 
 def _cancelled_plan_event():
-    # Subtasks keep their original status when plan is cancelled (no status modification)
-    tasks = _plan_subtasks()
+    # Subtasks keep their original status when plan is cancelled (no status modification).
+    # The client receives camelCase keys.
+    tasks = [
+        {("additionalInfo" if key == "additional_info" else key): value for key, value in st.items()}
+        for st in _plan_subtasks()
+    ]
     return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled"})}</plan>'
 
 

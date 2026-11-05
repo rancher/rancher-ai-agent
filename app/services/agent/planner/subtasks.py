@@ -384,9 +384,10 @@ def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None 
     """
     
     # Convert any actions in the subtasks into a tool call format for the client.
+    # Keys sent to the client are camelCase, so ``additional_info`` becomes ``additionalInfo``.
     tasks = [
         {
-            **st,
+            **{("additionalInfo" if key == "additional_info" else key): value for key, value in st.items()},
             **({"tools": [
                 {
                     "toolName": "select-option",

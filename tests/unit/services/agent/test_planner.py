@@ -208,7 +208,8 @@ class TestFailureReporting:
         assert len(plan["tasks"]) == 1
         task = plan["tasks"][0]
         # Both the task and its additional info are sent to the client.
-        assert task["additional_info"] == "step with a long description"
+        assert task["additionalInfo"] == "step with a long description"
+        assert "additional_info" not in task
         assert task["task"] == "Step"
         assert task["agent"] == "a"
         assert task["status"] == "failed"

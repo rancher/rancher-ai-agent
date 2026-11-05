@@ -57,10 +57,11 @@ from .subtasks import (
 class SubTask(BaseModel):
     """A single unit of work assigned to a child agent."""
 
-    task: str = Field(description="The task to be performed.")
-    summary: str = Field(
+    task: str = Field(description="A short, one-sentence description of the task.")
+    additional_info: str = Field(
         default="",
-        description="A short, user-facing summary of the task. Empty when the task is short.",
+        description="Optional extra details the agent needs (parameters, constraints). "
+        "Must not repeat the information already in 'task'. Empty when not needed.",
     )
     status: Literal["pending", "in_progress", "completed", "cancelled", "failed"] = Field(
         default="pending", description="The current status of the subtask."

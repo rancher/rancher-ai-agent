@@ -1117,7 +1117,7 @@ class TestCloseStoppedThread:
         agent = self._agent({
             "messages": [human],
             "messages_history": [human],
-            "subtasks": [{"summary": "x", "task": "x", "status": "in_progress", "agent": "rancher"}],
+            "subtasks": [{"additional_info": "x", "task": "x", "status": "in_progress", "agent": "rancher"}],
             "results": ["r"],
             "awaiting_input": True,
         })
@@ -1170,7 +1170,7 @@ class TestCloseStoppedThread:
     async def test_forced_close_resets_thread_ending_with_reply(self):
         agent = self._agent({
             "messages": [HumanMessage(content="q"), AIMessage(content="Which namespace?")],
-            "subtasks": [{"summary": "x", "task": "x", "status": "in_progress", "agent": "rancher"}],
+            "subtasks": [{"additional_info": "x", "task": "x", "status": "in_progress", "agent": "rancher"}],
             "awaiting_input": True,
         })
 
@@ -1222,9 +1222,9 @@ class TestCloseStoppedRun:
 
 def _plan_subtasks():
     return [
-        {"summary": "a", "task": "Do a", "status": "completed", "agent": "rancher"},
-        {"summary": "b", "task": "Do b", "status": "in_progress", "agent": "fleet"},
-        {"summary": "c", "task": "Do c", "status": "pending", "agent": "rancher"},
+        {"additional_info": "a", "task": "Do a", "status": "completed", "agent": "rancher"},
+        {"additional_info": "b", "task": "Do b", "status": "in_progress", "agent": "fleet"},
+        {"additional_info": "c", "task": "Do c", "status": "pending", "agent": "rancher"},
     ]
 
 

@@ -84,9 +84,9 @@ def test_plan_executes_subtasks_and_reduces():
     """
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
-    first_summary = "Add the numbers."
+    first_additional_info = "Add the numbers."
     second_task = "multiply 5 by 4"
-    second_summary = "Multiply the sum."
+    second_additional_info = "Multiply the sum."
     final_answer = "The final result is 20."
 
     fake_llm_responses = [
@@ -94,8 +94,8 @@ def test_plan_executes_subtasks_and_reduces():
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"summary": first_summary, "task": first_task, "agent": MATH_AGENT_NAME},
-                {"summary": second_summary, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"additional_info": first_additional_info, "task": first_task, "agent": MATH_AGENT_NAME},
+                {"additional_info": second_additional_info, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
         AIMessage(content="sum is 5"),
@@ -115,15 +115,16 @@ def test_plan_executes_subtasks_and_reduces():
             websocket.receive_text()
 
             websocket.send_text(fake_prompt)
-            full_message = collect_messages(websocket, 1)[0]
+            # Each subtask streams in its own message, followed by the reducer's answer.
+            full_message = "".join(collect_messages(websocket, 3))
 
         # The plan progress is streamed; the last update has every subtask completed.
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
         assert plans, "Should contain plan progress events"
         assert plans[-1]["approval"] is False
-        assert [(t["summary"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
-            (first_summary, MATH_AGENT_NAME, "completed"),
-            (second_summary, CALCULATOR_AGENT_NAME, "completed"),
+        assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
+            (first_task, MATH_AGENT_NAME, "completed"),
+            (second_task, CALCULATOR_AGENT_NAME, "completed"),
         ]
 
         assert final_answer in full_message, "Should contain the reducer's final answer"
@@ -146,7 +147,10 @@ def test_plan_executes_subtasks_and_reduces():
         assert math_call[0] == SystemMessage(
             content=MATH_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS + PLANNER_SUBTASK_INSTRUCTIONS
         )
-        assert math_call[1] == HumanMessage(content=first_task)
+        # The child receives both the short task and its additional information.
+        assert math_call[1] == HumanMessage(
+            content=f"{first_task}\n\nAdditional information:\n{first_additional_info}"
+        )
 
         # Call 3 — calculator-agent: receives the previous result as context
         calculator_call = fake_llm.all_calls[3]
@@ -154,7 +158,9 @@ def test_plan_executes_subtasks_and_reduces():
             content=CALCULATOR_AGENT_PROMPT + CHILD_TOOL_USE_INSTRUCTIONS + PLANNER_SUBTASK_INSTRUCTIONS
         )
         assert "sum is 5" in calculator_call[1].content
-        assert calculator_call[1].content.endswith(f"Your task:\n{second_task}")
+        assert calculator_call[1].content.endswith(
+            f"Your task:\n{second_task}\n\nAdditional information:\n{second_additional_info}"
+        )
 
         # Calls 2 and 4 — evaluator: judges each child's response
         for evaluation_call, task, response in [
@@ -187,9 +193,9 @@ def test_plan_with_unknown_agent_fails():
     """
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
-    first_summary = "Add the numbers."
+    first_additional_info = "Add the numbers."
     second_task = "multiply 5 by 4"
-    second_summary = "Multiply the sum."
+    second_additional_info = "Multiply the sum."
     unknown_agent_name = "ghost-agent"
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=[
@@ -197,8 +203,8 @@ def test_plan_with_unknown_agent_fails():
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"summary": first_summary, "task": first_task, "agent": unknown_agent_name},
-                {"summary": second_summary, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"additional_info": first_additional_info, "task": first_task, "agent": unknown_agent_name},
+                {"additional_info": second_additional_info, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
     ])
@@ -214,9 +220,9 @@ def test_plan_with_unknown_agent_fails():
 
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", full_message)]
         assert plans, "Should contain plan progress events"
-        assert [(t["summary"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
-            (first_summary, unknown_agent_name, "failed"),
-            (second_summary, CALCULATOR_AGENT_NAME, "pending"),
+        assert [(t["task"], t["agent"], t["status"]) for t in plans[-1]["tasks"]] == [
+            (first_task, unknown_agent_name, "failed"),
+            (second_task, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
         assert len(fake_llm.all_calls) == 1, \
@@ -239,17 +245,17 @@ def test_plan_approval_rejected(monkeypatch):
 
     fake_prompt = "add 2 and 3, then multiply by 4"
     first_task = "add 2 and 3"
-    first_summary = "Add the numbers."
+    first_additional_info = "Add the numbers."
     second_task = "multiply 5 by 4"
-    second_summary = "Multiply the sum."
+    second_additional_info = "Multiply the sum."
 
     fake_llm = FakeMessagesListChatModelWithTools(responses=[
         AIMessage(content="", tool_calls=[{
             "id": "plan_1",
             "name": "Plan",
             "args": {"subtasks": [
-                {"summary": first_summary, "task": first_task, "agent": MATH_AGENT_NAME},
-                {"summary": second_summary, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
+                {"additional_info": first_additional_info, "task": first_task, "agent": MATH_AGENT_NAME},
+                {"additional_info": second_additional_info, "task": second_task, "agent": CALCULATOR_AGENT_NAME},
             ]},
         }]),
     ])
@@ -270,9 +276,9 @@ def test_plan_approval_rejected(monkeypatch):
         plans = [json.loads(p) for p in re.findall(r"<plan>(.*?)</plan>", approval_message)]
         assert len(plans) == 1, "Should contain exactly the plan awaiting approval"
         assert plans[0]["approval"] is True
-        assert [(t["summary"], t["agent"], t["status"]) for t in plans[0]["tasks"]] == [
-            (first_summary, MATH_AGENT_NAME, "pending"),
-            (second_summary, CALCULATOR_AGENT_NAME, "pending"),
+        assert [(t["task"], t["agent"], t["status"]) for t in plans[0]["tasks"]] == [
+            (first_task, MATH_AGENT_NAME, "pending"),
+            (second_task, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
         # The rejection ends the run with a cancelled plan event (tasks keep their original pending status).
@@ -280,9 +286,9 @@ def test_plan_approval_rejected(monkeypatch):
         assert len(rejection_plans) == 1, "Should contain exactly the cancelled plan"
         assert rejection_plans[0]["approval"] is False
         assert rejection_plans[0]["status"] == "cancelled"
-        assert [(t["summary"], t["agent"], t["status"]) for t in rejection_plans[0]["tasks"]] == [
-            (first_summary, MATH_AGENT_NAME, "pending"),
-            (second_summary, CALCULATOR_AGENT_NAME, "pending"),
+        assert [(t["task"], t["agent"], t["status"]) for t in rejection_plans[0]["tasks"]] == [
+            (first_task, MATH_AGENT_NAME, "pending"),
+            (second_task, CALCULATOR_AGENT_NAME, "pending"),
         ]
 
         assert len(fake_llm.all_calls) == 1, \
@@ -309,7 +315,7 @@ def _run_plan_with_oauth2_agents(monkeypatch, oauth_agent_names: list[str]):
     token the callback would have stored is already in the OAuth store.
 
     Returns the text of every frame group received: the authentication requests, in
-    order, and the final message.
+    order, and the concatenated messages of the turn.
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.services.oauth2.cookies import get_oauth_cookie_names

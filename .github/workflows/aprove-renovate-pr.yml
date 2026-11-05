@@ -1,0 +1,28 @@
+name: Auto Approve Renovate PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+jobs:
+  auto-approve:
+    name: Auto-Approve Renovate PRs
+    runs-on: ubuntu-latest
+    
+    if: >
+      github.actor == 'renovate-rancher[bot]' && 
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'renovate/')
+      
+    permissions:
+      pull-requests: write
+      contents: read
+      
+    steps:
+      - name: Approve Pull Request
+        run: gh pr review --approve "$PR_URL" -b "Automatically approved by GitHub Actions"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

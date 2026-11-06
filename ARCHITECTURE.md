@@ -111,6 +111,20 @@ The `child_human_validation_middleware` (a `@wrap_tool_call` middleware in `app/
    - If the user responds `"yes"`, the middleware proceeds to execute the real tool and dispatches any associated UI tools (e.g. YAML diff viewers).
    - Otherwise, it returns a cancellation `ToolMessage` (`INTERRUPT_CANCEL_MESSAGE`) and the tool call is skipped.
 
+#### Planning tool contract
+
+A planning tool (`<tool_name>Plan`) must return one of:
+
+- **A plan** — the JSON plan describing the resources to create/update/delete (e.g. a list of `{"type", "resource", "payload"}` entries). This is shown to the user in the confirmation interrupt.
+- **An error** — the MCP tool call fails. The middleware returns a `ToolMessage` describing the failure; no interrupt is raised and the real tool is not executed. A result that is not valid JSON is also treated as an error.
+- **No changes** — when the requested state already exists, the planning tool returns a JSON object (not a list):
+
+  ```json
+  {"type": "no_changes", "message": "role 'project-member' is already granted in project 'p-abc12', no changes needed"}
+  ```
+
+  The middleware skips the confirmation interrupt, does **not** execute the real tool, and returns a `ToolMessage` whose content is `message` (falling back to a generic text if `message` is missing) with `additional_kwargs["no_changes"] = True`, so the model can tell the user that nothing needed to be done.
+
 ### Supervisor Side
 
 Because the child agent is invoked via `ainvoke()` (not as a subgraph), a `GraphInterrupt` raised inside it is suppressed and `ainvoke()` returns normally. The supervisor handles this with a two-phase interrupt relay:

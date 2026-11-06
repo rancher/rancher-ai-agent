@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 import langgraph.types
 from langchain.agents.middleware import wrap_tool_call
@@ -15,6 +16,18 @@ from langgraph.types import Command
 from .._constants import INTERRUPT_CANCEL_MESSAGE
 from ..loader import AgentConfig
 from .ui_tools import _dispatch_ui_tools
+
+# Value of the ``type`` field a planning tool returns to signal that the requested
+# change is already in place (nothing to create, update or delete).
+PLAN_NO_CHANGES_TYPE = "no_changes"
+_DEFAULT_NO_CHANGES_MESSAGE = "No changes needed."
+
+
+@dataclass(frozen=True)
+class NoChangesPlan:
+    """Returned by ``_should_interrupt`` when the planning tool reports nothing to change."""
+
+    message: str
 
 
 def human_validation_middleware(
@@ -35,6 +48,10 @@ def human_validation_middleware(
        skipped and a ``ToolMessage`` with ``INTERRUPT_CANCEL_MESSAGE`` is returned so
        that ``cancel_human_validation_middleware`` can end the graph gracefully.
     4. On confirmation the real tool is executed.
+
+    If the planning tool reports that no changes are needed (a JSON object with
+    ``"type": "no_changes"``), no interrupt is raised, the real tool is not executed
+    and a ``ToolMessage`` carrying the planning tool's message is returned instead.
     """
 
     @wrap_tool_call
@@ -62,6 +79,16 @@ def human_validation_middleware(
             logging.exception(f"Failed to build confirmation plan for tool '{tool_call['name']}': {e}")
             return ToolMessage(
                 content=f"Could not prepare confirmation for tool '{tool_call['name']}': {e}",
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+                additional_kwargs=additional_kwargs,
+            )
+
+        if isinstance(interrupt_message, NoChangesPlan):
+            logging.debug(f"No changes needed for tool '{tool_call['name']}', skipping confirmation and execution")
+            additional_kwargs["no_changes"] = True
+            return ToolMessage(
+                content=interrupt_message.message,
                 name=tool_call["name"],
                 tool_call_id=tool_call["id"],
                 additional_kwargs=additional_kwargs,
@@ -142,11 +169,15 @@ async def _should_interrupt(
     human_validation_tools: list[str],
     tool_call: dict,
     planning_tools_by_name: dict[str, BaseTool],
-) -> str:
+) -> str | NoChangesPlan:
     """Return a confirmation prompt if *tool_call* requires human validation, else ``''``.
 
     If no ``<tool_name>Plan`` planning tool exists, a generic ``external`` payload
     with the tool name and args is returned instead of a plan preview.
+
+    If the planning tool returns ``{"type": "no_changes", "message": "..."}``, a
+    ``NoChangesPlan`` is returned so the caller can skip both the confirmation and
+    the tool execution.
     """
     for tool_name in human_validation_tools:
         if tool_name == tool_call["name"]:
@@ -166,11 +197,17 @@ async def _should_interrupt(
                     plan_response = plan_response[0]["text"]
 
             try:
-                safe_response = json.dumps(json.loads(plan_response))
+                parsed_plan = json.loads(plan_response)
             except (json.JSONDecodeError, TypeError):
                 raise Exception(
                     f"Invalid plan response for tool '{tool_call['name']}': {plan_response}"
                 )
+            if isinstance(parsed_plan, dict) and parsed_plan.get("type") == PLAN_NO_CHANGES_TYPE:
+                message = parsed_plan.get("message")
+                if not isinstance(message, str) or not message:
+                    message = _DEFAULT_NO_CHANGES_MESSAGE
+                return NoChangesPlan(message=message)
+            safe_response = json.dumps(parsed_plan)
             return f"<confirmation-response>{safe_response}</confirmation-response>"
     return ""
 

@@ -360,11 +360,12 @@ def _get_default_ai_agent_config_crds() -> list:
                     "key": "tls.crt"
                 },
                 "humanValidationTools": [
-                    "createKubernetesResource", 
+                    "createKubernetesResource",
                     "patchKubernetesResource",
-                    "createProject"
+                    "createProject",
                     "createGlobalRole",
                     "createGlobalRoleBinding",
+                    "createProjectRoleTemplateBinding",
                 ]
             }
         },

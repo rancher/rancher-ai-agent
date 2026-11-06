@@ -334,6 +334,20 @@ def test_update_ignores_enabled_field_change():
     mock_api.create_namespaced_custom_object.assert_not_called()
 
 
+def test_rancher_agent_human_validation_tools():
+    """Verify the rancher agent requires human validation for its write tools."""
+    defaults = {d["metadata"]["name"]: d for d in _get_default_ai_agent_config_crds()}
+
+    assert defaults["rancher"]["spec"]["humanValidationTools"] == [
+        "createKubernetesResource",
+        "patchKubernetesResource",
+        "createProject",
+        "createGlobalRole",
+        "createGlobalRoleBinding",
+        "createProjectRoleTemplateBinding",
+    ]
+
+
 # ============================================================================
 # get_header_auth_headers Tests
 # ============================================================================

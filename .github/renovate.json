@@ -17,10 +17,12 @@
     {
       "description": "Automerge non-breaking patch and pin updates",
       "matchUpdateTypes": ["patch", "pin", "digest"],
-      "automerge": true
+      "automerge": true,
+      "labels": ["automerge"]
     }
   ],
   "vulnerabilityAlerts": {
-    "automerge": true
+    "automerge": true,
+    "labels": ["automerge"]
   }
 }

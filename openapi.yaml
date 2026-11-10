@@ -266,6 +266,139 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /chats/{chat_id}/usage:
+    get:
+      summary: Get the token usage of a chat
+      description: Tokens consumed by a chat, including the child agents it delegated to, broken down by agent, source and provider/model.
+      operationId: get_chat_usage
+      tags:
+        - Usage
+      parameters:
+        - name: chat_id
+          in: path
+          description: The unique identifier of the chat
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: ad924baf-24d7-49a5-84ae-bba3a58218a6
+      responses:
+        '200':
+          description: Token usage of the chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatUsage'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Chat not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /usage:
+    get:
+      summary: Get the token usage of all the user's chats
+      description: Tokens consumed by all the user's chats in a rolling period ending now, broken down by agent, source, provider/model and day (UTC), plus the chats that consumed the most tokens.
+      operationId: get_usage
+      tags:
+        - Usage
+      parameters:
+        - name: period
+          in: query
+          description: Rolling period ending now - day (24h), week (7 days) or month (30 days)
+          required: false
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: week
+        - name: limit
+          in: query
+          description: Number of chats that consumed the most tokens to return
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        '200':
+          description: Token usage in the period
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageAnalytics'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid period or limit
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /admin/usage:
+    get:
+      summary: Get the token usage of all users
+      description: Tokens consumed by all users in a rolling period ending now, in total and per user. Only the admin user can call it.
+      operationId: get_admin_usage
+      tags:
+        - Usage
+      parameters:
+        - name: period
+          in: query
+          description: Rolling period ending now - day (24h), week (7 days) or month (30 days)
+          required: false
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: week
+      responses:
+        '200':
+          description: Token usage of all users in the period
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUsage'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden - the username is not 'admin'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid period
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /complete/ui-tools:
     post:
       summary: Select appropriate UI tools based user input
@@ -844,6 +977,157 @@ components:
       example:
         message: userId not found
 
+    UsageTotals:
+      type: object
+      description: Token totals of a set of LLM calls
+      properties:
+        inputTokens:
+          type: integer
+        outputTokens:
+          type: integer
+        totalTokens:
+          type: integer
+        cacheReadTokens:
+          type: integer
+        cacheCreationTokens:
+          type: integer
+        llmCalls:
+          type: integer
+          description: Number of LLM calls
+      required: [inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens, llmCalls]
+
+    UsageBreakdown:
+      allOf:
+        - $ref: '#/components/schemas/UsageTotals'
+        - type: object
+          properties:
+            byAgent:
+              type: object
+              description: Usage per agent (the orchestrator is reported as 'supervisor')
+              additionalProperties:
+                $ref: '#/components/schemas/UsageTotals'
+            bySource:
+              type: object
+              description: Usage per source (agent, ui-tools, summarization, planner)
+              additionalProperties:
+                $ref: '#/components/schemas/UsageTotals'
+            byModel:
+              type: object
+              description: Usage per LLM provider (ACTIVE_LLM, or 'unknown'), then per model
+              additionalProperties:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/UsageTotals'
+          required: [byAgent, bySource, byModel]
+
+    ChatUsage:
+      allOf:
+        - type: object
+          properties:
+            chatId:
+              type: string
+              format: uuid
+          required: [chatId]
+        - $ref: '#/components/schemas/UsageBreakdown'
+      example:
+        chatId: ad924baf-24d7-49a5-84ae-bba3a58218a6
+        inputTokens: 3201
+        outputTokens: 80
+        totalTokens: 3281
+        cacheReadTokens: 0
+        cacheCreationTokens: 0
+        llmCalls: 1
+        byAgent:
+          supervisor: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+        bySource:
+          planner: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+        byModel:
+          bedrock:
+            eu.anthropic.claude-opus-4-8: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+
+    UsageAnalytics:
+      allOf:
+        - type: object
+          properties:
+            period:
+              type: string
+              enum: [day, week, month]
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+            chatCount:
+              type: integer
+              description: Number of chats with usage in the period
+            byDay:
+              type: array
+              description: Usage per UTC day, including days without usage
+              items:
+                allOf:
+                  - type: object
+                    properties:
+                      date:
+                        type: string
+                        format: date
+                    required: [date]
+                  - $ref: '#/components/schemas/UsageTotals'
+            topChats:
+              type: array
+              description: Chats that consumed the most tokens, highest first
+              items:
+                allOf:
+                  - type: object
+                    properties:
+                      chatId:
+                        type: string
+                      name:
+                        type: string
+                        nullable: true
+                    required: [chatId]
+                  - $ref: '#/components/schemas/UsageTotals'
+          required: [period, from, to, chatCount, byDay, topChats]
+        - $ref: '#/components/schemas/UsageBreakdown'
+
+    AdminUsage:
+      allOf:
+        - type: object
+          properties:
+            period:
+              type: string
+              enum: [day, week, month]
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+            userCount:
+              type: integer
+              description: Number of users with usage in the period
+            byUser:
+              type: object
+              description: Usage per Rancher user id ('unknown' for threads without an owner)
+              additionalProperties:
+                $ref: '#/components/schemas/UsageTotals'
+          required: [period, from, to, userCount, byUser]
+        - $ref: '#/components/schemas/UsageTotals'
+      example:
+        period: week
+        from: '2026-11-03T10:00:00+00:00'
+        to: '2026-11-10T10:00:00+00:00'
+        userCount: 2
+        inputTokens: 1200
+        outputTokens: 90
+        totalTokens: 1290
+        cacheReadTokens: 0
+        cacheCreationTokens: 0
+        llmCalls: 9
+        byUser:
+          u-abc12: {inputTokens: 900, outputTokens: 60, totalTokens: 960, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 6}
+          u-xyz34: {inputTokens: 300, outputTokens: 30, totalTokens: 330, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 3}
+
     UIToolsConfig:
       type: object
       description: Configuration for UI tools selection
@@ -987,3 +1271,5 @@ tags:
     description: LLM and agent configuration management
   - name: OAuth2
     description: OAuth2 authentication and token management
+  - name: Usage
+    description: Token consumption of the LLM calls

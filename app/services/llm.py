@@ -87,7 +87,8 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
         openai_url = os.environ.get("OPENAI_URL")
         ca_kwargs = _get_openai_ca_kwargs()
         if openai_url:
-            return ChatOpenAI(model=model, base_url=openai_url, **ca_kwargs)
+            # langchain-openai only requests streamed usage for the default OpenAI URL.
+            return ChatOpenAI(model=model, base_url=openai_url, stream_usage=True, **ca_kwargs)
         return ChatOpenAI(model=model, **ca_kwargs)
     if activeLlm == "bedrock":
         if llm_mock_enabled:
@@ -100,7 +101,7 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
         generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")
         generic_openai_api_key = os.environ.get("GENERIC_OPENAI_API_KEY")
 
-        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key)
+        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key, stream_usage=True)
 
     raise ValueError(f"Unsupported LLM provider: {activeLlm}")
 

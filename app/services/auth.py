@@ -106,9 +106,9 @@ def _get_tls_verify():
     return True
 
 
-async def get_user_id(host: str, token: str) -> str | None:
+async def get_user(host: str, token: str) -> dict | None:
     """
-    Retrieves the user ID from the Rancher API using the session token.
+    Retrieves the current user from the Rancher API using the session token.
     """
     url = f"{host}/v3/users?me=true"
     headers = {
@@ -125,10 +125,10 @@ async def get_user_id(host: str, token: str) -> str | None:
                     logging.error("user API returned error: %s - %s", resp.status_code, payload)
                     raise Exception("Failed to retrieve user ID from Rancher API")
 
-                user_id = payload["data"][0]["id"]
+                user = payload["data"][0]
 
-                if user_id:
-                    return user_id
+                if user.get("id"):
+                    return user
                 break
         except httpx.ConnectError as e:
             if attempt == 0 and _is_tls_error(e):
@@ -143,12 +143,15 @@ async def get_user_id(host: str, token: str) -> str | None:
 
     return None
 
-async def get_user_id_from_token(cookies) -> str | None:
+async def get_user_id(host: str, token: str) -> str | None:
     """
-    Retrieves the user ID from the Rancher API using the session token extracted
-    from the given cookies, preferring the RANCHER_API_TOKEN env var and falling
-    back to the R_SESS cookie.
+    Retrieves the user ID from the Rancher API using the session token.
     """
+    user = await get_user(host, token)
+    return user["id"] if user else None
+
+def _session(cookies) -> tuple[str, str] | None:
+    """The Rancher URL and session token to authenticate with, or None if either is missing."""
     token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
     if not token:
         logging.warning("R_SESS token not found")
@@ -161,5 +164,21 @@ async def get_user_id_from_token(cookies) -> str | None:
         logging.error("Rancher URL is not configured and could not be fetched from the cluster")
         return None
 
+    return rancher_url, token
 
-    return await get_user_id(rancher_url, token)
+async def get_user_from_token(cookies) -> dict | None:
+    """
+    Retrieves the current Rancher user (id, username, ...) for the session, with the
+    same token resolution as ``get_user_id_from_token``.
+    """
+    session = _session(cookies)
+    return await get_user(*session) if session else None
+
+async def get_user_id_from_token(cookies) -> str | None:
+    """
+    Retrieves the user ID from the Rancher API using the session token extracted
+    from the given cookies, preferring the RANCHER_API_TOKEN env var and falling
+    back to the R_SESS cookie.
+    """
+    session = _session(cookies)
+    return await get_user_id(*session) if session else None

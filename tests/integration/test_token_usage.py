@@ -1,0 +1,284 @@
+"""Integration tests for the token usage endpoints.
+
+Runs real websocket conversations against a supervisor with two child agents, backed by
+an in-memory checkpointer, then reads the recorded usage back through the REST API.
+"""
+
+import asyncio
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
+
+from app.main import app
+from app.services.agent.loader import AgentConfig, AuthenticationType
+from app.services.llm import LLMManager
+from app.services.memory import MemoryManager
+from tests.integration.common import (
+    FakeMessagesListChatModelWithTools,
+    add,
+    collect_messages,
+    multiply,
+    setup_agent_environment,
+    start_mock_mcp_servers,
+)
+
+MATH_AGENT_NAME = "math-agent"
+CALCULATOR_AGENT_NAME = "calculator-agent"
+USER_ID = "test-user-id"
+FAKE_MODEL = "fake-model"
+
+client = TestClient(app)
+
+
+class FakeUsageChatModel(FakeMessagesListChatModelWithTools):
+    """Fake model whose streamed chunks carry the usage and model name of the scripted response."""
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        response = self.responses[self.i] if self.i < len(self.responses) else None
+        for chunk in super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs):
+            chunk.message.usage_metadata = getattr(response, "usage_metadata", None)
+            chunk.message.response_metadata = {"model_name": FAKE_MODEL}
+            yield chunk
+
+
+def _usage(input_tokens: int, output_tokens: int) -> dict:
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
+def _delegate(agent: str, query: str, call_id: str, usage: dict) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"id": call_id, "name": agent, "args": {"query": query}}],
+        usage_metadata=usage,
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_environment(module_monkeypatch):
+    setup_agent_environment(module_monkeypatch, [
+        AgentConfig(
+            name=MATH_AGENT_NAME,
+            displayName="Math Agent",
+            description="Agent that can perform addition operations",
+            system_prompt="You are a math agent that can add numbers.",
+            mcp_url="http://localhost:8007/mcp",
+            authentication=AuthenticationType.NONE,
+        ),
+        AgentConfig(
+            name=CALCULATOR_AGENT_NAME,
+            displayName="Calculator Agent",
+            description="Agent that can perform multiplication operations",
+            system_prompt="You are a calculator agent that can multiply numbers.",
+            mcp_url="http://localhost:8008/mcp",
+            authentication=AuthenticationType.NONE,
+        ),
+    ])
+    module_monkeypatch.setenv("ACTIVE_LLM", "openai")
+    module_monkeypatch.setenv("DB_ENABLED", "false")
+    module_monkeypatch.setattr("app.routers.chat.get_user_id_from_token", AsyncMock(return_value=USER_ID))
+    module_monkeypatch.setattr(
+        "app.routers.chat.get_user_from_token", AsyncMock(return_value={"id": USER_ID, "username": "standard"})
+    )
+
+    processes = start_mock_mcp_servers({
+        8007: ("mock-usage-1", [add]),
+        8008: ("mock-usage-2", [multiply]),
+    })
+
+    yield processes
+
+    for process in processes:
+        process.terminate()
+
+
+@pytest.fixture(autouse=True)
+def memory_manager():
+    """A real MemoryManager per test, so the chat and usage endpoints read what the websocket wrote."""
+    manager = MemoryManager()
+    asyncio.run(manager.initialize())
+    app.memory_manager = manager
+    yield manager
+
+
+def _run_chat(prompts: list[str], responses: list[AIMessage]) -> str:
+    """Runs the prompts over a new websocket chat and returns its chat id."""
+    LLMManager._instance = FakeUsageChatModel(responses=responses)
+    try:
+        with client.websocket_connect("/v1/ws/messages") as websocket:
+            metadata = websocket.receive_text()
+            chat_id = metadata.split('"chatId": "')[1].split('"')[0]
+            for prompt in prompts:
+                websocket.send_text(prompt)
+                collect_messages(websocket, 1)
+        return chat_id
+    finally:
+        LLMManager._instance = None
+
+
+def test_chat_usage_split_between_supervisor_and_child_agents():
+    chat_id = _run_chat(
+        ["add 1 and 2", "multiply 3 and 4"],
+        [
+            _delegate(MATH_AGENT_NAME, "add 1 and 2", "call_1", _usage(100, 10)),
+            AIMessage(content="sum is 3", usage_metadata=_usage(50, 5)),
+            AIMessage(content="The sum is 3.", usage_metadata=_usage(200, 20)),
+            _delegate(CALCULATOR_AGENT_NAME, "multiply 3 and 4", "call_2", _usage(300, 30)),
+            AIMessage(content="product is 12", usage_metadata=_usage(60, 6)),
+            AIMessage(content="The product is 12.", usage_metadata=_usage(400, 40)),
+        ],
+    )
+
+    response = client.get(f"/v1/api/chats/{chat_id}/usage")
+
+    assert response.status_code == 200
+    usage = response.json()
+    assert usage["chatId"] == chat_id
+    assert usage["llmCalls"] == 6
+    assert usage["inputTokens"] == 100 + 50 + 200 + 300 + 60 + 400
+    assert usage["outputTokens"] == 10 + 5 + 20 + 30 + 6 + 40
+    assert usage["totalTokens"] == usage["inputTokens"] + usage["outputTokens"]
+
+    by_agent = {name: (u["llmCalls"], u["totalTokens"]) for name, u in usage["byAgent"].items()}
+    assert by_agent == {
+        "supervisor": (4, 110 + 220 + 330 + 440),
+        MATH_AGENT_NAME: (1, 55),
+        CALCULATOR_AGENT_NAME: (1, 66),
+    }
+    assert set(usage["bySource"]) == {"agent"}
+    assert usage["byModel"] == {"openai": {FAKE_MODEL: usage["bySource"]["agent"]}}
+
+
+def test_chat_usage_without_llm_usage_metadata():
+    chat_id = _run_chat(
+        ["hello"],
+        [
+            _delegate(MATH_AGENT_NAME, "hello", "call_1", None),
+            AIMessage(content="hi"),
+            AIMessage(content="Hello!"),
+        ],
+    )
+
+    usage = client.get(f"/v1/api/chats/{chat_id}/usage").json()
+
+    assert usage["llmCalls"] == 0
+    assert usage["totalTokens"] == 0
+    assert usage["byAgent"] == {}
+
+
+def test_chat_usage_unknown_chat_returns_404():
+    assert client.get("/v1/api/chats/does-not-exist/usage").status_code == 404
+
+
+def test_chat_usage_of_another_user_returns_404(module_monkeypatch):
+    chat_id = _run_chat(
+        ["hello"],
+        [
+            _delegate(MATH_AGENT_NAME, "hello", "call_1", _usage(10, 1)),
+            AIMessage(content="hi", usage_metadata=_usage(10, 1)),
+            AIMessage(content="Hello!", usage_metadata=_usage(10, 1)),
+        ],
+    )
+
+    with module_monkeypatch.context() as mp:
+        mp.setattr("app.routers.chat.get_user_id_from_token", AsyncMock(return_value="someone-else"))
+        assert client.get(f"/v1/api/chats/{chat_id}/usage").status_code == 404
+
+
+def test_usage_endpoints_require_authentication(module_monkeypatch):
+    with module_monkeypatch.context() as mp:
+        mp.setattr("app.routers.chat.get_user_id_from_token", AsyncMock(return_value=None))
+        mp.setattr("app.routers.chat.get_user_from_token", AsyncMock(return_value=None))
+        assert client.get("/v1/api/usage").status_code == 401
+        assert client.get("/v1/api/chats/any/usage").status_code == 401
+        assert client.get("/v1/api/admin/usage").status_code == 401
+
+
+def test_usage_aggregates_all_chats():
+    small_chat = _run_chat(
+        ["add 1 and 2"],
+        [
+            _delegate(MATH_AGENT_NAME, "add 1 and 2", "call_1", _usage(10, 1)),
+            AIMessage(content="sum is 3", usage_metadata=_usage(10, 1)),
+            AIMessage(content="The sum is 3.", usage_metadata=_usage(10, 1)),
+        ],
+    )
+    big_chat = _run_chat(
+        ["multiply 3 and 4"],
+        [
+            _delegate(CALCULATOR_AGENT_NAME, "multiply 3 and 4", "call_1", _usage(1_000, 100)),
+            AIMessage(content="product is 12", usage_metadata=_usage(1_000, 100)),
+            AIMessage(content="The product is 12.", usage_metadata=_usage(1_000, 100)),
+        ],
+    )
+
+    response = client.get("/v1/api/usage?period=day&limit=1")
+
+    assert response.status_code == 200
+    usage = response.json()
+    assert usage["period"] == "day"
+    assert usage["chatCount"] == 2
+    assert usage["llmCalls"] == 6
+    assert usage["totalTokens"] == 3 * 11 + 3 * 1_100
+    assert {name: u["totalTokens"] for name, u in usage["byAgent"].items()} == {
+        "supervisor": 22 + 2_200,
+        MATH_AGENT_NAME: 11,
+        CALCULATOR_AGENT_NAME: 1_100,
+    }
+    assert sum(day["totalTokens"] for day in usage["byDay"]) == usage["totalTokens"]
+    assert [chat["chatId"] for chat in usage["topChats"]] == [big_chat]
+    assert usage["topChats"][0]["totalTokens"] == 3 * 1_100
+    assert small_chat != big_chat
+
+
+def test_usage_rejects_invalid_query():
+    assert client.get("/v1/api/usage?period=year").status_code == 422
+    assert client.get("/v1/api/usage?limit=0").status_code == 422
+    assert client.get("/v1/api/admin/usage?period=year").status_code == 422
+
+
+def _run_chat_as(module_monkeypatch, user_id: str, tokens_per_call: int) -> str:
+    with module_monkeypatch.context() as mp:
+        mp.setattr("app.routers.websocket.get_user_id_from_token", AsyncMock(return_value=user_id))
+        return _run_chat(
+            ["hello"],
+            [
+                _delegate(MATH_AGENT_NAME, "hello", "call_1", _usage(tokens_per_call, 0)),
+                AIMessage(content="hi", usage_metadata=_usage(tokens_per_call, 0)),
+                AIMessage(content="Hello!", usage_metadata=_usage(tokens_per_call, 0)),
+            ],
+        )
+
+
+def test_admin_usage_totals_and_usage_by_user(module_monkeypatch):
+    _run_chat_as(module_monkeypatch, "alice", 10)
+    _run_chat_as(module_monkeypatch, "alice", 20)
+    _run_chat_as(module_monkeypatch, "bob", 100)
+
+    with module_monkeypatch.context() as mp:
+        mp.setattr(
+            "app.routers.chat.get_user_from_token", AsyncMock(return_value={"id": "user-1", "username": "admin"})
+        )
+        response = client.get("/v1/api/admin/usage?period=day")
+
+    assert response.status_code == 200
+    usage = response.json()
+    assert usage["period"] == "day"
+    assert usage["userCount"] == 2
+    assert usage["llmCalls"] == 9
+    assert usage["totalTokens"] == 3 * 10 + 3 * 20 + 3 * 100
+    assert {user: (u["llmCalls"], u["totalTokens"]) for user, u in usage["byUser"].items()} == {
+        "alice": (6, 90),
+        "bob": (3, 300),
+    }
+    # Numbers only: no chat names or per-chat details of other users.
+    assert "topChats" not in usage and "byAgent" not in usage
+
+
+def test_admin_usage_forbidden_for_non_admin_users():
+    assert client.get("/v1/api/admin/usage").status_code == 403

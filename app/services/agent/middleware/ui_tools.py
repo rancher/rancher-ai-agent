@@ -12,7 +12,7 @@ from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
 from ...ui_tools.selector import create_ui_tools_selector
-from .messages_history import merge_usage, usage_entry_from_metadata
+from .token_usage import merge_usage, usage_update_from_response
 
 
 def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
@@ -38,7 +38,7 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
         if only_when_direct and not config.get("configurable", {}).get("agent"):
             return None
 
-        ui_tools_list, usage, usage_id = await _dispatch_ui_tools_event(llm, state, config)
+        ui_tools_list, usage = await _dispatch_ui_tools_event(llm, state, config)
 
         result: dict[str, Any] = {}
 
@@ -56,11 +56,9 @@ def ui_tools_middleware(llm: BaseChatModel, only_when_direct: bool = False):
                     ]
                     result["messages_history"] = updated_history
 
-        # Account for the tokens the selector call spent, even when no tools were
-        # selected (the LLM call still consumed tokens).
-        entry = usage_entry_from_metadata(usage, "ui-tools")
-        if entry and usage_id:
-            result["token_usage"] = merge_usage(state.get("token_usage"), {usage_id: entry})
+        # The selector call spends tokens even when it selects no tools.
+        if usage:
+            result["token_usage"] = merge_usage(state.get("token_usage"), usage)
 
         return result or None
 
@@ -82,13 +80,12 @@ async def _dispatch_ui_tools_event(
     llm: BaseChatModel,
     state: AgentState[Any],
     config: RunnableConfig,
-) -> tuple[list[dict], dict | None, str | None]:
+) -> tuple[list[dict], dict | None]:
     """Select and dispatch UI tools based on the current conversation state.
 
     Returns:
-        A ``(ui_tools_list, usage_metadata, usage_id)`` tuple. The list is empty and
-        usage is None if dispatch was skipped; usage may be present even when the
-        list is empty (the selection LLM call still spent tokens).
+        A ``(ui_tools_list, token_usage_update)`` tuple. The usage update may be present
+        even when the list is empty, since the selection LLM call still spent tokens.
     """
     try:
         request_metadata = config.get("configurable", {}).get("request_metadata", {})
@@ -98,7 +95,7 @@ async def _dispatch_ui_tools_event(
 
         selector = create_ui_tools_selector(llm, ui_tools_config)
         if not selector:
-            return [], None, None
+            return [], None
 
         await adispatch_custom_event("notify_processing", "<processing-ui-tools/>")
 
@@ -114,10 +111,10 @@ async def _dispatch_ui_tools_event(
         )
 
         _dispatch_ui_tools(ui_tools_list)
-        return ui_tools_list, selector.last_usage, selector.last_usage_id
+        return ui_tools_list, usage_update_from_response(selector.last_response, "ui-tools")
     except Exception as e:
         logging.error(f"Error dispatching UI tools event: {e}", exc_info=True)
-        return [], None, None
+        return [], None
 
 
 def _collect_all_mcp_responses(state: AgentState[Any]) -> str | None:

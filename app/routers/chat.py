@@ -1,10 +1,112 @@
 import logging
-from fastapi import APIRouter, HTTPException, Request, status
+from datetime import datetime, timedelta, timezone
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response, JSONResponse
 
-from ..services.auth import get_user_id_from_token
+from ..services.auth import get_user_from_token, get_user_id_from_token
 
 router = APIRouter(prefix="/v1/api", tags=["chats"])
+
+ADMIN_USERNAME = "admin"
+
+_USAGE_PERIODS = {
+    "day": timedelta(days=1),
+    "week": timedelta(days=7),
+    "month": timedelta(days=30),
+}
+
+@router.get("/usage")
+async def get_usage(
+    request: Request,
+    period: Literal["day", "week", "month"] = "week",
+    limit: int = Query(10, ge=1, le=100),
+) -> JSONResponse:
+    """
+    Get the tokens consumed by all the user's chats in the last day, week or month.
+
+    Args:
+        period: Rolling period ending now: "day" (24h), "week" (7 days) or "month" (30 days).
+        limit: Number of chats that consumed the most tokens to return.
+
+    Returns:
+        Token totals broken down by agent, source, model and day,
+        plus the top chats, and an HTTP status code.
+    """
+    user_id = None
+    try:
+        user_id = await get_user_id_from_token(request.cookies)
+
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+        until = datetime.now(timezone.utc)
+        analytics = await request.app.memory_manager.fetch_usage_analytics(
+            user_id=user_id,
+            since=until - _USAGE_PERIODS[period],
+            until=until,
+            chats_limit=limit,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"period": period, **analytics}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching usage for user_id {user_id}: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal server error"}
+        )
+
+@router.get("/admin/usage")
+async def get_admin_usage(
+    request: Request,
+    period: Literal["day", "week", "month"] = "week",
+) -> JSONResponse:
+    """
+    Get the tokens consumed by all users in the last day, week or month.
+
+    Only the Rancher user with username "admin" can call it.
+
+    Args:
+        period: Rolling period ending now: "day" (24h), "week" (7 days) or "month" (30 days).
+
+    Returns:
+        Token totals and the totals of each user, and an HTTP status code.
+    """
+    user_id = None
+    try:
+        user = await get_user_from_token(request.cookies)
+
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+        user_id = user.get("id")
+        if user.get("username") != ADMIN_USERNAME:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+        until = datetime.now(timezone.utc)
+        usage = await request.app.memory_manager.fetch_usage_by_user(
+            since=until - _USAGE_PERIODS[period],
+            until=until,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"period": period, **usage}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching usage of all users for user_id {user_id}: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal server error"}
+        )
 
 @router.get("/chats")
 async def get_chats(request: Request, sort: str = "createdAt:desc"):
@@ -197,6 +299,48 @@ async def delete_chat(request: Request, chat_id: str) -> JSONResponse:
         raise
     except Exception as e:
         logging.error(f"Error deleting chat for chat_id {chat_id} and user_id {user_id}: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal server error"}
+        )
+
+@router.get("/chats/{chat_id}/usage")
+async def get_chat_usage(request: Request, chat_id: str) -> JSONResponse:
+    """
+    Get the tokens consumed by a chat, including the child agents it delegated to.
+
+    Args:
+        chat_id: The ID of the thread.
+    Returns:
+        Token totals broken down by agent, source and model, and an HTTP status code.
+    """
+    user_id = None
+    try:
+        user_id = await get_user_id_from_token(request.cookies)
+
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+        chat = await request.app.memory_manager.fetch_chat(
+            chat_id=chat_id,
+            user_id=user_id
+        )
+        if not chat:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+
+        usage = await request.app.memory_manager.fetch_chat_usage(
+            chat_id=chat_id,
+            user_id=user_id
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=usage
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching usage for chat_id {chat_id} and user_id {user_id}: {e}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Internal server error"}

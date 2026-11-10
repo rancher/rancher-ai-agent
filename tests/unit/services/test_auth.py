@@ -13,7 +13,10 @@ from app.services.auth import (
     _load_rancher_url,
     _is_tls_error,
     _get_tls_verify,
+    _session,
+    get_user,
     get_user_id,
+    get_user_from_token,
     get_user_id_from_token,
 )
 
@@ -448,3 +451,117 @@ class TestGetUserIdFromToken:
             await get_user_id_from_token({"R_SESS": "token"})
         mock_load.assert_not_called()
         mock_get.assert_called_once_with("https://rancher.example.com", "token")
+
+
+# ---------------------------------------------------------------------------
+# get_user
+# ---------------------------------------------------------------------------
+
+class TestGetUser:
+    @pytest.mark.asyncio
+    async def test_returns_full_user_on_success(self):
+        user = {"id": "user-123", "username": "admin", "name": "Default Admin"}
+        mock_ctx, mock_http_client = TestGetUserId()._patch_client(_make_response(200, {"data": [user]}))
+        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+             patch("app.services.auth._get_tls_verify", return_value=True):
+            result = await get_user("https://rancher.example.com", "token-abc")
+        assert result == user
+        mock_http_client.get.assert_awaited_once_with(
+            "https://rancher.example.com/v3/users?me=true",
+            headers={"Cookie": "R_SESS=token-abc", "Accept": "application/json"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_user_has_no_id(self):
+        mock_ctx, _ = TestGetUserId()._patch_client(_make_response(200, {"data": [{"username": "admin"}]}))
+        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+             patch("app.services.auth._get_tls_verify", return_value=True):
+            assert await get_user("https://rancher.example.com", "token-abc") is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_api_error(self):
+        mock_ctx, _ = TestGetUserId()._patch_client(_make_response(401, {"type": "error"}))
+        with patch("app.services.auth.httpx.AsyncClient", return_value=mock_ctx), \
+             patch("app.services.auth._get_tls_verify", return_value=True):
+            assert await get_user("https://rancher.example.com", "bad-token") is None
+
+    @pytest.mark.asyncio
+    async def test_get_user_id_returns_id_of_get_user(self):
+        with patch("app.services.auth.get_user", new=AsyncMock(return_value={"id": "user-9", "username": "bob"})):
+            assert await get_user_id("https://rancher.example.com", "t") == "user-9"
+
+    @pytest.mark.asyncio
+    async def test_get_user_id_returns_none_without_user(self):
+        with patch("app.services.auth.get_user", new=AsyncMock(return_value=None)):
+            assert await get_user_id("https://rancher.example.com", "t") is None
+
+
+# ---------------------------------------------------------------------------
+# _session
+# ---------------------------------------------------------------------------
+
+class TestSession:
+    def test_returns_url_and_cookie_token(self):
+        with patch.dict(os.environ, {"RANCHER_URL": " https://rancher.example.com "}, clear=True):
+            assert _session({"R_SESS": "cookie-token"}) == ("https://rancher.example.com", "cookie-token")
+
+    def test_api_token_env_takes_precedence_over_cookie(self):
+        with patch.dict(os.environ, {"RANCHER_URL": "https://r", "RANCHER_API_TOKEN": "env-token"}, clear=True):
+            assert _session({"R_SESS": "cookie-token"}) == ("https://r", "env-token")
+
+    def test_returns_none_without_token(self):
+        with patch.dict(os.environ, {"RANCHER_URL": "https://r"}, clear=True):
+            assert _session({}) is None
+
+    def test_falls_back_to_cluster_url(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("app.services.auth._load_rancher_url", return_value="https://10.43.31.188"):
+            assert _session({"R_SESS": "t"}) == ("https://10.43.31.188", "t")
+
+    def test_returns_none_without_rancher_url(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("app.services.auth._load_rancher_url", return_value=None):
+            assert _session({"R_SESS": "t"}) is None
+
+
+# ---------------------------------------------------------------------------
+# get_user_from_token
+# ---------------------------------------------------------------------------
+
+class TestGetUserFromToken:
+    @pytest.mark.asyncio
+    async def test_returns_rancher_user(self):
+        user = {"id": "user-1", "username": "admin"}
+        with patch.dict(os.environ, {"RANCHER_URL": "https://rancher.example.com"}, clear=True), \
+             patch("app.services.auth.get_user", new=AsyncMock(return_value=user)) as mock_get:
+            result = await get_user_from_token({"R_SESS": "token"})
+        mock_get.assert_called_once_with("https://rancher.example.com", "token")
+        assert result == user
+
+    @pytest.mark.asyncio
+    async def test_uses_api_token_env_over_cookie(self):
+        with patch.dict(os.environ, {"RANCHER_URL": "https://r", "RANCHER_API_TOKEN": "env-token"}, clear=True), \
+             patch("app.services.auth.get_user", new=AsyncMock(return_value={"id": "u"})) as mock_get:
+            await get_user_from_token({"R_SESS": "cookie-token"})
+        mock_get.assert_called_once_with("https://r", "env-token")
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_token(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("app.services.auth.get_user", new=AsyncMock()) as mock_get:
+            assert await get_user_from_token({}) is None
+        mock_get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_rancher_url_missing(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("app.services.auth._load_rancher_url", return_value=None), \
+             patch("app.services.auth.get_user", new=AsyncMock()) as mock_get:
+            assert await get_user_from_token({"R_SESS": "t"}) is None
+        mock_get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_rancher_rejects_token(self):
+        with patch.dict(os.environ, {"RANCHER_URL": "https://r"}, clear=True), \
+             patch("app.services.auth.get_user", new=AsyncMock(return_value=None)):
+            assert await get_user_from_token({"R_SESS": "expired"}) is None

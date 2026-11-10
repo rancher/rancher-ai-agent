@@ -20,6 +20,7 @@ from langgraph.types import Command
 
 from ..supervisor import ChildAgent, _AgentCallCounter, _build_agent_metadata, _extract_last_message
 from .._constants import INTERRUPT_CANCEL_MESSAGE, NeedsOauth2
+from ..middleware import record_usage
 from .prompts import (
     CANCEL_PLAN_REQUEST,
     PLAN_SUBTASK_CANCELLED_REPLY,
@@ -225,6 +226,7 @@ async def _evaluate_subtask(
     except Exception:  # noqa: BLE001
         logging.warning("Planner subtask evaluation failed", exc_info=True)
         return "completed"
+    record_usage(response, "planner")
 
     answer = _extract_text(response).strip().lower()
     if answer.startswith("input"):

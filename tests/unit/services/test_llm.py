@@ -52,6 +52,7 @@ def test_get_llm_openai_with_custom_ca(mock_openai, mock_get_ca, mock_ssl_ctx, m
         mock_openai.assert_called_once_with(
             model="gpt-4",
             base_url="https://openai.example.com",
+            stream_usage=True,
             http_client=mock_httpx.Client.return_value,
             http_async_client=mock_httpx.AsyncClient.return_value,
         )
@@ -123,7 +124,7 @@ async def test_close_openai_ca_clients():
 def test_get_llm_generic_openai(mock_openai):
     with patch.dict(os.environ, {"GENERIC_OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "generic-openai", "GENERIC_OPENAI_URL": "https://api.example.com", "GENERIC_OPENAI_API_KEY": "fake-key"}, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key")
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key", stream_usage=True)
         assert llm == mock_openai.return_value
 
 def test_get_active_llm_not_configured():
@@ -208,7 +209,7 @@ def test_get_llm_openai_with_custom_url(mock_openai):
         "OPENAI_URL": "http://custom-openai:8000"
     }, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000")
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000", stream_usage=True)
         assert llm == mock_openai.return_value
 
 

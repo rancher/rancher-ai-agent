@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import status, HTTPException
@@ -212,27 +213,68 @@ async def test_get_models_bedrock_bearer_token_success(mock_request):
             assert call_args.kwargs["headers"]["Authorization"] == "Bearer test-bearer-token-12345"
 
 
-@pytest.mark.asyncio
-async def test_get_models_bedrock_bearer_token_invalid(mock_request):
-    """Test getting Bedrock models with invalid bearer token."""
+async def _get_bedrock_models(mock_request, get_mock):
     mock_request.query_params = {
         "region": "us-east-1",
-        "bearerToken": "invalid-token"
+        "bearerToken": "secret-bearer-token"
     }
-    
-    mock_response = MagicMock()
-    mock_response.status_code = 401
-    
     mock_http_client = AsyncMock()
-    mock_http_client.get = AsyncMock(return_value=mock_response)
-    
+    mock_http_client.get = get_mock
+
     with patch("app.routers.configuration.get_user_id_from_token", AsyncMock(return_value="test-user")):
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
             with pytest.raises(HTTPException) as exc:
                 await config_router.get_models(mock_request, llm_name="bedrock")
-            assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
+    return exc.value
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_bearer_token_invalid(mock_request):
+    """Bedrock rejects a bad API key with 403 AccessDeniedException; report it as a credential error with AWS's reason."""
+    aws_response = httpx.Response(
+        403,
+        headers={
+            "x-amzn-errortype": "AccessDeniedException:http://internal.amazon.com/coral/com.amazon.coral.service/",
+            "x-amzn-requestid": "e3b57c1f-ec68-4269-a910-bbf145a2e704",
+        },
+        json={"Message": "Authentication failed: Please make sure your API Key is valid."},
+    )
+
+    exc = await _get_bedrock_models(mock_request, AsyncMock(return_value=aws_response))
+
+    assert exc.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "us-east-1" in exc.detail
+    assert "HTTP 403 AccessDeniedException" in exc.detail
+    assert "Please make sure your API Key is valid." in exc.detail
+    assert "e3b57c1f-ec68-4269-a910-bbf145a2e704" in exc.detail
+    assert "secret-bearer-token" not in exc.detail
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_upstream_error_is_not_reported_as_auth_failure(mock_request):
+    """A non-credential Bedrock error is a 502 that carries AWS's status and message."""
+    aws_response = httpx.Response(
+        429,
+        headers={"x-amzn-errortype": "ThrottlingException"},
+        json={"message": "Too many requests, please wait before trying again."},
+    )
+
+    exc = await _get_bedrock_models(mock_request, AsyncMock(return_value=aws_response))
+
+    assert exc.status_code == status.HTTP_502_BAD_GATEWAY
+    assert "authentication" not in exc.detail.lower()
+    assert "HTTP 429 ThrottlingException: Too many requests" in exc.detail
+
+
+@pytest.mark.asyncio
+async def test_get_models_bedrock_timeout_names_the_error(mock_request):
+    """httpx timeouts stringify to '', so the detail must still say what happened."""
+    exc = await _get_bedrock_models(mock_request, AsyncMock(side_effect=httpx.ReadTimeout("")))
+
+    assert exc.status_code == status.HTTP_502_BAD_GATEWAY
+    assert exc.detail == "Could not reach Bedrock in region us-east-1: ReadTimeout"
 
 
 @pytest.mark.asyncio

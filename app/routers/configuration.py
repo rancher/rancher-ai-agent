@@ -134,6 +134,46 @@ async def check_k8s_permission(
         logging.error(f"Error checking Kubernetes permissions: {e}")
         return False
 
+def _bedrock_error(response: httpx.Response, region: str) -> HTTPException:
+    """
+    Builds the HTTPException for a non-200 Bedrock ListFoundationModels response.
+
+    Bedrock rejects an invalid or unauthorised API key with 403 AccessDeniedException,
+    so 401 and 403 are both reported as credential errors. Any other status is passed
+    on as a 502 with AWS's own status, error type and message.
+    """
+    error_type = response.headers.get("x-amzn-errortype", "").split(":", 1)[0]
+    request_id = response.headers.get("x-amzn-requestid", "")
+    message = ""
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            message = body.get("message") or body.get("Message") or ""
+    except ValueError:
+        pass
+    if not message:
+        message = response.text[:200]
+
+    upstream = f"HTTP {response.status_code}"
+    if error_type:
+        upstream += f" {error_type}"
+    if message:
+        upstream += f": {message}"
+    if request_id:
+        upstream += f" (request ID {request_id})"
+
+    logging.warning(f"Bedrock ListFoundationModels in region {region} failed: {upstream}")
+
+    if response.status_code in (401, 403):
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Bedrock rejected the Bearer Token in region {region}. AWS returned {upstream}"
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"Bedrock returned an error in region {region}. AWS returned {upstream}"
+    )
+
 @router.get("/llm/{llm_name}/models")
 async def get_models(request: Request, llm_name: str):
     """
@@ -224,10 +264,7 @@ async def get_models(request: Request, llm_name: str):
                         
                         models = bedrock_models
                     else:
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED if response.status_code == 401 else status.HTTP_502_BAD_GATEWAY,
-                            detail=f"Bedrock authentication failed. Make sure the Region and Bearer Token are valid and have the necessary permissions."
-                        )
+                        raise _bedrock_error(response, region)
             except httpx.InvalidURL as e:
                 logging.error(f"Invalid region format for Bedrock URL: {e}")
                 raise HTTPException(
@@ -235,10 +272,12 @@ async def get_models(request: Request, llm_name: str):
                     detail=f"Invalid AWS region: {region}"
                 )
             except httpx.RequestError as e:
-                logging.error(f"{e}")
+                # str() of some httpx errors (e.g. ReadTimeout) is empty, so name the type too.
+                reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                logging.error(f"Bedrock request to region {region} failed: {reason}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"{e}"
+                    detail=f"Could not reach Bedrock in region {region}: {reason}"
                 )
         
         return JSONResponse(

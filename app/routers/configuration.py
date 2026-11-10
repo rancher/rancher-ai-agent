@@ -139,8 +139,9 @@ def _bedrock_error(response: httpx.Response, region: str) -> HTTPException:
     Builds the HTTPException for a non-200 Bedrock ListFoundationModels response.
 
     Bedrock rejects an invalid or unauthorised API key with 403 AccessDeniedException,
-    so 401 and 403 are both reported as credential errors. Any other status is passed
-    on as a 502 with AWS's own status, error type and message.
+    so 401 and 403 are both reported as credential errors. 429 (with Retry-After) and
+    503 are passed through so clients can back off and retry; any other status becomes
+    502. The detail always carries AWS's own status, error type, message and request ID.
     """
     error_type = response.headers.get("x-amzn-errortype", "").split(":", 1)[0]
     request_id = response.headers.get("x-amzn-requestid", "")
@@ -168,6 +169,18 @@ def _bedrock_error(response: httpx.Response, region: str) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Bedrock rejected the Bearer Token in region {region}. AWS returned {upstream}"
+        )
+    if response.status_code == 429:
+        retry_after = response.headers.get("retry-after")
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Bedrock is throttling requests in region {region}. AWS returned {upstream}",
+            headers={"Retry-After": retry_after} if retry_after else None
+        )
+    if response.status_code == 503:
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Bedrock is unavailable in region {region}. AWS returned {upstream}"
         )
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -276,7 +289,7 @@ async def get_models(request: Request, llm_name: str):
                 reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 logging.error(f"Bedrock request to region {region} failed: {reason}")
                 raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT if isinstance(e, httpx.TimeoutException) else status.HTTP_502_BAD_GATEWAY,
                     detail=f"Could not reach Bedrock in region {region}: {reason}"
                 )
         

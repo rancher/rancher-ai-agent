@@ -22,7 +22,7 @@ dependencies = [
     "fastmcp==4.1.6",
     "kubernetes==37.0.2",
     "langchain-aws==1.9.2",
-    "psycopg[binary,pool]==3.3.7",
+    "psycopg[binary,pool]==3.3.8",
     "kopf==1.45.2",
     "authlib==1.9.5",
 ]

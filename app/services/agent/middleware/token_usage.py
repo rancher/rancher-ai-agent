@@ -114,7 +114,12 @@ def usage_entry_from_response(response: Any, source: str) -> dict | None:
     total_tokens = raw.get("total_tokens", input_tokens + output_tokens) or 0
     if not (input_tokens or output_tokens or total_tokens):
         return None
-    return _build_entry(source, _model_name(response), input_tokens, output_tokens, total_tokens)
+    # Anthropic-style cache counters, or OpenAI-style prompt_tokens_details.cached_tokens.
+    cache_read = raw.get("cache_read_input_tokens") or (raw.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    cache_creation = raw.get("cache_creation_input_tokens") or 0
+    return _build_entry(
+        source, _model_name(response), input_tokens, output_tokens, total_tokens, cache_read, cache_creation
+    )
 
 
 def usage_update_from_response(response: Any, source: str) -> dict | None:

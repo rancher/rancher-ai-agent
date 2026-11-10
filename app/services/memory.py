@@ -468,7 +468,7 @@ class MemoryManager:
     
     async def delete_chat(self, chat_id: str, user_id: str) -> None:
         """
-        Delete a specific chat thread for a specific user.
+        Delete a specific chat thread for a specific user, with its child-agent threads.
 
         Args:
             chat_id: The ID of the chat thread.
@@ -478,8 +478,15 @@ class MemoryManager:
         checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
         if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
-            await self.get_checkpointer().adelete_thread(chat_id)
-            logging.debug(f"Deleted thread: {chat_id}, user_id: {user_id}")
+            thread_ids = {chat_id}
+            async for child_tuple in self.get_checkpointer().alist(config=None, filter={"user_id": user_id}):
+                thread_id = child_tuple.config.get("configurable", {}).get("thread_id", "")
+                if _split_thread_id(thread_id)[0] == chat_id:
+                    thread_ids.add(thread_id)
+
+            for thread_id in thread_ids:
+                await self.get_checkpointer().adelete_thread(thread_id)
+                logging.debug(f"Deleted thread: {thread_id}, user_id: {user_id}")
 
     async def fetch_messages(self, chat_id: str, user_id: str, filters: dict = {}) -> list:
         """

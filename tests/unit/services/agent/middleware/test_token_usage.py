@@ -64,3 +64,27 @@ def test_record_usage_collects_only_inside_collect_usage():
 
     assert set(collected) == {"m1"}
     assert collected["m1"]["total_tokens"] == 15
+
+
+def test_fallback_reads_anthropic_cache_counters():
+    msg = AIMessage(content="x", id="m1", response_metadata={"usage": {
+        "input_tokens": 100, "output_tokens": 10,
+        "cache_read_input_tokens": 60, "cache_creation_input_tokens": 20,
+    }})
+
+    entry = usage_update_from_response(msg, "agent")["m1"]
+
+    assert entry["cache_read"] == 60
+    assert entry["cache_creation"] == 20
+
+
+def test_fallback_reads_openai_cached_tokens():
+    msg = AIMessage(content="x", id="m1", response_metadata={"token_usage": {
+        "prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110,
+        "prompt_tokens_details": {"cached_tokens": 40},
+    }})
+
+    entry = usage_update_from_response(msg, "agent")["m1"]
+
+    assert entry["cache_read"] == 40
+    assert entry["cache_creation"] == 0

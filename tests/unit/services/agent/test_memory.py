@@ -95,10 +95,59 @@ async def test_delete_chat_deletes_thread_if_exists():
     tuple1.metadata = {"user_id": "user1"}
     mock_checkpointer.aget_tuple = AsyncMock(return_value=tuple1)
     mock_checkpointer.adelete_thread = AsyncMock()
+
+    async def alist_mock(*args, **kwargs):
+        return
+        yield
+
+    mock_checkpointer.alist = alist_mock
     manager = MemoryManager()
     manager.checkpointer = mock_checkpointer
     await manager.delete_chat("chat1", "user1")
     mock_checkpointer.adelete_thread.assert_awaited_once_with("chat1")
+
+@pytest.mark.asyncio
+async def test_delete_chat_deletes_child_and_planner_threads():
+    """Child/planner threads hold part of the chat's usage, so they go with the chat."""
+    owner_tuple = MagicMock()
+    owner_tuple.metadata = {"user_id": "user1"}
+
+    def _thread(thread_id):
+        tup = MagicMock()
+        tup.config = {"configurable": {"thread_id": thread_id}}
+        return tup
+
+    seen_filters = []
+
+    async def alist_mock(*args, **kwargs):
+        seen_filters.append(kwargs.get("filter"))
+        for thread_id in ["chat1", "chat1::child::kubernetes", "chat1::planner::fleet", "chat2", "chat2::child::k8s"]:
+            yield _thread(thread_id)
+
+    mock_checkpointer = MagicMock()
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=owner_tuple)
+    mock_checkpointer.adelete_thread = AsyncMock()
+    mock_checkpointer.alist = alist_mock
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+
+    await manager.delete_chat("chat1", "user1")
+
+    assert seen_filters == [{"user_id": "user1"}]
+    deleted = {c.args[0] for c in mock_checkpointer.adelete_thread.await_args_list}
+    assert deleted == {"chat1", "chat1::child::kubernetes", "chat1::planner::fleet"}
+
+@pytest.mark.asyncio
+async def test_delete_chat_ignores_another_users_chat():
+    owner_tuple = MagicMock()
+    owner_tuple.metadata = {"user_id": "owner"}
+    mock_checkpointer = MagicMock()
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=owner_tuple)
+    mock_checkpointer.adelete_thread = AsyncMock()
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    await manager.delete_chat("chat1", "intruder")
+    mock_checkpointer.adelete_thread.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_delete_chat_does_nothing_if_not_found():

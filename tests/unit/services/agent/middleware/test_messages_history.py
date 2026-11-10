@@ -283,6 +283,21 @@ def test_after_model_skips_summarization_message_usage():
     assert result is None
 
 
+def test_after_model_falls_back_to_response_metadata_usage():
+    """Agent calls whose provider only fills response_metadata are still recorded."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(
+        content="response", id="m1",
+        response_metadata={"token_usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}},
+    )
+    state = {"messages": [ai_msg], "messages_history": []}
+
+    result = middleware.after_model(state, MagicMock())
+
+    assert result["token_usage"]["m1"]["source"] == "agent"
+    assert result["token_usage"]["m1"]["total_tokens"] == 35
+
+
 def test_after_model_no_token_usage_without_metadata():
     """Verify AIMessages without usage_metadata produce no token_usage key."""
     middleware = MessagesHistoryMiddleware()

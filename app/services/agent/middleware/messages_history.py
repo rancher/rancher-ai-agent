@@ -7,7 +7,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import override
 
 from ....constants import INTERRUPT_CANCEL_REPLY, STOP_CONTEXT_REPLY
-from .token_usage import _TokenUsageState, merge_usage, usage_entry
+from .token_usage import _TokenUsageState, merge_usage, usage_entry_from_response
 
 
 def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
@@ -103,7 +103,7 @@ class MessagesHistoryMiddleware(AgentMiddleware):
             and getattr(last, "id", None)
             and last.additional_kwargs.get("lc_source") != "summarization"
         ):
-            entry = usage_entry(last, "agent")
+            entry = usage_entry_from_response(last, "agent")
             if entry:
                 result["token_usage"] = merge_usage(state.get("token_usage"), {last.id: entry})
 

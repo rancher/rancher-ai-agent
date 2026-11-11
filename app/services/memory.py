@@ -7,7 +7,7 @@ from typing import cast
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple
+from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple, empty_checkpoint
 from langchain_core.runnables.config import RunnableConfig
 
 from ..services.agent.loader import DEFAULT_AGENT_NAME
@@ -28,6 +28,8 @@ _USAGE_FIELDS = {
     "cache_creation": "cacheCreationTokens",
 }
 _CHILD_THREAD_SEPARATORS = ("::child::", "::planner::")
+# Threads holding the usage of LLM calls made outside the agent graph (e.g. /complete/ui-tools or any other async endpoint).
+_USAGE_THREAD_SEPARATOR = "::usage::"
 # Agent credited with the usage of the chat's own thread (supervisor or planner).
 ORCHESTRATOR_AGENT = "supervisor"
 
@@ -63,6 +65,8 @@ def _summarize_usage(records: list[tuple[str, str, dict]]) -> dict:
 
 def _split_thread_id(thread_id: str) -> tuple[str, str | None]:
     """Split a thread id into its chat id and, for a child-agent thread, the agent name."""
+    if _USAGE_THREAD_SEPARATOR in thread_id:
+        return thread_id.split(_USAGE_THREAD_SEPARATOR, 1)[0], None
     for separator in _CHILD_THREAD_SEPARATORS:
         if separator in thread_id:
             chat_id, agent = thread_id.split(separator, 1)
@@ -225,7 +229,7 @@ class MemoryManager:
             if not chat_id or not user_id:
                 continue
 
-            if "::child::" in chat_id or "::planner::" in chat_id: # skip child and plan threads
+            if _split_thread_id(chat_id)[0] != chat_id: # skip child, plan and usage threads
                 continue
 
             if self._is_empty_chat(checkpoint_tuple):
@@ -400,6 +404,33 @@ class MemoryManager:
             **total,
             "byUser": by_user,
         }
+
+    async def record_chat_usage(self, chat_id: str, user_id: str, usage: dict) -> None:
+        """
+        Record the usage of LLM calls made outside the agent graph, attributing it to a chat.
+
+        Each update is stored in its own ``<chat_id>::usage::<key>`` thread, so concurrent
+        calls never overwrite each other and the usage is read and deleted with the chat.
+
+        Args:
+            chat_id: The ID of the chat the calls belong to.
+            user_id: The ID of the user.
+            usage: A ``{key: token_usage entry}`` update.
+        """
+        checkpointer = self.get_checkpointer()
+        for key, entry in usage.items():
+            version = checkpointer.get_next_version(None, None)
+            checkpoint = empty_checkpoint()
+            checkpoint["channel_values"] = {"token_usage": {key: entry}}
+            checkpoint["channel_versions"] = {"token_usage": version}
+            await checkpointer.aput(
+                config=RunnableConfig(configurable={
+                    "thread_id": f"{chat_id}{_USAGE_THREAD_SEPARATOR}{key}", "checkpoint_ns": "",
+                }),
+                checkpoint=checkpoint,
+                metadata=cast(CheckpointMetadata, {"user_id": user_id, "source": "update", "step": 0, "parents": {}}),
+                new_versions={"token_usage": version},
+            )
 
     async def fetch_chat(self, chat_id: str, user_id: str) -> dict | None:
         """

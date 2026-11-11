@@ -402,7 +402,7 @@ paths:
   /complete/ui-tools:
     post:
       summary: Select appropriate UI tools based user input
-      description: Uses the LLM to select appropriate UI tools based on the provided context and prompt
+      description: Uses the LLM to select appropriate UI tools based on the provided context and prompt. The tokens spent are recorded on the chat given by chatId.
       operationId: complete_ui_tools
       tags:
         - UI Tools
@@ -440,6 +440,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '422':
+          description: chatId is missing, null or empty
         '500':
           description: Internal server error
           content:
@@ -1161,16 +1163,22 @@ components:
           description: Context information for tool selection
           items:
             type: object
+        chatId:
+          type: string
+          minLength: 1
+          description: ID of the caller's chat the call is made for; the tokens spent are recorded on it
       required:
         - prompt
         - tools
         - context
+        - chatId
       example:
         prompt: "Select the most appropriate tools for this context"
         tools:
           name: "default_tools"
           tools: null
         context: [{"key": "value"}]
+        chatId: ad924baf-24d7-49a5-84ae-bba3a58218a6
 
     SettingsUpdate:
       type: object

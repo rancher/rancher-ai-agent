@@ -5,12 +5,13 @@ an in-memory checkpointer, then reads the recorded usage back through the REST A
 """
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
+from app.dependencies import get_llm
 from app.main import app
 from app.services.agent.loader import AgentConfig, AuthenticationType
 from app.services.llm import LLMManager
@@ -282,3 +283,80 @@ def test_admin_usage_totals_and_usage_by_user(module_monkeypatch):
 
 def test_admin_usage_forbidden_for_non_admin_users():
     assert client.get("/v1/api/admin/usage").status_code == 403
+
+
+def _select_ui_tools(module_monkeypatch, chat_id: str | None, usage: dict | None):
+    selector = MagicMock()
+    selector.select_tools = AsyncMock(return_value=[])
+    selector.last_response = AIMessage(content="", id="selector-call", usage_metadata=usage)
+    body = {"prompt": "p", "tools": {"name": "tools"}, "context": []}
+    if chat_id is not None:
+        body["chatId"] = chat_id
+    with module_monkeypatch.context() as mp:
+        mp.setattr("app.routers.llm.get_user_id_from_token", AsyncMock(return_value=USER_ID))
+        mp.setattr("app.routers.llm.create_ui_tools_selector", lambda **_: selector)
+        app.dependency_overrides[get_llm] = lambda: MagicMock()
+        try:
+            return client.post("/v1/api/complete/ui-tools", json=body)
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
+
+
+def test_complete_ui_tools_usage_is_recorded_on_the_chat(module_monkeypatch):
+    chat_id = _run_chat(
+        ["hello"],
+        [
+            _delegate(MATH_AGENT_NAME, "hello", "call_1", _usage(10, 1)),
+            AIMessage(content="hi", usage_metadata=_usage(10, 1)),
+            AIMessage(content="Hello!", usage_metadata=_usage(10, 1)),
+        ],
+    )
+
+    assert _select_ui_tools(module_monkeypatch, chat_id, _usage(40, 2)).status_code == 200
+
+    usage = client.get(f"/v1/api/chats/{chat_id}/usage").json()
+    assert usage["llmCalls"] == 4
+    assert usage["bySource"]["ui-tools"]["totalTokens"] == 42
+    assert [chat["id"] for chat in client.get("/v1/api/chats").json()] == [chat_id]
+
+
+def test_complete_ui_tools_requires_chat_id(module_monkeypatch):
+    assert _select_ui_tools(module_monkeypatch, None, _usage(40, 2)).status_code == 422
+
+
+def test_complete_ui_tools_before_the_chat_is_saved(module_monkeypatch):
+    """The UI may select tools for a chat the websocket hasn't saved yet."""
+    assert _select_ui_tools(module_monkeypatch, "new-chat", _usage(40, 2)).status_code == 200
+
+    usage = client.get("/v1/api/usage?period=day").json()
+    assert usage["bySource"]["ui-tools"]["totalTokens"] == 42
+
+    chat_usage = client.get("/v1/api/chats/new-chat/usage")
+    assert chat_usage.status_code == 200
+    assert chat_usage.json()["totalTokens"] == 42
+
+
+def test_complete_ui_tools_usage_never_counts_for_the_chat_owner(module_monkeypatch):
+    chat_id = _run_chat(
+        ["hello"],
+        [
+            _delegate(MATH_AGENT_NAME, "hello", "call_1", _usage(10, 1)),
+            AIMessage(content="hi", usage_metadata=_usage(10, 1)),
+            AIMessage(content="Hello!", usage_metadata=_usage(10, 1)),
+        ],
+    )
+
+    with module_monkeypatch.context() as mp:
+        mp.setattr("app.routers.llm.get_user_id_from_token", AsyncMock(return_value="someone-else"))
+        selector = MagicMock()
+        selector.select_tools = AsyncMock(return_value=[])
+        selector.last_response = AIMessage(content="", id="foreign", usage_metadata=_usage(500, 0))
+        mp.setattr("app.routers.llm.create_ui_tools_selector", lambda **_: selector)
+        app.dependency_overrides[get_llm] = lambda: MagicMock()
+        try:
+            body = {"prompt": "p", "tools": {"name": "tools"}, "context": [], "chatId": chat_id}
+            assert client.post("/v1/api/complete/ui-tools", json=body).status_code == 200
+        finally:
+            app.dependency_overrides.pop(get_llm, None)
+
+    assert client.get(f"/v1/api/chats/{chat_id}/usage").json()["totalTokens"] == 33

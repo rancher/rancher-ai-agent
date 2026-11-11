@@ -325,13 +325,14 @@ async def get_chat_usage(request: Request, chat_id: str) -> JSONResponse:
             chat_id=chat_id,
             user_id=user_id
         )
-        if not chat:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
-
         usage = await request.app.memory_manager.fetch_chat_usage(
             chat_id=chat_id,
             user_id=user_id
         )
+        # A chat with no messages yet may already have usage, e.g. from /complete/ui-tools.
+        if not chat and not usage["llmCalls"]:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=usage

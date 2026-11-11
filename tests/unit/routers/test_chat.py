@@ -120,11 +120,23 @@ async def test_get_chat_usage_unauthorized(mock_request):
 @pytest.mark.asyncio
 async def test_get_chat_usage_not_found(mock_request):
     mock_request.app.memory_manager.fetch_chat.return_value = None
+    mock_request.app.memory_manager.fetch_chat_usage.return_value = {"chatId": "notfound", "llmCalls": 0}
     with patch("app.routers.chat.get_user_id_from_token", AsyncMock(return_value="u")):
         with pytest.raises(HTTPException) as exc:
             await chat_router.get_chat_usage(mock_request, chat_id="notfound")
     assert exc.value.status_code == status.HTTP_404_NOT_FOUND
-    mock_request.app.memory_manager.fetch_chat_usage.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_chat_usage_of_chat_without_messages_but_with_usage(mock_request):
+    """e.g. /complete/ui-tools called before the first message of the chat."""
+    usage = {"chatId": "new", "llmCalls": 1, "totalTokens": 42}
+    mock_request.app.memory_manager.fetch_chat.return_value = None
+    mock_request.app.memory_manager.fetch_chat_usage.return_value = usage
+    with patch("app.routers.chat.get_user_id_from_token", AsyncMock(return_value="u")):
+        resp = await chat_router.get_chat_usage(mock_request, chat_id="new")
+    assert resp.status_code == status.HTTP_200_OK
+    assert json.loads(resp.body) == usage
 
 
 @pytest.mark.asyncio

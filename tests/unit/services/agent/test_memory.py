@@ -296,6 +296,35 @@ async def test_fetch_usage_by_user_groups_all_users_in_period():
 
 
 @pytest.mark.asyncio
+async def test_record_chat_usage_is_aggregated_with_the_chat():
+    """Usage of out-of-graph calls is stored in usage threads that belong to the chat."""
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {"DB_ENABLED": "false"}):
+        manager = MemoryManager()
+        await manager.initialize()
+
+    await manager.record_chat_usage("chat1", "user1", {"s1": _entry(12, source="ui-tools")})
+    await manager.record_chat_usage("chat1", "user1", {"s2": _entry(8, source="ui-tools")})
+    await manager.record_chat_usage("chat1", "user1", {"s1": _entry(12, source="ui-tools")})  # same key
+    await manager.record_chat_usage("chat2", "other", {"s3": _entry(99, source="ui-tools")})
+
+    usage = await manager.fetch_chat_usage("chat1", "user1")
+    assert usage["totalTokens"] == 20
+    assert usage["llmCalls"] == 2
+    assert set(usage["bySource"]) == {"ui-tools"}
+    assert set(usage["byAgent"]) == {"supervisor"}
+
+    # Usage threads are not chats, and are deleted with their chat.
+    assert await manager.fetch_chats("user1") == []
+    manager._is_empty_chat = MagicMock(return_value=False)
+    manager.get_checkpointer().aget_tuple = AsyncMock(return_value=MagicMock(metadata={"user_id": "user1"}))
+    await manager.delete_chat("chat1", "user1")
+    assert (await manager.fetch_chat_usage("chat1", "user1"))["llmCalls"] == 0
+
+
+@pytest.mark.asyncio
 async def test_fetch_usage_analytics_filters_period_and_ranks_chats():
     from datetime import datetime, timezone
 

@@ -346,6 +346,8 @@ def test_rancher_agent_human_validation_tools():
         "createGlobalRoleBinding",
         "createProjectRoleTemplateBinding",
         "moveNamespace",
+        "deleteGlobalRole",
+        "deleteGlobalRoleBinding",
     ]
 
 

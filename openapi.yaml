@@ -368,13 +368,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Unauthorized or invalid credentials
+          description: Unauthorized, or the provider rejected the credentials (Bedrock 401/403)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: The provider is throttling requests (Bedrock 429). Carries the provider's Retry-After header when it sends one.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '502':
-          description: Failed to fetch models from provider
+          description: Failed to fetch models from provider (any other provider error, or the provider could not be reached)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The provider is unavailable (Bedrock 503)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '504':
+          description: The request to the provider timed out (Bedrock)
           content:
             application/json:
               schema:

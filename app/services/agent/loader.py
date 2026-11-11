@@ -367,6 +367,8 @@ def _get_default_ai_agent_config_crds() -> list:
                     "createGlobalRoleBinding",
                     "createProjectRoleTemplateBinding",
                     "moveNamespace",
+                    "deleteGlobalRole",
+                    "deleteGlobalRoleBinding",
                 ]
             }
         },

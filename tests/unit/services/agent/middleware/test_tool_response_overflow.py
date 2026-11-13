@@ -143,7 +143,7 @@ async def test_bare_ai_message_response_is_wrapped():
 
 
 @pytest.mark.asyncio
-async def test_tool_message_from_earlier_turn_is_truncated():
+async def test_tool_message_from_earlier_turn_is_never_truncated():
     middleware = tool_response_overflow_middleware()
     messages = [
         HumanMessage(content="list all pods", id="h-1"),
@@ -152,13 +152,13 @@ async def test_tool_message_from_earlier_turn_is_truncated():
         AIMessage(content="here are the pods", id="a-1"),
         HumanMessage(content="thanks, and the clusters?", id="h-2"),
     ]
-    handler = AsyncMock(side_effect=[ContextOverflowError("too long"), AIMessage(content="ok")])
+    handler = AsyncMock(side_effect=ContextOverflowError("too long"))
 
-    result = await middleware.awrap_model_call(_request(messages), handler)
+    with pytest.raises(ContextOverflowError):
+        await middleware.awrap_model_call(_request(messages), handler)
 
-    persisted = _persisted_messages(result)
-    assert persisted[0].id == "t-1"
-    assert persisted[0].content.startswith("y" * 2000 + TRUNCATION_NOTE_PREFIX)
+    handler.assert_awaited_once()
+    assert messages[2].content == "y" * 4000
 
 
 @pytest.mark.asyncio
@@ -181,14 +181,62 @@ async def test_overflow_after_max_retries_removes_whole_tool_response():
 
 
 @pytest.mark.asyncio
-async def test_overflow_reraises_when_removed_response_still_overflows():
+async def test_overflow_reraises_when_every_tool_response_is_removed():
     middleware = tool_response_overflow_middleware(max_retries=2)
     handler = AsyncMock(side_effect=ContextOverflowError("too long"))
 
     with pytest.raises(ContextOverflowError):
         await middleware.awrap_model_call(_request(_messages_with_tool_results("y" * 40_000)), handler)
 
-    assert handler.await_count == 4
+    # first call + 2 halvings and removal of t-1 + removal of t-2; t-0 (earlier turn) is never touched
+    assert handler.await_count == 5
+    last_request = handler.await_args_list[4].args[0].messages
+    for i in (5, 7):
+        assert last_request[i].content.startswith(TRUNCATION_REMOVED_PREFIX)
+    assert last_request[2].content == "v2.13"
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_cut_largest_then_next_largest():
+    middleware = tool_response_overflow_middleware(max_retries=1)
+    messages = [
+        HumanMessage(content="pods and nodes", id="h-1"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "c-1", "name": "listPods", "args": {}}, {"id": "c-2", "name": "listNodes", "args": {}}],
+        ),
+        ToolMessage(content="p" * 4000, name="listPods", tool_call_id="c-1", id="t-1"),
+        ToolMessage(content="n" * 3000, name="listNodes", tool_call_id="c-2", id="t-2"),
+    ]
+    handler = AsyncMock(side_effect=[ContextOverflowError("0"), ContextOverflowError("1"), AIMessage(content="ok")])
+
+    result = await middleware.awrap_model_call(_request(messages), handler)
+
+    # 4000 -> 2000, then listNodes (3000) is the largest -> 1500
+    persisted = {m.id: m.content for m in _persisted_messages(result)}
+    assert persisted["t-1"].startswith("p" * 2000 + TRUNCATION_NOTE_PREFIX)
+    assert persisted["t-2"].startswith("n" * 1500 + TRUNCATION_NOTE_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_current_turn_is_cut_before_larger_history():
+    middleware = tool_response_overflow_middleware()
+    messages = [
+        HumanMessage(content="list pods", id="h-1"),
+        _ai_tool_call("call-1", "listPods"),
+        ToolMessage(content="old" * 3000, name="listPods", tool_call_id="call-1", id="t-1"),
+        AIMessage(content="here are the pods", id="a-1"),
+        HumanMessage(content="and the nodes?", id="h-2"),
+        _ai_tool_call("call-2", "listNodes"),
+        ToolMessage(content="n" * 2000, name="listNodes", tool_call_id="call-2", id="t-2"),
+    ]
+    handler = AsyncMock(side_effect=[ContextOverflowError("too long"), AIMessage(content="ok")])
+
+    result = await middleware.awrap_model_call(_request(messages), handler)
+
+    persisted = _persisted_messages(result)
+    assert [m.id for m in persisted] == ["t-2"]
+    assert persisted[0].content.startswith("n" * 1000 + TRUNCATION_NOTE_PREFIX)
 
 
 @pytest.mark.asyncio
@@ -221,6 +269,38 @@ async def test_other_errors_are_not_retried():
     handler = AsyncMock(side_effect=ValueError("boom"))
 
     with pytest.raises(ValueError):
+        await middleware.awrap_model_call(_request(_messages_with_tool_results("y" * 4000)), handler)
+
+    handler.assert_awaited_once()
+
+
+def _bedrock_error(code: str, message: str):
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code, "Message": message}}, "ConverseStream")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_request_body_too_large_is_retried_with_shorter_tool_message():
+    middleware = tool_response_overflow_middleware()
+    error = _bedrock_error(
+        "ValidationException",
+        "The model returned the following errors: Failed to buffer the request body: length limit exceeded",
+    )
+    handler = AsyncMock(side_effect=[error, AIMessage(content="ok")])
+
+    await middleware.awrap_model_call(_request(_messages_with_tool_results("y" * 4000)), handler)
+
+    assert handler.await_count == 2
+    assert "from 4000 to 2000 characters" in handler.await_args_list[1].args[0].messages[5].content
+
+
+@pytest.mark.asyncio
+async def test_unrelated_bedrock_validation_error_is_not_retried():
+    middleware = tool_response_overflow_middleware()
+    handler = AsyncMock(side_effect=_bedrock_error("ValidationException", "bad parameter"))
+
+    with pytest.raises(Exception, match="bad parameter"):
         await middleware.awrap_model_call(_request(_messages_with_tool_results("y" * 4000)), handler)
 
     handler.assert_awaited_once()

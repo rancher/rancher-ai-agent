@@ -10,6 +10,8 @@ from app.services.agent.middleware.messages_history import (
     MessagesHistoryMiddleware,
     _select_history_messages,
     _append_new_to_history,
+)
+from app.services.agent.middleware.token_usage import (
     merge_usage,
     usage_entry,
     usage_entry_from_metadata,
@@ -165,12 +167,16 @@ def test_messages_history_after_model_returns_none_when_nothing_new():
     assert result is None
 
 
-def test_usage_entry_from_metadata_maps_fields():
+def test_usage_entry_from_metadata_maps_fields(monkeypatch):
     """Verify usage_metadata (incl. cache details) maps to a token_usage entry."""
-    entry = usage_entry_from_metadata(_USAGE, "agent")
+    monkeypatch.setenv("ACTIVE_LLM", "openai")
+    entry = usage_entry_from_metadata(_USAGE, "agent", "gpt-4o")
 
     assert entry == {
         "source": "agent",
+        "agent": None,
+        "provider": "openai",
+        "model": "gpt-4o",
         "input_tokens": 100,
         "output_tokens": 20,
         "total_tokens": 120,
@@ -196,14 +202,12 @@ def test_usage_entry_from_response_falls_back_to_openai_style_metadata():
         response_metadata={"token_usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}},
     )
     entry = usage_entry_from_response(msg, "summarization")
-    assert entry == {
-        "source": "summarization",
-        "input_tokens": 30,
-        "output_tokens": 5,
-        "total_tokens": 35,
-        "cache_read": 0,
-        "cache_creation": 0,
-    }
+    assert entry["source"] == "summarization"
+    assert entry["input_tokens"] == 30
+    assert entry["output_tokens"] == 5
+    assert entry["total_tokens"] == 35
+    assert entry["cache_read"] == 0
+    assert entry["cache_creation"] == 0
 
 
 def test_usage_entry_from_response_falls_back_to_anthropic_style_usage():
@@ -254,7 +258,8 @@ def test_after_model_captures_agent_token_usage():
 
     result = middleware.after_model(state, MagicMock())
 
-    assert result["token_usage"] == {"m1": usage_entry(ai_msg, "agent")}
+    assert set(result["token_usage"]) == {"m1"}
+    assert result["token_usage"]["m1"]["source"] == "agent"
     assert result["token_usage"]["m1"]["total_tokens"] == 120
     assert result["token_usage"]["m1"]["cache_read"] == 30
 
@@ -274,6 +279,21 @@ def test_after_model_skips_summarization_message_usage():
 
     # No history append (excluded) and no token_usage capture.
     assert result is None
+
+
+def test_after_model_falls_back_to_response_metadata_usage():
+    """Agent calls whose provider only fills response_metadata are still recorded."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(
+        content="response", id="m1",
+        response_metadata={"token_usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}},
+    )
+    state = {"messages": [ai_msg], "messages_history": []}
+
+    result = middleware.after_model(state, MagicMock())
+
+    assert result["token_usage"]["m1"]["source"] == "agent"
+    assert result["token_usage"]["m1"]["total_tokens"] == 35
 
 
 def test_after_model_no_token_usage_without_metadata():

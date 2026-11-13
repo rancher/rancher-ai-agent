@@ -6,7 +6,7 @@ from typing import cast
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple
+from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple, empty_checkpoint
 from langchain_core.runnables.config import RunnableConfig
 
 from ..services.agent.loader import DEFAULT_AGENT_NAME
@@ -16,6 +16,61 @@ class StorageType(str, Enum):
     """Enum for different types of memory storage."""
     IN_MEMORY = "in-memory"
     POSTGRES = "postgres"
+
+
+# token_usage entry fields -> API fields
+_USAGE_FIELDS = {
+    "input_tokens": "inputTokens",
+    "output_tokens": "outputTokens",
+    "total_tokens": "totalTokens",
+    "cache_read": "cacheReadTokens",
+    "cache_creation": "cacheCreationTokens",
+}
+_CHILD_THREAD_SEPARATORS = ("::child::", "::planner::")
+# Threads holding the usage of LLM calls made outside the agent graph (e.g. /complete/ui-tools or any other async endpoint).
+_USAGE_THREAD_SEPARATOR = "::usage::"
+# Agent credited with the usage of the chat's own thread (supervisor or planner).
+ORCHESTRATOR_AGENT = "supervisor"
+
+
+def _empty_usage() -> dict:
+    usage: dict = {field: 0 for field in _USAGE_FIELDS.values()}
+    usage["llmCalls"] = 0
+    return usage
+
+
+def _add_usage(usage: dict, entry: dict) -> None:
+    for field, api_field in _USAGE_FIELDS.items():
+        usage[api_field] += entry.get(field, 0) or 0
+    usage["llmCalls"] += 1
+
+
+def _summarize_usage(records: list[tuple[str, dict]]) -> dict:
+    """Totals of ``(agent, entry)`` records, broken down by agent, source and provider/model."""
+    total = _empty_usage()
+    groups: dict[str, dict] = {"byAgent": {}, "bySource": {}}
+    by_model: dict[str, dict[str, dict]] = {}
+    for agent, entry in records:
+        _add_usage(total, entry)
+        for group, key in (
+            ("byAgent", agent),
+            ("bySource", entry.get("source") or "agent"),
+        ):
+            _add_usage(groups[group].setdefault(key, _empty_usage()), entry)
+        models = by_model.setdefault(entry.get("provider") or "unknown", {})
+        _add_usage(models.setdefault(entry.get("model") or "unknown", _empty_usage()), entry)
+    return {**total, **groups, "byModel": by_model}
+
+
+def _split_thread_id(thread_id: str) -> tuple[str, str | None]:
+    """Split a thread id into its chat id and, for a child-agent thread, the agent name."""
+    if _USAGE_THREAD_SEPARATOR in thread_id:
+        return thread_id.split(_USAGE_THREAD_SEPARATOR, 1)[0], None
+    for separator in _CHILD_THREAD_SEPARATORS:
+        if separator in thread_id:
+            chat_id, agent = thread_id.split(separator, 1)
+            return chat_id, agent
+    return thread_id, None
 
 class MemoryManager:
     """
@@ -165,7 +220,7 @@ class MemoryManager:
             if not chat_id or not user_id:
                 continue
 
-            if "::child::" in chat_id or "::planner::" in chat_id: # skip child and plan threads
+            if _split_thread_id(chat_id)[0] != chat_id: # skip child, plan and usage threads
                 continue
 
             if self._is_empty_chat(checkpoint_tuple):
@@ -205,66 +260,81 @@ class MemoryManager:
             await self.get_checkpointer().adelete_thread(thread_id)
             logging.debug(f"Deleted thread: {thread_id}, user_id: {user_id}")
 
-    async def _aggregate_token_usage(self, chat_id: str, user_id: str) -> dict:
-        """Aggregate token usage for a conversation, broken down per source.
+    async def _load_token_usage(self, user_id: str, chat_id: str) -> list[tuple[str, dict]]:
+        """Read the token usage recorded in the threads of a user's chat.
 
-        Sums the ``token_usage`` state channel across the main thread (supervisor)
-        and all child-agent sub-threads (``chat_id::child::<name>``). Entries are
-        bucketed per source: ``ui-tools`` and ``summarization`` get their own
-        buckets; agent-turn entries are bucketed as ``supervisor`` (main thread) or
-        the child agent name (child threads).
+        A chat's usage is spread over its own thread, its child-agent threads
+        (``<chat_id>::child::<agent>`` and ``<chat_id>::planner::<agent>``) and its
+        ``<chat_id>::usage::<key>`` threads.
 
-        Returns grand totals plus a ``byAgent`` breakdown, all camelCase.
+        Returns:
+            ``(agent, entry)`` records.
         """
-        fields = ("input_tokens", "output_tokens", "total_tokens", "cache_read", "cache_creation")
-        field_map = {
-            "input_tokens": "inputTokens",
-            "output_tokens": "outputTokens",
-            "total_tokens": "totalTokens",
-            "cache_read": "cacheReadTokens",
-            "cache_creation": "cacheCreationTokens",
-        }
-
-        def _empty() -> dict:
-            return {out: 0 for out in field_map.values()}
-
-        totals = _empty()
-        by_agent: dict[str, dict] = {}
-        child_prefix = f"{chat_id}::child::"
-        seen_threads: set[str] = set()
+        entries_by_thread: dict[str, dict] = {}
+        seen: set[tuple[str, str]] = set()
 
         async for checkpoint_tuple in self.get_checkpointer().alist(config=None, filter={"user_id": user_id}):
-            thread_id = checkpoint_tuple.config.get("configurable", {}).get("thread_id", "")
-
-            if thread_id != chat_id and not thread_id.startswith(child_prefix):
+            configurable = checkpoint_tuple.config.get("configurable", {})
+            thread_id = configurable.get("thread_id", "")
+            checkpoint_ns = configurable.get("checkpoint_ns", "")
+            if not thread_id or _split_thread_id(thread_id)[0] != chat_id:
                 continue
 
-            # alist yields newest first; the first checkpoint per thread carries the
-            # complete (cumulative) token_usage channel.
-            if thread_id in seen_threads:
+            # Checkpoints come newest first and token_usage is cumulative, so only the
+            # latest one of each thread is read.
+            if (thread_id, checkpoint_ns) in seen:
                 continue
-            seen_threads.add(thread_id)
+            seen.add((thread_id, checkpoint_ns))
 
-            token_usage = checkpoint_tuple.checkpoint.get("channel_values", {}).get("token_usage", {})
-            if not token_usage:
-                continue
+            token_usage = checkpoint_tuple.checkpoint.get("channel_values", {}).get("token_usage") or {}
+            entries_by_thread.setdefault(thread_id, {}).update(token_usage)
 
-            for entry in token_usage.values():
-                source = entry.get("source", "agent")
-                if source in ("ui-tools", "summarization"):
-                    bucket = source
-                elif thread_id == chat_id:
-                    bucket = "supervisor"
-                else:
-                    bucket = thread_id.split("::child::", 1)[1]
+        records = []
+        for thread_id, entries in entries_by_thread.items():
+            thread_agent = _split_thread_id(thread_id)[1]
+            for entry in entries.values():
+                records.append((thread_agent or entry.get("agent") or ORCHESTRATOR_AGENT, entry))
+        return records
 
-                agent_totals = by_agent.setdefault(bucket, _empty())
-                for field in fields:
-                    value = entry.get(field, 0) or 0
-                    agent_totals[field_map[field]] += value
-                    totals[field_map[field]] += value
+    async def fetch_chat_usage(self, chat_id: str, user_id: str) -> dict:
+        """
+        Fetch the tokens consumed by a chat, including its child agents.
 
-        return {**totals, "byAgent": by_agent}
+        Args:
+            chat_id: The ID of the chat thread.
+            user_id: The ID of the user.
+        Returns:
+            Token totals broken down by agent, source and model.
+        """
+        records = await self._load_token_usage(user_id, chat_id)
+        return {"chatId": chat_id, **_summarize_usage(records)}
+
+    async def record_chat_usage(self, chat_id: str, user_id: str, usage: dict) -> None:
+        """
+        Record the usage of LLM calls made outside the agent graph, attributing it to a chat.
+
+        Each update is stored in its own ``<chat_id>::usage::<key>`` thread, so concurrent
+        calls never overwrite each other and the usage is read and deleted with the chat.
+
+        Args:
+            chat_id: The ID of the chat the calls belong to.
+            user_id: The ID of the user.
+            usage: A ``{key: token_usage entry}`` update.
+        """
+        checkpointer = self.get_checkpointer()
+        for key, entry in usage.items():
+            version = checkpointer.get_next_version(None, None)
+            checkpoint = empty_checkpoint()
+            checkpoint["channel_values"] = {"token_usage": {key: entry}}
+            checkpoint["channel_versions"] = {"token_usage": version}
+            await checkpointer.aput(
+                config=RunnableConfig(configurable={
+                    "thread_id": f"{chat_id}{_USAGE_THREAD_SEPARATOR}{key}", "checkpoint_ns": "",
+                }),
+                checkpoint=checkpoint,
+                metadata=cast(CheckpointMetadata, {"user_id": user_id, "source": "update", "step": 0, "parents": {}}),
+                new_versions={"token_usage": version},
+            )
 
     async def fetch_chat(self, chat_id: str, user_id: str) -> dict | None:
         """
@@ -279,7 +349,7 @@ class MemoryManager:
         config = RunnableConfig(configurable={"thread_id": chat_id, "user_id": user_id})
         checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
-        if checkpoint_tuple:
+        if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
             logging.debug(f"Found checkpoint_tuple for chat_id: {chat_id}, user_id: {user_id}")
 
             if self._is_empty_chat(checkpoint_tuple):
@@ -292,7 +362,6 @@ class MemoryManager:
                 "userId": user_id,
                 "name": chat_metadata.get("name"),
                 "createdAt": chat_metadata.get("created_at"),
-                "usage": await self._aggregate_token_usage(chat_id, user_id),
             }
             return chat
 
@@ -334,7 +403,7 @@ class MemoryManager:
     
     async def delete_chat(self, chat_id: str, user_id: str) -> None:
         """
-        Delete a specific chat thread for a specific user.
+        Delete a specific chat thread for a specific user, with its child-agent and usage threads.
 
         Args:
             chat_id: The ID of the chat thread.
@@ -344,8 +413,15 @@ class MemoryManager:
         checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
         if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
-            await self.get_checkpointer().adelete_thread(chat_id)
-            logging.debug(f"Deleted thread: {chat_id}, user_id: {user_id}")
+            thread_ids = {chat_id}
+            async for child_tuple in self.get_checkpointer().alist(config=None, filter={"user_id": user_id}):
+                thread_id = child_tuple.config.get("configurable", {}).get("thread_id", "")
+                if _split_thread_id(thread_id)[0] == chat_id:
+                    thread_ids.add(thread_id)
+
+            for thread_id in thread_ids:
+                await self.get_checkpointer().adelete_thread(thread_id)
+                logging.debug(f"Deleted thread: {thread_id}, user_id: {user_id}")
 
     async def fetch_messages(self, chat_id: str, user_id: str, filters: dict = {}) -> list:
         """

@@ -56,7 +56,7 @@ async def test_ui_tools_executes_when_only_when_direct_and_agent_set(mock_get_co
     mock_get_config.return_value = {
         "configurable": {"request_id": "req-1", "agent": "rancher"}
     }
-    mock_dispatch_event.return_value = ([{"toolName": "show-yaml", "input": {}}], None, None)
+    mock_dispatch_event.return_value = ([{"toolName": "show-yaml", "input": {}}], None)
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm, only_when_direct=True)
     ai_msg = AIMessage(content="answer")
@@ -77,7 +77,7 @@ async def test_ui_tools_executes_when_only_when_direct_and_agent_set(mock_get_co
 async def test_ui_tools_returns_none_when_no_ui_tools_selected(mock_get_config, mock_dispatch_event, mock_adispatch):
     """Verify None returned when no UI tools are selected."""
     mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
-    mock_dispatch_event.return_value = ([], None, None)
+    mock_dispatch_event.return_value = ([], None)
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm, only_when_direct=False)
     state = {"messages": [AIMessage(content="answer")]}
@@ -94,7 +94,7 @@ async def test_ui_tools_returns_none_when_no_ui_tools_selected(mock_get_config, 
 async def test_ui_tools_skips_when_no_request_id(mock_get_config, mock_dispatch_event, mock_adispatch):
     """Verify None returned when request_id is missing from config."""
     mock_get_config.return_value = {"configurable": {}}
-    mock_dispatch_event.return_value = ([{"toolName": "show-yaml", "input": {}}], None, None)
+    mock_dispatch_event.return_value = ([{"toolName": "show-yaml", "input": {}}], None)
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm)
     state = {"messages": [AIMessage(content="answer")]}
@@ -111,26 +111,19 @@ async def test_ui_tools_skips_when_no_request_id(mock_get_config, mock_dispatch_
 async def test_ui_tools_records_usage_even_when_no_tools_selected(mock_get_config, mock_dispatch_event, mock_adispatch):
     """The selector LLM call spends tokens even when it selects no tools."""
     mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
-    usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
-    mock_dispatch_event.return_value = ([], usage, "sel-1")
+    usage = {"sel-1": {"source": "ui-tools", "total_tokens": 12}}
+    mock_dispatch_event.return_value = ([], usage)
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm)
-    state = {"messages": [AIMessage(content="answer")]}
+    existing = {"m1": {"source": "agent", "total_tokens": 5}}
+    state = {"messages": [AIMessage(content="answer")], "token_usage": existing}
 
     result = await middleware.aafter_agent(state, MagicMock())
 
     assert result is not None
     assert "messages" not in result  # no tools -> no message mutation
-    assert result["token_usage"] == {
-        "sel-1": {
-            "source": "ui-tools",
-            "input_tokens": 10,
-            "output_tokens": 2,
-            "total_tokens": 12,
-            "cache_read": 0,
-            "cache_creation": 0,
-        }
-    }
+    # Merged with the existing channel value, which is LastValue.
+    assert result["token_usage"] == {**existing, **usage}
 
 
 @pytest.mark.asyncio
@@ -140,8 +133,8 @@ async def test_ui_tools_records_usage_even_when_no_tools_selected(mock_get_confi
 async def test_ui_tools_records_usage_alongside_selected_tools(mock_get_config, mock_dispatch_event, mock_adispatch):
     """Both the selected tools and the selector's token usage are returned."""
     mock_get_config.return_value = {"configurable": {"request_id": "req-1"}}
-    usage = {"input_tokens": 5, "output_tokens": 1, "total_tokens": 6}
-    mock_dispatch_event.return_value = ([{"toolName": "show-yaml", "input": {}}], usage, "sel-2")
+    usage = {"sel-2": {"source": "ui-tools", "total_tokens": 6}}
+    mock_dispatch_event.return_value = ([{"toolName": "show-yaml", "input": {}}], usage)
     mock_llm = MagicMock()
     middleware = ui_tools_middleware(mock_llm)
     state = {"messages": [AIMessage(content="answer")]}

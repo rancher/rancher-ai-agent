@@ -138,10 +138,8 @@ class UIToolsSelector:
 
         self.max_tools = max_tools if max_tools > 0 else None
 
-        # Usage of the most recent select_tools() LLM call, surfaced so callers
-        # (e.g. the ui_tools middleware) can account for the tokens it spent.
-        self.last_usage: dict | None = None
-        self.last_usage_id: str | None = None
+        # Response of the most recent select_tools() LLM call, read by callers to account for its tokens.
+        self.last_response: Any = None
 
         self._build_system_prompt(system_prompt)
     
@@ -285,10 +283,7 @@ If no tools are appropriate, do not invoke any tools."""
                 config={"tags": ["no-stream"]}
             )
 
-            # Record the token usage of this selection call so the ui_tools
-            # middleware can attribute it in the conversation's token accounting.
-            self.last_usage = getattr(response, "usage_metadata", None)
-            self.last_usage_id = getattr(response, "id", None)
+            self.last_response = response
 
             # Extract tool calls
             ui_tool_calls = self._extract_tool_calls_from_response(response, self.filtered_tools)

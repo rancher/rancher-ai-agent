@@ -3,9 +3,11 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 
 from app.services.agent.middleware.summarization import UsageTrackingSummarizationMiddleware
+from app.services.agent.middleware.token_usage import capture_llm_usage
 
 
 _USAGE = {
@@ -28,68 +30,80 @@ def _middleware(summary_response):
     )
 
 
-@pytest.mark.asyncio
-async def test_acreate_summary_with_usage_returns_text_and_usage():
-    response = AIMessage(content="the summary", id="sum-1", usage_metadata=_USAGE)
-    mw = _middleware(response)
-
-    text, usage_update = await mw._acreate_summary_with_usage(
-        [HumanMessage(content="a"), AIMessage(content="b")]
-    )
-
-    assert text == "the summary"
-    assert usage_update == {
-        "sum-1": {
-            "source": "summarization",
-            "input_tokens": 40,
-            "output_tokens": 10,
-            "total_tokens": 50,
-            "cache_read": 5,
-            "cache_creation": 0,
-        }
-    }
+def _fake_model(*responses: AIMessage) -> GenericFakeChatModel:
+    return GenericFakeChatModel(messages=iter(responses))
 
 
 @pytest.mark.asyncio
-async def test_acreate_summary_with_usage_handles_missing_metadata():
-    response = AIMessage(content="summary", id="sum-2")  # no usage anywhere
-    mw = _middleware(response)
+async def test_capture_llm_usage_records_calls_made_in_context():
+    model = _fake_model(AIMessage(content="the summary", id="sum-1", usage_metadata=_USAGE))
 
-    text, usage_update = await mw._acreate_summary_with_usage([HumanMessage(content="a")])
+    with capture_llm_usage("summarization") as usage:
+        await model.ainvoke("summarize")
 
-    assert text == "summary"
-    assert usage_update is None
+    assert set(usage) == {"sum-1"}
+    assert usage["sum-1"]["source"] == "summarization"
+    assert usage["sum-1"]["total_tokens"] == 50
+    assert usage["sum-1"]["cache_read"] == 5
 
 
 @pytest.mark.asyncio
-async def test_acreate_summary_captures_usage_from_response_metadata_fallback():
+async def test_capture_llm_usage_ignores_calls_without_usage():
+    model = _fake_model(AIMessage(content="summary", id="sum-2"))
+
+    with capture_llm_usage("summarization") as usage:
+        await model.ainvoke("summarize")
+
+    assert usage == {}
+
+
+@pytest.mark.asyncio
+async def test_capture_llm_usage_falls_back_to_response_metadata():
     """Providers that only report counts on non-streamed calls via response_metadata."""
-    response = AIMessage(
+    model = _fake_model(AIMessage(
         content="summary", id="sum-3",
         response_metadata={"token_usage": {"prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60}},
+    ))
+
+    with capture_llm_usage("summarization") as usage:
+        await model.ainvoke("summarize")
+
+    assert usage["sum-3"]["total_tokens"] == 60
+
+
+@pytest.mark.asyncio
+async def test_capture_llm_usage_stops_at_context_exit():
+    model = _fake_model(
+        AIMessage(content="a", id="in", usage_metadata=_USAGE),
+        AIMessage(content="b", id="out", usage_metadata=_USAGE),
     )
-    mw = _middleware(response)
 
-    text, usage_update = await mw._acreate_summary_with_usage([HumanMessage(content="a")])
+    with capture_llm_usage("summarization") as usage:
+        await model.ainvoke("first")
+    await model.ainvoke("second")
 
-    assert text == "summary"
-    assert usage_update["sum-3"]["source"] == "summarization"
-    assert usage_update["sum-3"]["total_tokens"] == 60
+    assert set(usage) == {"in"}
 
 
 @pytest.mark.asyncio
 async def test_abefore_model_records_summarization_usage_when_triggered():
-    response = AIMessage(content="the summary", id="sum-1", usage_metadata=_USAGE)
-    mw = _middleware(response)
-    # Force summarization to run deterministically.
-    mw._should_summarize = MagicMock(return_value=True)
-    mw._determine_cutoff_index = MagicMock(return_value=1)
+    model = _fake_model(AIMessage(content="the summary", id="sum-1", usage_metadata=_USAGE))
+    mw = UsageTrackingSummarizationMiddleware(model=model, trigger=[("messages", 2)], keep=("messages", 1))
+    existing = {"m1": {"source": "agent", "total_tokens": 5}}
 
-    state = {"messages": [HumanMessage(content="a", id="h1"), AIMessage(content="b", id="a1")]}
+    state = {
+        "messages": [
+            HumanMessage(content="a", id="h1"),
+            AIMessage(content="b", id="a1"),
+            HumanMessage(content="c", id="h2"),
+        ],
+        "token_usage": existing,
+    }
     result = await mw.abefore_model(state, MagicMock())
 
     assert result["token_usage"]["sum-1"]["source"] == "summarization"
     assert result["token_usage"]["sum-1"]["total_tokens"] == 50
+    assert result["token_usage"]["m1"] == existing["m1"]
     # Parent behaviour preserved: messages are replaced with a summary.
     assert isinstance(result["messages"][0], RemoveMessage)
 

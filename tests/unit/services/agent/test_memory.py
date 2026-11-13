@@ -61,13 +61,23 @@ async def test_fetch_chat_returns_chat_if_exists():
     manager.checkpointer = mock_checkpointer
     manager._is_empty_chat = MagicMock(return_value=False)
     manager._get_chat_metadata = MagicMock(return_value={"name": "Test Chat", "created_at": "2024-01-01T00:00:00Z"})
-    manager._aggregate_token_usage = AsyncMock(return_value={"totalTokens": 42, "byAgent": {}})
     chat = await manager.fetch_chat("chat1", "user1")
     assert chat["id"] == "chat1"
     assert chat["userId"] == "user1"
     assert chat["name"] == "Test Chat"
     assert chat["createdAt"] == "2024-01-01T00:00:00Z"
-    assert chat["usage"] == {"totalTokens": 42, "byAgent": {}}
+
+@pytest.mark.asyncio
+async def test_fetch_chat_returns_none_for_another_users_chat():
+    mock_checkpointer = MagicMock()
+    tuple1 = MagicMock()
+    tuple1.metadata = {"user_id": "owner"}
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=tuple1)
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    manager._is_empty_chat = MagicMock(return_value=False)
+    assert await manager.fetch_chat("chat1", "intruder") is None
+
 
 @pytest.mark.asyncio
 async def test_fetch_chat_returns_none_if_not_found():
@@ -85,10 +95,59 @@ async def test_delete_chat_deletes_thread_if_exists():
     tuple1.metadata = {"user_id": "user1"}
     mock_checkpointer.aget_tuple = AsyncMock(return_value=tuple1)
     mock_checkpointer.adelete_thread = AsyncMock()
+
+    async def alist_mock(*args, **kwargs):
+        return
+        yield
+
+    mock_checkpointer.alist = alist_mock
     manager = MemoryManager()
     manager.checkpointer = mock_checkpointer
     await manager.delete_chat("chat1", "user1")
     mock_checkpointer.adelete_thread.assert_awaited_once_with("chat1")
+
+@pytest.mark.asyncio
+async def test_delete_chat_deletes_child_and_planner_threads():
+    """Child/planner threads hold part of the chat's usage, so they go with the chat."""
+    owner_tuple = MagicMock()
+    owner_tuple.metadata = {"user_id": "user1"}
+
+    def _thread(thread_id):
+        tup = MagicMock()
+        tup.config = {"configurable": {"thread_id": thread_id}}
+        return tup
+
+    seen_filters = []
+
+    async def alist_mock(*args, **kwargs):
+        seen_filters.append(kwargs.get("filter"))
+        for thread_id in ["chat1", "chat1::child::kubernetes", "chat1::planner::fleet", "chat2", "chat2::child::k8s"]:
+            yield _thread(thread_id)
+
+    mock_checkpointer = MagicMock()
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=owner_tuple)
+    mock_checkpointer.adelete_thread = AsyncMock()
+    mock_checkpointer.alist = alist_mock
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+
+    await manager.delete_chat("chat1", "user1")
+
+    assert seen_filters == [{"user_id": "user1"}]
+    deleted = {c.args[0] for c in mock_checkpointer.adelete_thread.await_args_list}
+    assert deleted == {"chat1", "chat1::child::kubernetes", "chat1::planner::fleet"}
+
+@pytest.mark.asyncio
+async def test_delete_chat_ignores_another_users_chat():
+    owner_tuple = MagicMock()
+    owner_tuple.metadata = {"user_id": "owner"}
+    mock_checkpointer = MagicMock()
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=owner_tuple)
+    mock_checkpointer.adelete_thread = AsyncMock()
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    await manager.delete_chat("chat1", "intruder")
+    mock_checkpointer.adelete_thread.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_delete_chat_does_nothing_if_not_found():
@@ -100,85 +159,127 @@ async def test_delete_chat_does_nothing_if_not_found():
     await manager.delete_chat("chat1", "user1")
     mock_checkpointer.adelete_thread.assert_not_awaited()
 
-def _usage_checkpoint(thread_id, token_usage):
+def _usage_checkpoint(thread_id, token_usage, checkpoint_ns=""):
     tup = MagicMock()
-    tup.config = {"configurable": {"thread_id": thread_id}}
+    tup.config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns}}
+    tup.metadata = {"user_id": "user1"}
     tup.checkpoint = {"channel_values": {"token_usage": token_usage}}
     return tup
 
 
+def _entry(total, source="agent", provider="bedrock", model="claude", **extra):
+    return {
+        "source": source, "provider": provider, "model": model,
+        "input_tokens": total, "output_tokens": 0, "total_tokens": total,
+        "cache_read": 0, "cache_creation": 0, **extra,
+    }
+
+
+def _usage_manager(*checkpoints):
+    async def alist_mock(*args, **kwargs):
+        for item in checkpoints:
+            yield item
+
+    mock_checkpointer = MagicMock()
+    mock_checkpointer.alist = alist_mock
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    return manager
+
+
 @pytest.mark.asyncio
-async def test_aggregate_token_usage_buckets_per_source():
-    """Usage is summed across main + child threads into per-source buckets."""
+async def test_fetch_chat_usage_sums_main_and_child_threads():
+    """Usage is summed across the chat's own thread and its child/planner threads."""
     main = _usage_checkpoint("chat1", {
-        "m1": {"source": "agent", "input_tokens": 100, "output_tokens": 20,
-               "total_tokens": 120, "cache_read": 10, "cache_creation": 5},
-        "ui1": {"source": "ui-tools", "input_tokens": 8, "output_tokens": 2,
-                "total_tokens": 10, "cache_read": 0, "cache_creation": 0},
-        "sum1": {"source": "summarization", "input_tokens": 40, "output_tokens": 10,
-                 "total_tokens": 50, "cache_read": 0, "cache_creation": 0},
+        "m1": {**_entry(120), "input_tokens": 100, "output_tokens": 20, "cache_read": 10, "cache_creation": 5},
+        "ui1": _entry(10, source="ui-tools"),
+        "sum1": _entry(50, source="summarization"),
+        # Child agent running on the chat's own thread (direct agent request).
+        "d1": _entry(7, agent="rancher"),
     })
-    child = _usage_checkpoint("chat1::child::kubernetes", {
-        "c1": {"source": "agent", "input_tokens": 200, "output_tokens": 30,
-               "total_tokens": 230, "cache_read": 15, "cache_creation": 0},
-    })
-    # A different conversation's thread that must be ignored.
-    other = _usage_checkpoint("chat2", {
-        "x1": {"source": "agent", "input_tokens": 999, "output_tokens": 999,
-               "total_tokens": 999, "cache_read": 999, "cache_creation": 999},
-    })
+    child = _usage_checkpoint("chat1::child::kubernetes", {"c1": {**_entry(230), "cache_read": 15}})
+    planner = _usage_checkpoint("chat1::planner::fleet", {"p1": _entry(40, provider="openai", model="gpt-4o")})
+    other = _usage_checkpoint("chat2", {"x1": _entry(999)})
 
-    async def alist_mock(*args, **kwargs):
-        for item in [main, child, other]:
-            yield item
+    usage = await _usage_manager(main, child, planner, other).fetch_chat_usage("chat1", "user1")
 
-    mock_checkpointer = MagicMock()
-    mock_checkpointer.alist = alist_mock
-    manager = MemoryManager()
-    manager.checkpointer = mock_checkpointer
-
-    usage = await manager._aggregate_token_usage("chat1", "user1")
-
-    assert usage["totalTokens"] == 120 + 10 + 50 + 230
-    assert usage["inputTokens"] == 100 + 8 + 40 + 200
-    assert usage["outputTokens"] == 20 + 2 + 10 + 30
-    assert usage["cacheReadTokens"] == 10 + 0 + 0 + 15
+    assert usage["chatId"] == "chat1"
+    assert usage["totalTokens"] == 120 + 10 + 50 + 7 + 230 + 40
+    assert usage["inputTokens"] == 100 + 10 + 50 + 7 + 230 + 40
+    assert usage["outputTokens"] == 20
+    assert usage["cacheReadTokens"] == 10 + 15
     assert usage["cacheCreationTokens"] == 5
+    assert usage["llmCalls"] == 6
+    assert "cost" not in usage
 
-    by_agent = usage["byAgent"]
-    assert set(by_agent) == {"supervisor", "ui-tools", "summarization", "kubernetes"}
-    assert by_agent["supervisor"]["totalTokens"] == 120
-    assert by_agent["ui-tools"]["totalTokens"] == 10
-    assert by_agent["summarization"]["totalTokens"] == 50
-    assert by_agent["kubernetes"]["totalTokens"] == 230
-    assert by_agent["kubernetes"]["cacheReadTokens"] == 15
+    by_agent = {k: v["totalTokens"] for k, v in usage["byAgent"].items()}
+    assert by_agent == {"supervisor": 180, "rancher": 7, "kubernetes": 230, "fleet": 40}
+
+    by_source = {k: v["totalTokens"] for k, v in usage["bySource"].items()}
+    assert by_source == {"agent": 397, "ui-tools": 10, "summarization": 50}
+
+    assert set(usage["byModel"]) == {"bedrock", "openai"}
+    assert usage["byModel"]["bedrock"]["claude"]["totalTokens"] == 417
+    assert usage["byModel"]["openai"]["gpt-4o"]["totalTokens"] == 40
 
 
 @pytest.mark.asyncio
-async def test_aggregate_token_usage_dedups_to_latest_checkpoint_per_thread():
+async def test_fetch_chat_usage_groups_legacy_entries_under_unknown():
+    """Entries recorded before provider/model were stored fall into 'unknown'."""
+    legacy = {"source": "agent", "input_tokens": 3, "output_tokens": 0, "total_tokens": 3}
+    usage = await _usage_manager(_usage_checkpoint("chat1", {"m1": legacy})).fetch_chat_usage("chat1", "user1")
+
+    assert usage["byModel"] == {"unknown": {"unknown": usage["byAgent"]["supervisor"]}}
+
+
+@pytest.mark.asyncio
+async def test_fetch_chat_usage_reads_latest_checkpoint_per_thread():
     """alist yields multiple checkpoints per thread; only the first (latest) counts."""
-    latest = _usage_checkpoint("chat1", {
-        "m1": {"source": "agent", "input_tokens": 10, "output_tokens": 0,
-               "total_tokens": 10, "cache_read": 0, "cache_creation": 0},
-    })
-    older = _usage_checkpoint("chat1", {
-        "m0": {"source": "agent", "input_tokens": 5, "output_tokens": 0,
-               "total_tokens": 5, "cache_read": 0, "cache_creation": 0},
-    })
+    latest = _usage_checkpoint("chat1", {"m1": _entry(10), "m0": _entry(5)})
+    older = _usage_checkpoint("chat1", {"m0": _entry(5)})
 
-    async def alist_mock(*args, **kwargs):
-        for item in [latest, older]:  # newest first
-            yield item
+    usage = await _usage_manager(latest, older).fetch_chat_usage("chat1", "user1")
 
-    mock_checkpointer = MagicMock()
-    mock_checkpointer.alist = alist_mock
-    manager = MemoryManager()
-    manager.checkpointer = mock_checkpointer
+    assert usage["totalTokens"] == 15
+    assert usage["llmCalls"] == 2
 
-    usage = await manager._aggregate_token_usage("chat1", "user1")
 
-    assert usage["totalTokens"] == 10
-    assert usage["byAgent"]["supervisor"]["totalTokens"] == 10
+@pytest.mark.asyncio
+async def test_fetch_chat_usage_empty():
+    usage = await _usage_manager().fetch_chat_usage("chat1", "user1")
+
+    assert usage["totalTokens"] == 0
+    assert usage["llmCalls"] == 0
+    assert usage["byAgent"] == {} and usage["bySource"] == {} and usage["byModel"] == {}
+
+
+@pytest.mark.asyncio
+async def test_record_chat_usage_is_aggregated_with_the_chat():
+    """Usage of out-of-graph calls is stored in usage threads that belong to the chat."""
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {"DB_ENABLED": "false"}):
+        manager = MemoryManager()
+        await manager.initialize()
+
+    await manager.record_chat_usage("chat1", "user1", {"s1": _entry(12, source="ui-tools")})
+    await manager.record_chat_usage("chat1", "user1", {"s2": _entry(8, source="ui-tools")})
+    await manager.record_chat_usage("chat1", "user1", {"s1": _entry(12, source="ui-tools")})  # same key
+    await manager.record_chat_usage("chat2", "other", {"s3": _entry(99, source="ui-tools")})
+
+    usage = await manager.fetch_chat_usage("chat1", "user1")
+    assert usage["totalTokens"] == 20
+    assert usage["llmCalls"] == 2
+    assert set(usage["bySource"]) == {"ui-tools"}
+    assert set(usage["byAgent"]) == {"supervisor"}
+
+    # Usage threads are not chats, and are deleted with their chat.
+    assert await manager.fetch_chats("user1") == []
+    manager._is_empty_chat = MagicMock(return_value=False)
+    manager.get_checkpointer().aget_tuple = AsyncMock(return_value=MagicMock(metadata={"user_id": "user1"}))
+    await manager.delete_chat("chat1", "user1")
+    assert (await manager.fetch_chat_usage("chat1", "user1"))["llmCalls"] == 0
 
 
 @pytest.mark.asyncio

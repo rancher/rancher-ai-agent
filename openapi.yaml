@@ -266,10 +266,52 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /chats/{chat_id}/usage:
+    get:
+      summary: Get the token usage of a chat
+      description: Tokens consumed by a chat, including the child agents it delegated to, broken down by agent, source and provider/model.
+      operationId: get_chat_usage
+      tags:
+        - Usage
+      parameters:
+        - name: chat_id
+          in: path
+          description: The unique identifier of the chat
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: ad924baf-24d7-49a5-84ae-bba3a58218a6
+      responses:
+        '200':
+          description: Token usage of the chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatUsage'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Chat not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /complete/ui-tools:
     post:
       summary: Select appropriate UI tools based user input
-      description: Uses the LLM to select appropriate UI tools based on the provided context and prompt
+      description: Uses the LLM to select appropriate UI tools based on the provided context and prompt. The tokens spent are recorded on the chat given by chatId.
       operationId: complete_ui_tools
       tags:
         - UI Tools
@@ -307,6 +349,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '422':
+          description: chatId is missing, null or empty
         '500':
           description: Internal server error
           content:
@@ -844,6 +888,74 @@ components:
       example:
         message: userId not found
 
+    UsageTotals:
+      type: object
+      description: Token totals of a set of LLM calls
+      properties:
+        inputTokens:
+          type: integer
+        outputTokens:
+          type: integer
+        totalTokens:
+          type: integer
+        cacheReadTokens:
+          type: integer
+        cacheCreationTokens:
+          type: integer
+        llmCalls:
+          type: integer
+          description: Number of LLM calls
+      required: [inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens, llmCalls]
+
+    UsageBreakdown:
+      allOf:
+        - $ref: '#/components/schemas/UsageTotals'
+        - type: object
+          properties:
+            byAgent:
+              type: object
+              description: Usage per agent (the orchestrator is reported as 'supervisor')
+              additionalProperties:
+                $ref: '#/components/schemas/UsageTotals'
+            bySource:
+              type: object
+              description: Usage per source (agent, ui-tools, summarization, planner)
+              additionalProperties:
+                $ref: '#/components/schemas/UsageTotals'
+            byModel:
+              type: object
+              description: Usage per LLM provider (ACTIVE_LLM, or 'unknown'), then per model
+              additionalProperties:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/UsageTotals'
+          required: [byAgent, bySource, byModel]
+
+    ChatUsage:
+      allOf:
+        - type: object
+          properties:
+            chatId:
+              type: string
+              format: uuid
+          required: [chatId]
+        - $ref: '#/components/schemas/UsageBreakdown'
+      example:
+        chatId: ad924baf-24d7-49a5-84ae-bba3a58218a6
+        inputTokens: 3201
+        outputTokens: 80
+        totalTokens: 3281
+        cacheReadTokens: 0
+        cacheCreationTokens: 0
+        llmCalls: 1
+        byAgent:
+          supervisor: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+        bySource:
+          planner: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+        byModel:
+          bedrock:
+            eu.anthropic.claude-opus-4-8: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+
     UIToolsConfig:
       type: object
       description: Configuration for UI tools selection
@@ -877,16 +989,22 @@ components:
           description: Context information for tool selection
           items:
             type: object
+        chatId:
+          type: string
+          minLength: 1
+          description: ID of the caller's chat the call is made for; the tokens spent are recorded on it
       required:
         - prompt
         - tools
         - context
+        - chatId
       example:
         prompt: "Select the most appropriate tools for this context"
         tools:
           name: "default_tools"
           tools: null
         context: [{"key": "value"}]
+        chatId: ad924baf-24d7-49a5-84ae-bba3a58218a6
 
     SettingsUpdate:
       type: object
@@ -987,3 +1105,5 @@ tags:
     description: LLM and agent configuration management
   - name: OAuth2
     description: OAuth2 authentication and token management
+  - name: Usage
+    description: Token consumption of the LLM calls

@@ -82,13 +82,14 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
         return ChatGoogleGenerativeAI(model=model)
     if activeLlm == "openai":
         if llm_mock_enabled:
-            return ChatOpenAI(model=model, base_url=llm_mock_url)
+            return ChatOpenAI(model=model, base_url=llm_mock_url, stream_usage=True)
         
         openai_url = os.environ.get("OPENAI_URL")
         ca_kwargs = _get_openai_ca_kwargs()
+        # langchain-openai only defaults stream_usage on with no custom base URL, proxy or HTTP client.
         if openai_url:
-            return ChatOpenAI(model=model, base_url=openai_url, **ca_kwargs)
-        return ChatOpenAI(model=model, **ca_kwargs)
+            return ChatOpenAI(model=model, base_url=openai_url, stream_usage=True, **ca_kwargs)
+        return ChatOpenAI(model=model, stream_usage=True, **ca_kwargs)
     if activeLlm == "bedrock":
         if llm_mock_enabled:
             os.environ["AWS_ENDPOINT_URL"] = llm_mock_url
@@ -100,7 +101,7 @@ def get_llm(model_override: str | None = None) -> BaseChatModel:
         generic_openai_url = os.environ.get("GENERIC_OPENAI_URL")
         generic_openai_api_key = os.environ.get("GENERIC_OPENAI_API_KEY")
 
-        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key)
+        return ChatOpenAI(model=model, base_url=generic_openai_url, api_key=generic_openai_api_key, stream_usage=True)
 
     raise ValueError(f"Unsupported LLM provider: {activeLlm}")
 

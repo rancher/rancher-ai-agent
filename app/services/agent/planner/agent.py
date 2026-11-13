@@ -8,6 +8,7 @@ agent notifying when it has finished. Once every subtask is completed, a reducer
 node synthesizes the individual results into a single final answer for the user.
 """
 
+import functools
 import json
 import logging
 import os
@@ -17,7 +18,6 @@ from datetime import datetime
 from typing import Annotated, Literal, TypedDict, cast
 from uuid import uuid4
 from pydantic import BaseModel, Field, ValidationError
-from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -28,7 +28,13 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
 from ..supervisor import ChildAgent, _AgentCallCounter
-from ..middleware import _dispatch_ui_tools_event
+from ..middleware import (
+    _dispatch_ui_tools_event,
+    UsageTrackingSummarizationMiddleware,
+    collect_usage,
+    merge_usage,
+    record_usage,
+)
 from .prompts import (
     CANCEL_PLAN_REQUEST,
     PLAN_CANCELLED_PREFIX,
@@ -101,6 +107,21 @@ class PlannerState(TypedDict):
     feedback: list[str]
     retry: bool
     awaiting_input: bool
+    token_usage: Annotated[dict, merge_usage]
+
+
+def _tracking_usage(node):
+    """Add the usage recorded (via ``record_usage``) while the node runs to its state update."""
+
+    @functools.wraps(node)
+    async def wrapper(state):
+        with collect_usage() as usage:
+            update = await node(state)
+        if usage:
+            update = {**(update or {}), "token_usage": usage}
+        return update
+
+    return wrapper
 
 
 def create_planner_agent(
@@ -126,10 +147,11 @@ def create_planner_agent(
 
     # Summarizes the planner's own ``messages`` channel, which holds every turn (direct
     # handoffs, reduced answers, failures and cancellations), not only reducer runs.
-    summarizer = SummarizationMiddleware(
+    summarizer = UsageTrackingSummarizationMiddleware(
         model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)
     )
 
+    @_tracking_usage
     async def plan_node(state: PlannerState) -> dict:
         """Generate the list of subtasks from the user's request.
 
@@ -277,6 +299,7 @@ def create_planner_agent(
         logging.debug("Planner regenerating plan from user feedback.")
         return {"feedback": [*(state.get("feedback") or []), response]}
 
+    @_tracking_usage
     async def execute_node(state: PlannerState) -> dict:
         """Run the next pending subtask in its assigned child agent."""
         subtasks = state["subtasks"]
@@ -323,6 +346,7 @@ def create_planner_agent(
         dispatch_custom_event("planner-message-start", "<message>")
         return {"subtasks": subtasks, "results": results, "awaiting_input": False}
 
+    @_tracking_usage
     async def reduce_node(state: PlannerState) -> dict:
         """Combine all subtask results into a single final answer."""
         request = _last_user_request(state)
@@ -338,6 +362,7 @@ def create_planner_agent(
         ])
         # One message (one id) in both channels so ui_tools_node can update it in each.
         reply.id = reply.id or str(uuid4())
+        record_usage(reply, "planner")
         reply.additional_kwargs = {"created_at": datetime.now().isoformat()}
 
         return {
@@ -360,15 +385,16 @@ def create_planner_agent(
             return {}
 
         config = get_config()
-        ui_tools_list = await _dispatch_ui_tools_event(llm, state, config)
+        ui_tools_list, usage = await _dispatch_ui_tools_event(llm, state, config)
+        update = {"token_usage": usage} if usage else {}
         if not ui_tools_list or not config.get("configurable", {}).get("request_id"):
-            return {}
+            return update
 
         # Same id as the stored reply, so add_messages replaces it in both channels.
         updated = last_message.model_copy(
             update={"additional_kwargs": {**last_message.additional_kwargs, "ui_tools": ui_tools_list}}
         )
-        return {"messages": [updated], "messages_history": [updated]}
+        return {**update, "messages": [updated], "messages_history": [updated]}
 
     async def summarize_node(state: PlannerState) -> dict:
         """Summarize older planner messages once the conversation grows too long.
@@ -510,6 +536,7 @@ async def _create_plan(
         # include_raw=True returns {"raw": AIMessage, "parsed": Plan|None,
         # "parsing_error": Exception|None}.
         response = cast(dict, response)
+        record_usage(response.get("raw"), "planner")
         candidate = response.get("parsed")
         if isinstance(candidate, Plan) and (candidate.subtasks or candidate.reply or candidate.cancel):
             plan = candidate
@@ -533,6 +560,7 @@ async def _handle_failure_actions(
     """Handle quick actions like requesting details or cancelling when a plan fails."""
     if request.lower() == REQUEST_FAILURE_DETAILS.lower():
         response = await llm.ainvoke(input=f"Requesting more details about the failure: {previous_plan_failure_message}")
+        record_usage(response, "planner")
         return {
             "subtasks": [],
             "results": [],

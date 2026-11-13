@@ -17,7 +17,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables.config import RunnableConfig, ensure_config
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import Any, CompiledStateGraph, Checkpointer
-from langchain.agents.middleware import SummarizationMiddleware
 from langchain.messages import  HumanMessage, ToolMessage
 import langgraph.types
 from langgraph.errors import GraphBubbleUp
@@ -29,6 +28,7 @@ from .system_prompts import SUPERVISOR_PROMPT
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
     MessagesHistoryMiddleware,
+    UsageTrackingSummarizationMiddleware,
     cancel_human_validation_middleware,
     inject_additional_kwargs_middleware,
     ui_tools_middleware
@@ -148,7 +148,7 @@ def create_supervisor_agent(
             cancel_human_validation_middleware(),
             inject_additional_kwargs_middleware(),
             ui_tools_middleware(llm),
-            SummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
+            UsageTrackingSummarizationMiddleware(model=llm, trigger=[("messages", 30), ("tokens", 30000)], keep=("messages", 15)),
         ],
     )
 

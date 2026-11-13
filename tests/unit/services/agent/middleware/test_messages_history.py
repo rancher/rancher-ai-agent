@@ -11,6 +11,20 @@ from app.services.agent.middleware.messages_history import (
     _select_history_messages,
     _append_new_to_history,
 )
+from app.services.agent.middleware.token_usage import (
+    merge_usage,
+    usage_entry,
+    usage_entry_from_metadata,
+    usage_entry_from_response,
+)
+
+
+_USAGE = {
+    "input_tokens": 100,
+    "output_tokens": 20,
+    "total_tokens": 120,
+    "input_token_details": {"cache_read": 30, "cache_creation": 10},
+}
 
 
 def test_select_history_keeps_human_and_ai_messages():
@@ -151,6 +165,147 @@ def test_messages_history_after_model_returns_none_when_nothing_new():
     result = middleware.after_model(state, MagicMock())
 
     assert result is None
+
+
+def test_usage_entry_from_metadata_maps_fields(monkeypatch):
+    """Verify usage_metadata (incl. cache details) maps to a token_usage entry."""
+    monkeypatch.setenv("ACTIVE_LLM", "openai")
+    entry = usage_entry_from_metadata(_USAGE, "agent", "gpt-4o")
+
+    assert entry == {
+        "source": "agent",
+        "agent": None,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120,
+        "cache_read": 30,
+        "cache_creation": 10,
+    }
+
+
+def test_usage_entry_from_metadata_returns_none_when_empty():
+    assert usage_entry_from_metadata(None, "agent") is None
+    assert usage_entry_from_metadata({}, "ui-tools") is None
+
+
+def test_usage_entry_from_response_prefers_usage_metadata():
+    msg = AIMessage(content="x", id="m1", usage_metadata=_USAGE)
+    assert usage_entry_from_response(msg, "summarization")["total_tokens"] == 120
+
+
+def test_usage_entry_from_response_falls_back_to_openai_style_metadata():
+    """Non-streamed calls may only report counts in response_metadata.token_usage."""
+    msg = AIMessage(
+        content="x", id="m1",
+        response_metadata={"token_usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}},
+    )
+    entry = usage_entry_from_response(msg, "summarization")
+    assert entry["source"] == "summarization"
+    assert entry["input_tokens"] == 30
+    assert entry["output_tokens"] == 5
+    assert entry["total_tokens"] == 35
+    assert entry["cache_read"] == 0
+    assert entry["cache_creation"] == 0
+
+
+def test_usage_entry_from_response_falls_back_to_anthropic_style_usage():
+    msg = AIMessage(
+        content="x", id="m1",
+        response_metadata={"usage": {"input_tokens": 12, "output_tokens": 8}},
+    )
+    entry = usage_entry_from_response(msg, "summarization")
+    assert entry["input_tokens"] == 12
+    assert entry["output_tokens"] == 8
+    assert entry["total_tokens"] == 20  # derived when not provided
+
+
+def test_usage_entry_from_response_returns_none_when_no_usage_anywhere():
+    msg = AIMessage(content="x", id="m1")
+    assert usage_entry_from_response(msg, "summarization") is None
+
+
+def test_merge_usage_merges_by_key():
+    left = {"a": {"total_tokens": 1}}
+    right = {"b": {"total_tokens": 2}}
+
+    assert merge_usage(left, right) == {"a": {"total_tokens": 1}, "b": {"total_tokens": 2}}
+    # Right wins on key collision (idempotent re-recording).
+    assert merge_usage({"a": {"total_tokens": 1}}, {"a": {"total_tokens": 9}}) == {"a": {"total_tokens": 9}}
+    assert merge_usage(None, None) == {}
+
+
+def test_after_model_merges_with_existing_token_usage():
+    """Verify after_model returns the full merged dict (channel is LastValue)."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(content="response", id="m2", usage_metadata=_USAGE)
+    existing = {"m1": {"source": "agent", "total_tokens": 5}}
+    state = {"messages": [ai_msg], "messages_history": [], "token_usage": existing}
+
+    result = middleware.after_model(state, MagicMock())
+
+    assert set(result["token_usage"]) == {"m1", "m2"}
+    assert result["token_usage"]["m1"]["total_tokens"] == 5
+    assert result["token_usage"]["m2"]["total_tokens"] == 120
+
+
+def test_after_model_captures_agent_token_usage():
+    """Verify after_model records the last AIMessage's usage tagged 'agent'."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(content="response", id="m1", usage_metadata=_USAGE)
+    state = {"messages": [ai_msg], "messages_history": []}
+
+    result = middleware.after_model(state, MagicMock())
+
+    assert set(result["token_usage"]) == {"m1"}
+    assert result["token_usage"]["m1"]["source"] == "agent"
+    assert result["token_usage"]["m1"]["total_tokens"] == 120
+    assert result["token_usage"]["m1"]["cache_read"] == 30
+
+
+def test_after_model_skips_summarization_message_usage():
+    """Verify summarization-injected messages are not counted as agent usage."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(
+        content="summary",
+        id="m1",
+        usage_metadata=_USAGE,
+        additional_kwargs={"lc_source": "summarization"},
+    )
+    state = {"messages": [ai_msg], "messages_history": []}
+
+    result = middleware.after_model(state, MagicMock())
+
+    # No history append (excluded) and no token_usage capture.
+    assert result is None
+
+
+def test_after_model_falls_back_to_response_metadata_usage():
+    """Agent calls whose provider only fills response_metadata are still recorded."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(
+        content="response", id="m1",
+        response_metadata={"token_usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}},
+    )
+    state = {"messages": [ai_msg], "messages_history": []}
+
+    result = middleware.after_model(state, MagicMock())
+
+    assert result["token_usage"]["m1"]["source"] == "agent"
+    assert result["token_usage"]["m1"]["total_tokens"] == 35
+
+
+def test_after_model_no_token_usage_without_metadata():
+    """Verify AIMessages without usage_metadata produce no token_usage key."""
+    middleware = MessagesHistoryMiddleware()
+    ai_msg = AIMessage(content="response", id="m1")
+    state = {"messages": [ai_msg], "messages_history": []}
+
+    result = middleware.after_model(state, MagicMock())
+
+    assert "token_usage" not in result
+    assert len(result["messages_history"]) == 1
 
 
 def test_messages_history_after_agent_updates_existing():

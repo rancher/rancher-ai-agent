@@ -1,11 +1,12 @@
 import logging
 from fastapi import APIRouter, HTTPException, Request, status, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from langchain_core.language_models.llms import BaseLanguageModel
 
 from ..services.auth import get_user_id_from_token
 from ..dependencies import get_llm
+from ..services.agent.middleware.token_usage import usage_update_from_response
 from ..services.ui_tools.selector import create_ui_tools_selector
 
 router = APIRouter(prefix="/v1/api/complete", tags=["llm"])
@@ -25,6 +26,9 @@ class UIToolsRequest(LLMRequest):
     """Request model for UI tools selection."""
     tools: UIToolsConfig
     context: list
+    # The chat the call is made for: its token usage is recorded on it. The chat may not be
+    # saved yet; usage is stored under the caller's user id, so it never counts for others.
+    chat_id: str = Field(alias="chatId", min_length=1)
 
 
 @router.post("/ui-tools")
@@ -69,6 +73,11 @@ async def complete_ui_tools(
                 context=ui_tools_request.context,
             )
             logging.debug(f"Selected {len(ui_tools_list)} UI tool(s) for context: {ui_tools_request.context}")
+
+            if usage := usage_update_from_response(selector.last_response, "ui-tools"):
+                await request.app.memory_manager.record_chat_usage(
+                    chat_id=ui_tools_request.chat_id, user_id=user_id, usage=usage
+                )
         else:
             logging.debug(f"No UI tools available for tools config: {ui_tools_config}")
 

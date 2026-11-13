@@ -1,6 +1,5 @@
 from typing import Annotated, Any, NotRequired
 
-from langchain.agents.middleware import AgentState
 from langchain.agents.middleware.types import AgentMiddleware, OmitFromSchema
 from langchain.messages import AIMessage, ToolMessage
 from langchain_core.messages import AnyMessage, HumanMessage
@@ -8,6 +7,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import override
 
 from ....constants import INTERRUPT_CANCEL_REPLY, STOP_CONTEXT_REPLY
+from .token_usage import _TokenUsageState, merge_usage, usage_entry_from_response
 
 
 def _select_history_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
@@ -69,7 +69,7 @@ def _append_new_to_history(
     return updated if changed else None
 
 
-class _MessagesHistoryState(AgentState):
+class _MessagesHistoryState(_TokenUsageState):
     """Extended state that keeps a full, unsummarized copy of all messages."""
     messages_history: NotRequired[Annotated[list[AnyMessage], add_messages, OmitFromSchema()]]
 
@@ -88,7 +88,26 @@ class MessagesHistoryMiddleware(AgentMiddleware):
     def after_model(self, state, runtime) -> dict[str, Any] | None:
         candidates = _select_history_messages(state.get("messages", []))
         updated = _append_new_to_history(candidates, state.get("messages_history", []))
-        return {"messages_history": updated} if updated is not None else None
+
+        result: dict[str, Any] = {}
+        if updated is not None:
+            result["messages_history"] = updated
+
+        # Capture token usage from the model call that just produced the last
+        # AIMessage. Recording here (before summarization can prune it) keeps the
+        # count accurate even for tool-call turns that never enter messages_history.
+        messages = state.get("messages", [])
+        last = messages[-1] if messages else None
+        if (
+            isinstance(last, AIMessage)
+            and getattr(last, "id", None)
+            and last.additional_kwargs.get("lc_source") != "summarization"
+        ):
+            entry = usage_entry_from_response(last, "agent")
+            if entry:
+                result["token_usage"] = merge_usage(state.get("token_usage"), {last.id: entry})
+
+        return result or None
 
     @override
     def after_agent(self, state, runtime) -> dict[str, Any] | None:

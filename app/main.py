@@ -10,6 +10,7 @@ from .services.memory import create_memory_manager
 from .services.llm import close_openai_ca_clients
 from .routers import agent, configuration, chat, llm, websocket, ui, oauth2
 from .controllers.ai_agent_config import create_kopf_manager
+from .controllers import ai_task  # noqa: F401  (registers the AITask kopf handlers)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 

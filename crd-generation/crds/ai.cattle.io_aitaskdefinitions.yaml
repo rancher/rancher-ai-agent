@@ -1,0 +1,211 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: aitaskdefinitions.ai.cattle.io
+spec:
+  group: ai.cattle.io
+  names:
+    categories:
+    - ai
+    kind: AITaskDefinition
+    listKind: AITaskDefinitionList
+    plural: aitaskdefinitions
+    shortNames:
+    - aitd
+    singular: aitaskdefinition
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.displayName
+      name: Display Name
+      type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspend
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.nextRunTime
+      name: Next Run
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AITaskDefinition is the Schema for the aitaskdefinitions API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AITaskDefinitionSpec defines a recurring (or manual-only)
+              task for Liz.
+            properties:
+              agents:
+                description: Agents lists the AIAgentConfig names the task may use.
+                  Empty means every eligible agent.
+                items:
+                  maxLength: 253
+                  minLength: 1
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: set
+              credentialsRef:
+                description: |-
+                  CredentialsRef references the Secret (same namespace) holding the Rancher token
+                  of the service account the task runs as.
+                properties:
+                  key:
+                    default: token
+                    description: Key inside the Secret. Defaults to "token".
+                    maxLength: 253
+                    type: string
+                  name:
+                    description: Name is the name of the Secret.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              displayName:
+                description: DisplayName is the human readable name of the task.
+                maxLength: 128
+                minLength: 1
+                type: string
+              prompt:
+                description: Prompt is the plain-language description of what Liz
+                  must do.
+                maxLength: 8192
+                minLength: 1
+                type: string
+              schedule:
+                description: |-
+                  Schedule is a cron expression (5 fields) or macro (@hourly, @daily, @weekly, @monthly).
+                  Empty means "manual only". CRON_TZ / TZ prefixes are not allowed; use TimeZone.
+                maxLength: 256
+                type: string
+                x-kubernetes-validations:
+                - message: CRON_TZ / TZ prefixes are not allowed in schedule; use
+                    timeZone
+                  rule: '!self.contains(''TZ='')'
+              suspend:
+                description: Suspend stops new scheduled AITasks from being created.
+                type: boolean
+              timeZone:
+                description: TimeZone is an IANA time zone name, e.g. "Europe/Madrid".
+                  Defaults to UTC.
+                maxLength: 64
+                minLength: 1
+                type: string
+            required:
+            - credentialsRef
+            - displayName
+            - prompt
+            type: object
+          status:
+            description: AITaskDefinitionStatus defines the observed state of AITaskDefinition.
+            properties:
+              conditions:
+                description: 'Conditions: ScheduleValid (scheduler), Ready (aggregate).'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastScheduleTime:
+                description: LastScheduleTime is the last scheduled time that was
+                  handled. Owned by the scheduler.
+                format: date-time
+                type: string
+              nextRunTime:
+                description: NextRunTime is the next scheduled time.
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: AITaskDefinition name must be no more than 52 characters
+          rule: size(self.metadata.name) <= 52
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -84,6 +84,26 @@ async def build_agent(llm: BaseLanguageModel, websocket: WebSocket) -> tuple[Com
 
     logging.info(f"Loaded {len(agent_configs)} accessible agent configuration(s)")
 
+    return await build_agent_from_configs(llm, agent_configs, checkpointer, websocket)
+
+
+async def build_agent_from_configs(
+    llm: BaseLanguageModel,
+    agent_configs: list[AgentConfig],
+    checkpointer: Checkpointer,
+    websocket: WebSocket | None = None,
+) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
+    """
+    Build a single agent (one config) or a supervisor (several configs) from
+    already-resolved agent configs. The websocket is optional so this can be used
+    headless (e.g. by the AITask controller).
+
+    Raises:
+        NoAgentAvailableError: If no agent could be created.
+    """
+    if not agent_configs:
+        raise NoAgentAvailableError("No agent configurations were provided.")
+
     if len(agent_configs) == 1:
         agent_cfg = agent_configs[0]
         tools = await _load_mcp_tools(agent_cfg, websocket)
@@ -120,7 +140,7 @@ async def _build_child_agents(
     llm: BaseLanguageModel,
     agent_configs: list[AgentConfig],
     checkpointer: Checkpointer,
-    websocket: WebSocket,
+    websocket: WebSocket | None,
 ) -> tuple[list[ChildAgent], list[dict]]:
     """
     Attempt to build a child agent for each config, collecting successes and failures.
@@ -181,7 +201,7 @@ async def reload_agent_tools(
     return create_child_agent(llm, tools, checkpointer, agent_cfg)
 
 
-async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
+async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket | None) -> list:
     """
     Connect to the MCP server for an agent config, load tools, filter by toolset,
     and update the CRD status accordingly.

@@ -15,7 +15,7 @@ dependencies = [
     "langchain-community==0.4.2",
     "langfuse==5.1.0",
     "langgraph==1.2.22",
-    "langgraph-checkpoint-postgres==3.2.0",
+    "langgraph-checkpoint-postgres==3.2.1",
     "mcp==2.3.0",
     "httpx2==2.12.0",
     "numpy==2.5.4",

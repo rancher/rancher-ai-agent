@@ -1,4 +1,5 @@
 import json
+import os
 
 CONTEXT_PARAMETERS_SUFFIX = (
     "\n\n  Use the following parameters to populate tool calls when appropriate. \n"
@@ -22,3 +23,11 @@ STOP_CONTEXT_REPLY = (
     "The user stopped this request before it completed. It was abandoned: "
     "do not resume or repeat it unless the user asks for it again."
 )
+
+# LangGraph store namespace holding AITask outcomes (keyed by AITask uid).
+AITASK_STORE_NAMESPACE = ("aitasks",)
+
+
+def agentic_tasks_enabled() -> bool:
+    """AITask support (controller and endpoints) is enabled with AGENTIC_TASK_ENABLED=true."""
+    return os.environ.get("AGENTIC_TASK_ENABLED", "false").lower() == "true"

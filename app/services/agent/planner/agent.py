@@ -27,6 +27,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph, Checkpointer
 
+from ....constants import CONTEXT_PARAMETERS_SUFFIX
 from ..supervisor import ChildAgent, _AgentCallCounter
 from ..middleware import _dispatch_ui_tools_event
 from .prompts import (
@@ -553,10 +554,13 @@ async def _handle_failure_actions(
 def _is_quick_action(request: str, action: str) -> bool:
     """Return True when the request is the given quick action picked by the user.
 
-    The websocket appends the UI context parameters after the prompt, so only the
-    beginning of the request is compared (case-insensitively).
+    The websocket appends the UI context parameters after the prompt, behind
+    ``CONTEXT_PARAMETERS_SUFFIX``. That suffix is stripped before comparing the request
+    to the action (case-insensitively), so free-form text that merely starts with the
+    action is not treated as a quick action.
     """
-    return request.strip().lower().startswith(action.lower())
+    prompt = request.split(CONTEXT_PARAMETERS_SUFFIX)[0]
+    return prompt.strip().lower() == action.strip().lower()
 
 
 def _retry_failed_subtasks(state: PlannerState) -> Plan | None:

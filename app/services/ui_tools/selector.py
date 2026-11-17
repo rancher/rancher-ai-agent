@@ -137,7 +137,10 @@ class UIToolsSelector:
         self.filtered_tools = filtered_tools
 
         self.max_tools = max_tools if max_tools > 0 else None
-        
+
+        # Response of the most recent select_tools() LLM call, read by callers to account for its tokens.
+        self.last_response: Any = None
+
         self._build_system_prompt(system_prompt)
     
     def _build_default_system_prompt(self) -> str:
@@ -279,7 +282,9 @@ If no tools are appropriate, do not invoke any tools."""
                 [system_msg, user_msg],
                 config={"tags": ["no-stream"]}
             )
-            
+
+            self.last_response = response
+
             # Extract tool calls
             ui_tool_calls = self._extract_tool_calls_from_response(response, self.filtered_tools)
             logging.debug(f"UI tool selection result: {len(ui_tool_calls)} UI tools selected before validation")

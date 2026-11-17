@@ -202,6 +202,49 @@ async def delete_chat(request: Request, chat_id: str) -> JSONResponse:
             content={"detail": "Internal server error"}
         )
 
+@router.get("/chats/{chat_id}/usage")
+async def get_chat_usage(request: Request, chat_id: str) -> JSONResponse:
+    """
+    Get the tokens consumed by a chat, including the child agents it delegated to.
+
+    Args:
+        chat_id: The ID of the thread.
+    Returns:
+        Token totals broken down by agent, source and model, and an HTTP status code.
+    """
+    user_id = None
+    try:
+        user_id = await get_user_id_from_token(request.cookies)
+
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+        chat = await request.app.memory_manager.fetch_chat(
+            chat_id=chat_id,
+            user_id=user_id
+        )
+        usage = await request.app.memory_manager.fetch_chat_usage(
+            chat_id=chat_id,
+            user_id=user_id
+        )
+        # A chat with no messages yet may already have usage, e.g. from /complete/ui-tools.
+        if not chat and not usage["llmCalls"]:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=usage
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching usage for chat_id {chat_id} and user_id {user_id}: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal server error"}
+        )
+
 @router.get("/chats/{chat_id}/messages")
 async def get_chat_messages(request: Request, chat_id: str) -> JSONResponse:
     """

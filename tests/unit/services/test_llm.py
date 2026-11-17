@@ -35,7 +35,7 @@ def test_get_llm_gemini(mock_chat_gemini):
 def test_get_llm_openai(mock_openai):
     with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_API_KEY": "fake-key"}, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4")
+        mock_openai.assert_called_once_with(model="gpt-4", stream_usage=True)
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.httpx')
@@ -52,6 +52,7 @@ def test_get_llm_openai_with_custom_ca(mock_openai, mock_get_ca, mock_ssl_ctx, m
         mock_openai.assert_called_once_with(
             model="gpt-4",
             base_url="https://openai.example.com",
+            stream_usage=True,
             http_client=mock_httpx.Client.return_value,
             http_async_client=mock_httpx.AsyncClient.return_value,
         )
@@ -63,7 +64,7 @@ def test_get_llm_openai_custom_ca_load_failure(mock_openai, mock_get_ca):
     with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "openai-ca"}, clear=True):
         llm = get_llm()
         mock_get_ca.assert_called_once_with("openai-ca", "ca.crt")
-        mock_openai.assert_called_once_with(model="gpt-4")
+        mock_openai.assert_called_once_with(model="gpt-4", stream_usage=True)
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.httpx')
@@ -79,7 +80,7 @@ def test_get_llm_openai_custom_ca_empty_key_defaults(mock_openai, mock_get_ca, m
 def test_get_llm_openai_custom_ca_empty_name_skipped(mock_openai):
     with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "openai", "OPENAI_CA_SECRET_NAME": "", "OPENAI_CA_SECRET_KEY": "ca.crt"}, clear=True):
         get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4")
+        mock_openai.assert_called_once_with(model="gpt-4", stream_usage=True)
 
 @patch('app.services.llm.httpx')
 @patch('app.services.agent.loader.ssl.create_default_context')
@@ -123,7 +124,7 @@ async def test_close_openai_ca_clients():
 def test_get_llm_generic_openai(mock_openai):
     with patch.dict(os.environ, {"GENERIC_OPENAI_MODEL": "gpt-4", "ACTIVE_LLM": "generic-openai", "GENERIC_OPENAI_URL": "https://api.example.com", "GENERIC_OPENAI_API_KEY": "fake-key"}, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key")
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="https://api.example.com", api_key="fake-key", stream_usage=True)
         assert llm == mock_openai.return_value
 
 def test_get_active_llm_not_configured():
@@ -195,7 +196,7 @@ def test_get_llm_openai_with_mock(mock_openai):
         "LLM_MOCK_URL": "http://mock-server:8000"
     }, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://mock-server:8000")
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://mock-server:8000", stream_usage=True)
         assert llm == mock_openai.return_value
 
 @patch('app.services.llm.ChatOpenAI')
@@ -208,7 +209,7 @@ def test_get_llm_openai_with_custom_url(mock_openai):
         "OPENAI_URL": "http://custom-openai:8000"
     }, clear=True):
         llm = get_llm()
-        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000")
+        mock_openai.assert_called_once_with(model="gpt-4", base_url="http://custom-openai:8000", stream_usage=True)
         assert llm == mock_openai.return_value
 
 
@@ -221,7 +222,7 @@ def test_get_llm_with_model_override(mock_openai):
         "OPENAI_API_KEY": "fake-key",
     }, clear=True):
         llm = get_llm(model_override="gpt-4o")
-        mock_openai.assert_called_once_with(model="gpt-4o")
+        mock_openai.assert_called_once_with(model="gpt-4o", stream_usage=True)
         assert llm == mock_openai.return_value
 
 
@@ -248,6 +249,6 @@ def test_get_llm_with_model_uses_get_llm(mock_openai):
         "OPENAI_API_KEY": "fake-key",
     }, clear=True):
         llm = get_llm_with_model("gpt-4o-mini")
-        mock_openai.assert_called_once_with(model="gpt-4o-mini")
+        mock_openai.assert_called_once_with(model="gpt-4o-mini", stream_usage=True)
         assert llm == mock_openai.return_value
 

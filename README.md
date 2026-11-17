@@ -129,6 +129,27 @@ The AI Assistant maintains persistent chat history with REST API endpoints for a
 
 See the [OpenAPI spec](openapi.yaml) for full API details.
 
+## Agent Access Control
+
+Users only see the agents they are allowed to access. This is enabled by default and can be turned off with the `aiAgent.rbac.enabled` chart value.
+
+The bundled `liz-user` GlobalRole gives access to all agents. To limit a user to specific agents, bind them to a GlobalRole that lists the allowed agents instead of `liz-user`. Copy the other rules from `liz-user` and replace the `aiagentconfigs` rule with:
+
+```yaml
+    - apiGroups:
+        - ai.cattle.io
+      resources:
+        - aiagentconfigs
+      verbs:
+        - get
+        - watch
+      resourceNames:
+        - rancher
+        - fleet
+```
+
+Access granted through user and group bindings is combined. Administrators see all agents.
+
 ## MCP Authentication Types
 
 The AI Agent supports multiple authentication methods for connecting to MCP servers. The authentication type is configured per agent via the `AIAgentConfig` CRD's `authenticationType` field.

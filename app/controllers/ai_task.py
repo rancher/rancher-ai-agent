@@ -26,8 +26,7 @@ from ..services.agent.factory import build_agent_from_configs
 from ..services.agent.system_prompts import AITASK_RESULT_VALUES
 from ..services.llm import LLMManager
 from ..services.memory import create_store
-
-AITASK_STORE_NAMESPACE = ("aitasks",)
+from ..constants import AITASK_STORE_NAMESPACE
 
 _FINISHED_PHASES = ("Succeeded", "Failed")
 _RESULT_PATTERN = re.compile(r"^\s*\**RESULT:\**\s*\**(" + "|".join(AITASK_RESULT_VALUES) + r")\b", re.IGNORECASE)

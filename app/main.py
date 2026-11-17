@@ -8,9 +8,9 @@ from fastapi.concurrency import asynccontextmanager
 from .services.agent.loader import ensure_default_ai_agent_config_crds
 from .services.memory import create_memory_manager
 from .services.llm import close_openai_ca_clients
-from .routers import agent, configuration, chat, llm, websocket, ui, oauth2, ai_task as ai_task_router
+from .routers import agent, configuration, chat, llm, websocket, ui, oauth2
 from .controllers.ai_agent_config import create_kopf_manager
-from .controllers import ai_task  # noqa: F401  (registers the AITask kopf handlers)
+from .constants import agentic_tasks_enabled
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -113,7 +113,13 @@ app.include_router(configuration.router)
 app.include_router(chat.router)
 app.include_router(llm.router)
 app.include_router(oauth2.router)
-app.include_router(ai_task_router.router)
+
+if agentic_tasks_enabled():
+    # Importing the controller registers the AITask kopf handlers.
+    from .controllers import ai_task  # noqa: F401
+    from .routers import ai_task as ai_task_router
+    app.include_router(ai_task_router.router)
+    logging.info("Agentic tasks enabled")
 
 if os.environ.get("ENABLE_TEST_UI", "").lower() == "true":
     app.include_router(ui.router)

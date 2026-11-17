@@ -71,6 +71,8 @@ llmMock:
   url: ""
 plan:
   enabled: false
+agenticTask:
+  enabled: false
 planApproval:
   enabled: false
 log:

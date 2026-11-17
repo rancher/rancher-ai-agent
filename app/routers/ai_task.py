@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from ..controllers.ai_task import AITASK_STORE_NAMESPACE
+from ..constants import AITASK_STORE_NAMESPACE
 from ..services.auth import get_user_id_from_token
 from ..services.agent.loader import _load_k8s_config
 

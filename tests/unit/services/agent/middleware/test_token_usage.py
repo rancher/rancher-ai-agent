@@ -49,7 +49,14 @@ def test_usage_update_from_response_keys_by_message_id():
 
 def test_usage_update_from_response_without_usage():
     assert usage_update_from_response(None, "planner") is None
-    assert usage_update_from_response(AIMessage(content="x", id="m1"), "planner") is None
+    update = usage_update_from_response(AIMessage(content="x", id="m1"), "planner")
+    assert update["m1"]["reported"] is False
+    assert update["m1"]["total_tokens"] == 0
+
+
+def test_reported_usage_has_no_reported_flag():
+    update = usage_update_from_response(AIMessage(content="x", id="m1", usage_metadata=_USAGE), "planner")
+    assert "reported" not in update["m1"]
 
 
 def test_record_usage_collects_only_inside_collect_usage():
@@ -59,10 +66,11 @@ def test_record_usage_collects_only_inside_collect_usage():
     with collect_usage() as collected:
         record_usage(msg, "planner")
         record_usage(msg, "planner")  # same id: recorded once
-        record_usage(AIMessage(content="y", id="m2"), "planner")  # no usage: skipped
+        record_usage(AIMessage(content="y", id="m2"), "planner")  # no usage: unreported
 
-    assert set(collected) == {"m1"}
+    assert set(collected) == {"m1", "m2"}
     assert collected["m1"]["total_tokens"] == 15
+    assert collected["m2"]["reported"] is False
 
 
 def test_fallback_reads_anthropic_cache_counters():

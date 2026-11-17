@@ -48,13 +48,14 @@ async def test_capture_llm_usage_records_calls_made_in_context():
 
 
 @pytest.mark.asyncio
-async def test_capture_llm_usage_ignores_calls_without_usage():
+async def test_capture_llm_usage_records_calls_without_usage_as_unreported():
     model = _fake_model(AIMessage(content="summary", id="sum-2"))
 
     with capture_llm_usage("summarization") as usage:
         await model.ainvoke("summarize")
 
-    assert usage == {}
+    assert usage["sum-2"]["reported"] is False
+    assert usage["sum-2"]["total_tokens"] == 0
 
 
 @pytest.mark.asyncio

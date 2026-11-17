@@ -164,9 +164,13 @@ def test_chat_usage_without_llm_usage_metadata():
 
     usage = client.get(f"/v1/api/chats/{chat_id}/usage").json()
 
-    assert usage["llmCalls"] == 0
+    assert usage["llmCalls"] == 3
+    assert usage["unreportedCalls"] == 3
     assert usage["totalTokens"] == 0
-    assert usage["byAgent"] == {}
+    assert {name: u["unreportedCalls"] for name, u in usage["byAgent"].items()} == {
+        "supervisor": 2,
+        MATH_AGENT_NAME: 1,
+    }
 
 
 def test_chat_usage_unknown_chat_returns_404():

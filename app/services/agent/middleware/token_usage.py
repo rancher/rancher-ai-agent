@@ -2,6 +2,8 @@
 
 Every LLM call is recorded as an entry in the ``token_usage`` state channel, keyed by
 the response message id so re-recording the same call (retries/resumes) is idempotent.
+Calls whose provider reports no usage are recorded too, with zero tokens and
+``"reported": False``, so they can be told apart from calls that were never made.
 """
 
 import os
@@ -90,13 +92,14 @@ def usage_entry(msg: AnyMessage, source: str) -> dict | None:
     return usage_entry_from_metadata(getattr(msg, "usage_metadata", None), source, _model_name(msg))
 
 
-def usage_entry_from_response(response: Any, source: str) -> dict | None:
+def usage_entry_from_response(response: Any, source: str) -> dict:
     """Build a ``token_usage`` entry from a model response, with fallbacks.
 
     Prefers the normalized ``usage_metadata``. When it is absent (some providers only
     populate it on streamed calls), falls back to the raw counts most providers put in
     ``response_metadata`` under ``token_usage`` / ``usage`` (OpenAI-style
     ``prompt_tokens``/``completion_tokens`` or Anthropic-style ``input_tokens``/``output_tokens``).
+    Without any usage, returns an entry with zero tokens and ``"reported": False``.
     """
     entry = usage_entry(response, source)
     if entry:
@@ -104,14 +107,11 @@ def usage_entry_from_response(response: Any, source: str) -> dict | None:
 
     meta = getattr(response, "response_metadata", None) or {}
     raw = meta.get("token_usage") or meta.get("usage") or {}
-    if not raw:
-        return None
-
     input_tokens = raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0
     output_tokens = raw.get("output_tokens", raw.get("completion_tokens", 0)) or 0
     total_tokens = raw.get("total_tokens", input_tokens + output_tokens) or 0
     if not (input_tokens or output_tokens or total_tokens):
-        return None
+        return {**_build_entry(source, _model_name(response), 0, 0, 0), "reported": False}
     # Anthropic-style cache counters, or OpenAI-style prompt_tokens_details.cached_tokens.
     cache_read = raw.get("cache_read_input_tokens") or (raw.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
     cache_creation = raw.get("cache_creation_input_tokens") or 0
@@ -121,11 +121,10 @@ def usage_entry_from_response(response: Any, source: str) -> dict | None:
 
 
 def usage_update_from_response(response: Any, source: str) -> dict | None:
-    """Return a ``{message_id: entry}`` update for a model response, or None without usage."""
-    entry = usage_entry_from_response(response, source) if response is not None else None
-    if not entry:
+    """Return a ``{message_id: entry}`` update for a model response, or None without a response."""
+    if response is None:
         return None
-    return {getattr(response, "id", None) or str(uuid.uuid4()): entry}
+    return {getattr(response, "id", None) or str(uuid.uuid4()): usage_entry_from_response(response, source)}
 
 
 class _TokenUsageState(AgentState):

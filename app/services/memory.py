@@ -36,6 +36,7 @@ ORCHESTRATOR_AGENT = "supervisor"
 def _empty_usage() -> dict:
     usage: dict = {field: 0 for field in _USAGE_FIELDS.values()}
     usage["llmCalls"] = 0
+    usage["unreportedCalls"] = 0
     return usage
 
 
@@ -43,6 +44,8 @@ def _add_usage(usage: dict, entry: dict) -> None:
     for field, api_field in _USAGE_FIELDS.items():
         usage[api_field] += entry.get(field, 0) or 0
     usage["llmCalls"] += 1
+    if entry.get("reported") is False:
+        usage["unreportedCalls"] += 1
 
 
 def _summarize_usage(records: list[tuple[str, dict]]) -> dict:

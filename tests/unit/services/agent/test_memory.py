@@ -233,6 +233,24 @@ async def test_fetch_chat_usage_groups_legacy_entries_under_unknown():
 
 
 @pytest.mark.asyncio
+async def test_fetch_chat_usage_counts_unreported_calls():
+    """Calls whose provider reported no usage count as calls, with zero tokens."""
+    main = _usage_checkpoint("chat1", {
+        "m1": _entry(10),
+        "m2": {**_entry(0), "reported": False},
+    })
+    child = _usage_checkpoint("chat1::child::k8s", {"c1": {**_entry(0), "reported": False}})
+
+    usage = await _usage_manager(main, child).fetch_chat_usage("chat1", "user1")
+
+    assert usage["llmCalls"] == 3
+    assert usage["unreportedCalls"] == 2
+    assert usage["totalTokens"] == 10
+    assert usage["byAgent"]["supervisor"]["unreportedCalls"] == 1
+    assert usage["byAgent"]["k8s"]["unreportedCalls"] == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_chat_usage_reads_latest_checkpoint_per_thread():
     """alist yields multiple checkpoints per thread; only the first (latest) counts."""
     latest = _usage_checkpoint("chat1", {"m1": _entry(10), "m0": _entry(5)})

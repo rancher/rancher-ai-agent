@@ -102,10 +102,10 @@ class MessagesHistoryMiddleware(AgentMiddleware):
             isinstance(last, AIMessage)
             and getattr(last, "id", None)
             and last.additional_kwargs.get("lc_source") != "summarization"
+            and last.id not in (state.get("token_usage") or {})
         ):
             entry = usage_entry_from_response(last, "agent")
-            if entry:
-                result["token_usage"] = merge_usage(state.get("token_usage"), {last.id: entry})
+            result["token_usage"] = merge_usage(state.get("token_usage"), {last.id: entry})
 
         return result or None
 

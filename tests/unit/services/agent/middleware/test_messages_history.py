@@ -160,7 +160,7 @@ def test_messages_history_after_model_returns_none_when_nothing_new():
     """Verify after_model returns None when history is already up to date."""
     middleware = MessagesHistoryMiddleware()
     ai_msg = AIMessage(content="response", id="m1")
-    state = {"messages": [ai_msg], "messages_history": [ai_msg]}
+    state = {"messages": [ai_msg], "messages_history": [ai_msg], "token_usage": {"m1": {"total_tokens": 5}}}
 
     result = middleware.after_model(state, MagicMock())
 
@@ -221,9 +221,13 @@ def test_usage_entry_from_response_falls_back_to_anthropic_style_usage():
     assert entry["total_tokens"] == 20  # derived when not provided
 
 
-def test_usage_entry_from_response_returns_none_when_no_usage_anywhere():
+def test_usage_entry_from_response_marks_missing_usage_as_unreported():
     msg = AIMessage(content="x", id="m1")
-    assert usage_entry_from_response(msg, "summarization") is None
+    entry = usage_entry_from_response(msg, "summarization")
+
+    assert entry["reported"] is False
+    assert entry["total_tokens"] == 0
+    assert entry["source"] == "summarization"
 
 
 def test_merge_usage_merges_by_key():
@@ -296,15 +300,15 @@ def test_after_model_falls_back_to_response_metadata_usage():
     assert result["token_usage"]["m1"]["total_tokens"] == 35
 
 
-def test_after_model_no_token_usage_without_metadata():
-    """Verify AIMessages without usage_metadata produce no token_usage key."""
+def test_after_model_records_unreported_call_without_metadata():
+    """AIMessages without any usage are still counted, as unreported calls."""
     middleware = MessagesHistoryMiddleware()
     ai_msg = AIMessage(content="response", id="m1")
     state = {"messages": [ai_msg], "messages_history": []}
 
     result = middleware.after_model(state, MagicMock())
 
-    assert "token_usage" not in result
+    assert result["token_usage"]["m1"]["reported"] is False
     assert len(result["messages_history"]) == 1
 
 

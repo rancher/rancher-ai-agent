@@ -904,8 +904,11 @@ components:
           type: integer
         llmCalls:
           type: integer
-          description: Number of LLM calls
-      required: [inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens, llmCalls]
+          description: Number of LLM calls, including those whose provider reported no usage
+        unreportedCalls:
+          type: integer
+          description: Number of LLM calls whose provider reported no token usage (counted with zero tokens)
+      required: [inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens, llmCalls, unreportedCalls]
 
     UsageBreakdown:
       allOf:
@@ -948,13 +951,14 @@ components:
         cacheReadTokens: 0
         cacheCreationTokens: 0
         llmCalls: 1
+        unreportedCalls: 0
         byAgent:
-          supervisor: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+          supervisor: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1, unreportedCalls: 0}
         bySource:
-          planner: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+          planner: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1, unreportedCalls: 0}
         byModel:
           bedrock:
-            eu.anthropic.claude-opus-4-8: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1}
+            eu.anthropic.claude-opus-4-8: {inputTokens: 3201, outputTokens: 80, totalTokens: 3281, cacheReadTokens: 0, cacheCreationTokens: 0, llmCalls: 1, unreportedCalls: 0}
 
     UIToolsConfig:
       type: object

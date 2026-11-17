@@ -7,10 +7,32 @@ from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple
+from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 from langchain_core.runnables.config import RunnableConfig
 
 from ..services.agent.loader import DEFAULT_AGENT_NAME
 from ..constants import CONTEXT_PARAMETERS_SUFFIX
+
+# Shared by the FastAPI and kopf event loops when no database is configured.
+# InMemoryStore is not bound to an event loop, so a single instance can be used by both.
+_IN_MEMORY_STORE = InMemoryStore()
+
+
+async def create_store(pool: AsyncConnectionPool | None) -> BaseStore:
+    """
+    Return a LangGraph store: a Postgres store on *pool* when given (tables are created
+    if needed), otherwise the process-wide in-memory store.
+
+    The Postgres pool must belong to the event loop the store is used from.
+    """
+    if pool is None:
+        return _IN_MEMORY_STORE
+    store = AsyncPostgresStore(pool)  # type: ignore[arg-type]
+    await store.setup()
+    return store
+
 
 class StorageType(str, Enum):
     """Enum for different types of memory storage."""
@@ -26,6 +48,7 @@ class MemoryManager:
         self.db_url = os.environ.get("DB_CONNECTION_STRING", "")
         self.db_pool: AsyncConnectionPool | None = None
         self.checkpointer: AsyncPostgresSaver | InMemorySaver | None = None
+        self.store: BaseStore | None = None
         self.storage_type: StorageType | None = None
 
     async def initialize(self):
@@ -44,11 +67,13 @@ class MemoryManager:
             self.checkpointer = AsyncPostgresSaver(self.db_pool)  # type: ignore[arg-type]
 
             await self.checkpointer.setup()
+            self.store = await create_store(self.db_pool)
             self.storage_type = StorageType.POSTGRES
 
             logging.info("Using PostgreSQL Checkpointer for checkpoints.")
         else:
             self.checkpointer = InMemorySaver()
+            self.store = await create_store(None)
             self.storage_type = StorageType.IN_MEMORY
             
             logging.info("Using InMemorySaver for checkpoints.")
@@ -62,6 +87,11 @@ class MemoryManager:
         if not self.checkpointer:
             raise RuntimeError("MemoryManager not initialized. Call initialize() first.")
         return self.checkpointer
+
+    def get_store(self) -> BaseStore:
+        if self.store is None:
+            raise RuntimeError("MemoryManager not initialized. Call initialize() first.")
+        return self.store
 
     def _filter_by_tags(self, tag_filters: list[dict], tags: list, role: str) -> bool:
         """

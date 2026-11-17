@@ -101,7 +101,7 @@ def test_create_child_agent_registers_expected_middleware(mock_create_agent, moc
 
     # 8 middleware total: MessagesHistory, human_validation, identity_preamble,
     # cancel_check, inject_kwargs, ui_tools, Summarization and planner_subtask_middleware
-    assert len(middleware) == 8
+    assert len(middleware) == 9
 
 
 @patch("app.services.agent.child.create_agent")

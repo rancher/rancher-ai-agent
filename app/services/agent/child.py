@@ -20,10 +20,11 @@ from .middleware import (
     inject_additional_kwargs_middleware,
     identity_preamble_middleware,
     planner_subtask_middleware,
+    aitask_prompt_middleware,
     human_validation_middleware,
     cancel_human_validation_middleware,
 )
-from .system_prompts import SEQUENTIAL_TOOL_CALLS
+from .system_prompts import SEQUENTIAL_TOOL_CALLS, AITASK_CHILD_INSTRUCTIONS
 from ..llm import get_llm_with_model
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -58,6 +59,7 @@ def create_child_agent(
         human_validation_middleware(planning_tools_by_name, agent_config),
         identity_preamble_middleware(),
         planner_subtask_middleware(),
+        aitask_prompt_middleware(append=AITASK_CHILD_INSTRUCTIONS),
         cancel_human_validation_middleware(),
         inject_additional_kwargs_middleware(),
         ui_tools_middleware(llm, only_when_direct=True),

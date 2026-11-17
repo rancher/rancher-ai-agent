@@ -92,11 +92,13 @@ async def build_agent_from_configs(
     agent_configs: list[AgentConfig],
     checkpointer: Checkpointer,
     websocket: WebSocket | None = None,
+    allow_planner: bool = True,
 ) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
     Build a single agent (one config) or a supervisor (several configs) from
     already-resolved agent configs. The websocket is optional so this can be used
-    headless (e.g. by the AITask controller).
+    headless (e.g. by the AITask controller). With ``allow_planner=False`` the
+    supervisor is always used, even when PLAN_ENABLED is set.
 
     Raises:
         NoAgentAvailableError: If no agent could be created.
@@ -126,7 +128,7 @@ async def build_agent_from_configs(
 
     graph = (
         create_planner_agent(llm, child_agents, checkpointer)
-        if os.environ.get("PLAN_ENABLED", "false").lower() == "true"
+        if allow_planner and os.environ.get("PLAN_ENABLED", "false").lower() == "true"
         else create_supervisor_agent(llm, child_agents, checkpointer)
     )
     supervisor = SupervisorGraph(

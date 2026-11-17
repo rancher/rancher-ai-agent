@@ -25,11 +25,12 @@ from langgraph.types import Command
 from langchain_core.callbacks.manager import dispatch_custom_event
 from dataclasses import dataclass
 from .loader import AgentConfig
-from .system_prompts import SUPERVISOR_PROMPT
+from .system_prompts import SUPERVISOR_PROMPT, AITASK_SUPERVISOR_PROMPT
 from .middleware import (
     INTERRUPT_CANCEL_MESSAGE,
     MessagesHistoryMiddleware,
     cancel_human_validation_middleware,
+    aitask_prompt_middleware,
     inject_additional_kwargs_middleware,
     ui_tools_middleware
 )
@@ -107,7 +108,7 @@ class SupervisorGraph:
 
 
 # Config keys forwarded from supervisor to child so the child can access request context.
-_FORWARDED_CONFIG_KEYS = ("request_id", "request_metadata", "user_id")
+_FORWARDED_CONFIG_KEYS = ("request_id", "request_metadata", "user_id", "aitask")
 
 def create_supervisor_agent(
     llm: BaseChatModel,
@@ -145,6 +146,7 @@ def create_supervisor_agent(
         name="supervisor",
         middleware=[
             MessagesHistoryMiddleware(),
+            aitask_prompt_middleware(replace_with=AITASK_SUPERVISOR_PROMPT),
             cancel_human_validation_middleware(),
             inject_additional_kwargs_middleware(),
             ui_tools_middleware(llm),

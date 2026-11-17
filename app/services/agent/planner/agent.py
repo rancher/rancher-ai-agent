@@ -238,7 +238,7 @@ def create_planner_agent(
         # Retrying only the failed step resumes the existing plan, so the results of the
         # subtasks that already completed must survive to feed the retried step and the
         # reducer. A restart or a brand-new plan starts over with no results.
-        resume_results = retry and request.lower() == RETRY_SUBTASK_REQUEST.lower()
+        resume_results = retry and _is_quick_action(request, RETRY_SUBTASK_REQUEST)
 
         return {
             "subtasks": subtasks,
@@ -460,13 +460,12 @@ async def _create_plan(
 
     # Check harcoded messages from quick actions
     if previous_plan_failure_message or previous_plan_cancellation_message:
-        normalized_request = request.lower()
-        if normalized_request == RETRY_SUBTASK_REQUEST.lower():
+        if _is_quick_action(request, RETRY_SUBTASK_REQUEST):
             # Re-run the plan that just stopped: keep the existing subtasks and only
             # reset the failed/cancelled ones to pending so execution resumes from where
             # it stopped, instead of asking the LLM for a brand-new plan.
             return _retry_failed_subtasks(state), True
-        if normalized_request == RESTART_PLAN_REQUEST.lower():
+        if _is_quick_action(request, RESTART_PLAN_REQUEST):
             # Restart the whole plan from the beginning: reset every subtask to
             # pending instead of asking the LLM for a brand-new plan.
             return _retry_all_subtasks(state), True
@@ -531,7 +530,7 @@ async def _handle_failure_actions(
     llm: BaseChatModel,
 ) -> dict | None:
     """Handle quick actions like requesting details or cancelling when a plan fails."""
-    if request.lower() == REQUEST_FAILURE_DETAILS.lower():
+    if _is_quick_action(request, REQUEST_FAILURE_DETAILS):
         response = await llm.ainvoke(input=f"Requesting more details about the failure: {previous_plan_failure_message}")
         return {
             "subtasks": [],
@@ -540,7 +539,7 @@ async def _handle_failure_actions(
             "feedback": [],
             "messages": [response],
         }
-    if request.lower() == CANCEL_PLAN_REQUEST.lower():
+    if _is_quick_action(request, CANCEL_PLAN_REQUEST):
         return {
             "subtasks": [],
             "results": [],
@@ -549,6 +548,15 @@ async def _handle_failure_actions(
             "messages": [AIMessage(content=PLAN_CANCELLED_REPLY)],
         }
     return None
+
+
+def _is_quick_action(request: str, action: str) -> bool:
+    """Return True when the request is the given quick action picked by the user.
+
+    The websocket appends the UI context parameters after the prompt, so only the
+    beginning of the request is compared (case-insensitively).
+    """
+    return request.strip().lower().startswith(action.lower())
 
 
 def _retry_failed_subtasks(state: PlannerState) -> Plan | None:

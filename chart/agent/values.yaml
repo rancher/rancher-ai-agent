@@ -13,7 +13,7 @@ mcp:
   readOnly: false
   image:
     repository: rancher/rancher-ai-mcp
-    tag: v1.2.0-alpha.5
+    tag: v1.2.0-alpha.6
     pullPolicy: IfNotPresent
   toolboxImage:
     repository: registry.suse.com/bci/bci-init

@@ -35,11 +35,6 @@ type AITaskDefinitionSpec struct {
 	// +optional
 	Suspend bool `json:"suspend,omitempty"`
 
-	// CredentialsRef references the Secret (same namespace) holding the Rancher token
-	// of the service account the task runs as.
-	// +kubebuilder:validation:Required
-	CredentialsRef CredentialsSecretRef `json:"credentialsRef"`
-
 	// Agents lists the AIAgentConfig names the task may use. Empty means every eligible agent.
 	// +optional
 	// +listType=set

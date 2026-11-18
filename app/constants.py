@@ -31,3 +31,8 @@ AITASK_STORE_NAMESPACE = ("aitasks",)
 def agentic_tasks_enabled() -> bool:
     """AITask support (controller and endpoints) is enabled with AGENTIC_TASK_ENABLED=true."""
     return os.environ.get("AGENTIC_TASK_ENABLED", "false").lower() == "true"
+
+LABEL_TASK_DEFINITION = "ai.cattle.io/task-definition"
+LABEL_TRIGGER = "ai.cattle.io/trigger"
+ANNOTATION_SCHEDULED_AT = "ai.cattle.io/scheduled-at"
+TRIGGER_SCHEDULED = "scheduled"

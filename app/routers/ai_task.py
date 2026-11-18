@@ -6,14 +6,13 @@ from fastapi.responses import JSONResponse
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from ..constants import AITASK_STORE_NAMESPACE
+from ..constants import AITASK_STORE_NAMESPACE, LABEL_TASK_DEFINITION
 from ..services.auth import get_user_id_from_token
 from ..services.agent.loader import _load_k8s_config
 
 router = APIRouter(prefix="/v1/api", tags=["aitasks"])
 
 NAMESPACE = "cattle-ai-agent-system"
-LABEL_TASK_DEFINITION = "ai.cattle.io/task-definition"
 _CRD = {"group": "ai.cattle.io", "version": "v1alpha1", "plural": "aitasks"}
 
 

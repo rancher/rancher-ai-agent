@@ -115,8 +115,8 @@ app.include_router(llm.router)
 app.include_router(oauth2.router)
 
 if agentic_tasks_enabled():
-    # Importing the controller registers the AITask kopf handlers.
-    from .controllers import ai_task  # noqa: F401
+    # Importing the controllers registers the AITask/AITaskDefinition kopf handlers.
+    from .controllers import ai_task, ai_task_definition  # noqa: F401
     from .routers import ai_task as ai_task_router
     app.include_router(ai_task_router.router)
     logging.info("Agentic tasks enabled")

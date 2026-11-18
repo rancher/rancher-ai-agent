@@ -8,6 +8,7 @@ from langchain.messages import ToolMessage
 from langgraph.errors import GraphInterrupt
 
 from app.services.agent.middleware.human_validation import (
+    NoChangesPlan,
     _build_interrupt_ui_tools,
     _process_tool_result,
     _should_interrupt,
@@ -103,6 +104,51 @@ async def test_should_interrupt_handles_non_json_response():
             tool_call={"name": "applyResource", "args": {}},
             planning_tools_by_name={"applyResourcePlan": plan_tool},
         )
+
+
+@pytest.mark.asyncio
+async def test_should_interrupt_returns_no_changes_plan():
+    plan_tool = AsyncMock()
+    plan_tool.ainvoke.return_value = [
+        {"text": '{"type": "no_changes", "message": "role already granted, no changes needed"}'}
+    ]
+
+    result = await _should_interrupt(
+        human_validation_tools=["applyResource"],
+        tool_call={"name": "applyResource", "args": {}},
+        planning_tools_by_name={"applyResourcePlan": plan_tool},
+    )
+
+    assert result == NoChangesPlan(message="role already granted, no changes needed")
+
+
+@pytest.mark.asyncio
+async def test_should_interrupt_no_changes_plan_without_message_uses_default():
+    plan_tool = AsyncMock()
+    plan_tool.ainvoke.return_value = '{"type": "no_changes"}'
+
+    result = await _should_interrupt(
+        human_validation_tools=["applyResource"],
+        tool_call={"name": "applyResource", "args": {}},
+        planning_tools_by_name={"applyResourcePlan": plan_tool},
+    )
+
+    assert isinstance(result, NoChangesPlan)
+    assert result.message == "No changes needed."
+
+
+@pytest.mark.asyncio
+async def test_should_interrupt_empty_plan_list_is_not_no_changes():
+    plan_tool = AsyncMock()
+    plan_tool.ainvoke.return_value = "[]"
+
+    result = await _should_interrupt(
+        human_validation_tools=["applyResource"],
+        tool_call={"name": "applyResource", "args": {}},
+        planning_tools_by_name={"applyResourcePlan": plan_tool},
+    )
+
+    assert result == "<confirmation-response>[]</confirmation-response>"
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +348,79 @@ async def test_middleware_does_not_dispatch_ui_tools_on_resume(
     handler.assert_awaited_once()
     assert result.additional_kwargs["confirmation"] is True
     assert result.additional_kwargs["ui_tools"][0]["toolName"] == "show-yaml-diff"
+
+
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.human_validation._dispatch_ui_tools")
+@patch("app.services.agent.middleware.human_validation.langgraph.types.interrupt")
+@patch("app.services.agent.middleware.human_validation.get_config")
+async def test_middleware_no_changes_plan_skips_interrupt_and_tool(
+    mock_get_config, mock_interrupt, mock_dispatch
+):
+    mock_get_config.return_value = _make_config()
+    plan_tool = AsyncMock()
+    plan_tool.ainvoke.return_value = [
+        {"text": json.dumps({"type": "no_changes", "message": "role 'project-member' already granted, no changes needed"})}
+    ]
+    handler = AsyncMock()
+
+    middleware = human_validation_middleware(
+        {"applyResourcePlan": plan_tool}, MagicMock(human_validation_tools=["applyResource"])
+    )
+    result = await middleware.awrap_tool_call(_make_validation_request(), handler)
+
+    mock_interrupt.assert_not_called()
+    mock_dispatch.assert_not_called()
+    handler.assert_not_called()
+    assert isinstance(result, ToolMessage)
+    assert result.content == "role 'project-member' already granted, no changes needed"
+    assert result.tool_call_id == "call-1"
+    assert result.name == "applyResource"
+    assert result.additional_kwargs["no_changes"] is True
+    assert "confirmation" not in result.additional_kwargs
+
+
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.human_validation.langgraph.types.interrupt")
+@patch("app.services.agent.middleware.human_validation.get_config")
+async def test_middleware_normal_plan_still_interrupts(mock_get_config, mock_interrupt):
+    mock_get_config.return_value = _make_config()
+    plan_tool = AsyncMock()
+    plan_tool.ainvoke.return_value = json.dumps([_UPDATE_DATA])
+    mock_interrupt.return_value = "yes"
+    handler = AsyncMock(return_value=ToolMessage(content="done", tool_call_id="call-1"))
+
+    middleware = human_validation_middleware(
+        {"applyResourcePlan": plan_tool}, MagicMock(human_validation_tools=["applyResource"])
+    )
+    result = await middleware.awrap_tool_call(_make_validation_request(), handler)
+
+    mock_interrupt.assert_called_once()
+    assert mock_interrupt.call_args.args[0]["message"] == _make_interrupt_message([_UPDATE_DATA])
+    handler.assert_awaited_once()
+    assert result.content == "done"
+    assert result.additional_kwargs["confirmation"] is True
+    assert "no_changes" not in result.additional_kwargs
+
+
+@pytest.mark.asyncio
+@patch("app.services.agent.middleware.human_validation.langgraph.types.interrupt")
+@patch("app.services.agent.middleware.human_validation.get_config")
+async def test_middleware_plan_error_returns_error_message(mock_get_config, mock_interrupt):
+    mock_get_config.return_value = _make_config()
+    plan_tool = AsyncMock()
+    plan_tool.ainvoke.return_value = "plain text, not a plan"
+    handler = AsyncMock()
+
+    middleware = human_validation_middleware(
+        {"applyResourcePlan": plan_tool}, MagicMock(human_validation_tools=["applyResource"])
+    )
+    result = await middleware.awrap_tool_call(_make_validation_request(), handler)
+
+    mock_interrupt.assert_not_called()
+    handler.assert_not_called()
+    assert result.content.startswith("Could not prepare confirmation for tool 'applyResource'")
+    assert "no_changes" not in result.additional_kwargs
 
 
 # ---------------------------------------------------------------------------

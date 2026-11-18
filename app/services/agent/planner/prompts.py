@@ -131,6 +131,16 @@ Never return an empty "subtasks" list with "cancel" set to false: either return 
 revised subtasks, or set "cancel" to true.
 """
 
+_NEW_PLAN_RULES = """\
+
+This is a brand-new plan, not a revision of the previous one:
+- Leave "changes" empty. Set "cancel" to true only if the new user message asks to stop or
+  drop the request entirely.
+- The previous plan above is context only: do not copy its subtask statuses or actions.
+- Return at least one subtask (or a non-empty "reply" when no agent is needed). Never return
+  only "changes" or an empty "subtasks" list.
+"""
+
 PLANNER_RETRY_SUFFIX = """\
 
 ---
@@ -148,7 +158,7 @@ accordingly:
 - If the user wants to create a new plan, treat their message as new or corrected
   information and produce a brand-new, complete plan that covers the entire original
   request.
-"""
+""" + _NEW_PLAN_RULES
 
 PLANNER_CANCEL_SUFFIX = """\
 
@@ -167,7 +177,7 @@ accordingly:
 - If the user wants to create a new plan, treat their message as new or corrected
   information and produce a brand-new, complete plan that covers the entire original
   request.
-"""
+""" + _NEW_PLAN_RULES
 
 PLAN_FAILED_PREFIX = "PLAN FAILED:"
 

@@ -588,6 +588,36 @@ class TestCreatePlan:
         llm.with_structured_output.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_retry_quick_action_matches_with_appended_parameters(self):
+        llm = _mock_llm()
+        request = (
+            RETRY_SUBTASK_REQUEST
+            + "\n\n  Use the following parameters to populate tool calls when appropriate. \n"
+            "Only include parameters relevant to the user's request (e.g., omit namespace for "
+            "cluster-wide operations). \nParameters (separated by ;): \n cluster:local;"
+        )
+        state = self._state(request, self.FAILED_STATE_SUBTASKS)
+
+        plan, retry = await _create_plan(llm, "", state, previous_plan_failure_message="PLAN FAILED: x")
+
+        assert retry is True
+        assert plan is not None
+        assert [st.status for st in plan.subtasks] == ["completed", "pending"]
+        llm.with_structured_output.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_free_form_request_starting_with_quick_action_is_not_a_quick_action(self):
+        expected = Plan(subtasks=[SubTask(task="t", agent="a")])
+        llm = _mock_llm(expected)
+        request = RETRY_SUBTASK_REQUEST + " for namespace foo"
+        state = self._state(request, self.FAILED_STATE_SUBTASKS)
+
+        plan, retry = await _create_plan(llm, "", state, previous_plan_failure_message="PLAN FAILED: x")
+
+        assert retry is False
+        llm.with_structured_output.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_quick_actions_are_ignored_without_previous_failure(self):
         expected = Plan(subtasks=[SubTask(task="t", agent="a")])
         llm = _mock_llm(structured_response={"raw": None, "parsed": expected})

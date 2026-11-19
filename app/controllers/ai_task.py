@@ -15,6 +15,7 @@ import os
 import re
 from datetime import datetime, timezone
 
+import aiosqlite
 import kopf
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -25,7 +26,7 @@ from ..services.agent.loader import AgentConfig, AuthenticationType, load_agent_
 from ..services.agent.factory import build_agent_from_configs
 from ..services.agent.system_prompts import AITASK_RESULT_VALUES
 from ..services.llm import LLMManager
-from ..services.memory import create_store
+from ..services.memory import create_sqlite_store, create_store, postgres_enabled, sqlite_store_enabled, sqlite_store_path
 from ..constants import AITASK_STORE_NAMESPACE
 
 _FINISHED_PHASES = ("Succeeded", "Failed")
@@ -37,13 +38,14 @@ _checkpointer = InMemorySaver()
 # Store and pool owned by the kopf event loop (see on_startup).
 _store: BaseStore | None = None
 _db_pool: AsyncConnectionPool | None = None
+_sqlite_conn: aiosqlite.Connection | None = None
 
 
 @kopf.on.startup()
 async def on_startup(logger, **kwargs):
     """Create the LangGraph store on the kopf event loop (the FastAPI pool can't be shared across loops)."""
-    global _store, _db_pool
-    if os.environ.get("DB_ENABLED", "false").lower() == "true":
+    global _store, _db_pool, _sqlite_conn
+    if postgres_enabled():
         _db_pool = AsyncConnectionPool(
             conninfo=os.environ.get("DB_CONNECTION_STRING", ""),
             max_size=5,
@@ -51,16 +53,26 @@ async def on_startup(logger, **kwargs):
             open=False,
         )
         await _db_pool.open()
-    _store = await create_store(_db_pool)
-    logger.info(f"AITask store initialized ({'postgres' if _db_pool else 'in-memory'})")
+        _store = await create_store(_db_pool)
+        backend = "postgres"
+    elif sqlite_store_enabled():
+        _store, _sqlite_conn = await create_sqlite_store(sqlite_store_path())
+        backend = "sqlite"
+    else:
+        _store = await create_store(None)
+        backend = "in-memory"
+    logger.info(f"AITask store initialized ({backend})")
 
 
 @kopf.on.cleanup()
 async def on_cleanup(**kwargs):
-    global _store, _db_pool
+    global _store, _db_pool, _sqlite_conn
     if _db_pool:
         await _db_pool.close()
+    if _sqlite_conn:
+        await _sqlite_conn.close()
     _db_pool = None
+    _sqlite_conn = None
     _store = None
 
 

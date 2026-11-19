@@ -429,3 +429,47 @@ async def test_fetch_messages_skips_ai_message_without_text():
     messages = await manager.fetch_messages("chat1", "user1", {})
 
     assert messages == []
+
+
+@pytest.mark.asyncio
+async def test_initialize_uses_sqlite_store_when_enabled(tmp_path, monkeypatch):
+    from langgraph.store.sqlite.aio import AsyncSqliteStore
+    from app.services.memory import StorageType, create_sqlite_store
+
+    path = str(tmp_path / "store.db")
+    monkeypatch.setenv("DB_ENABLED", "false")
+    monkeypatch.setenv("SQLITE_ENABLED", "true")
+    monkeypatch.setenv("SQLITE_PATH", path)
+
+    manager = MemoryManager()
+    await manager.initialize()
+    try:
+        store = manager.get_store()
+        assert isinstance(store, AsyncSqliteStore)
+        assert manager.storage_type == StorageType.IN_MEMORY
+        await store.aput(("aitasks",), "uid-1", {"output": "ok"})
+        item = await store.aget(("aitasks",), "uid-1")
+        assert item.value == {"output": "ok"}
+    finally:
+        await manager.destroy()
+    assert manager.sqlite_conn is None
+
+    # A new connection on the same file sees the persisted value.
+    store2, conn2 = await create_sqlite_store(path)
+    try:
+        item = await store2.aget(("aitasks",), "uid-1")
+        assert item.value == {"output": "ok"}
+    finally:
+        await conn2.close()
+
+
+def test_sqlite_store_disabled_when_postgres_enabled(monkeypatch):
+    from app.services.memory import sqlite_store_enabled
+
+    monkeypatch.setenv("SQLITE_ENABLED", "true")
+    monkeypatch.setenv("DB_ENABLED", "true")
+    assert sqlite_store_enabled() is False
+    monkeypatch.setenv("DB_ENABLED", "false")
+    assert sqlite_store_enabled() is True
+    monkeypatch.setenv("SQLITE_ENABLED", "false")
+    assert sqlite_store_enabled() is False

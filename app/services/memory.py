@@ -3,6 +3,7 @@ import re
 import logging
 from enum import Enum
 from typing import cast
+import aiosqlite
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -10,6 +11,7 @@ from langgraph.checkpoint.base import CheckpointMetadata, CheckpointTuple
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
+from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langchain_core.runnables.config import RunnableConfig
 
 from ..services.agent.loader import DEFAULT_AGENT_NAME
@@ -18,6 +20,46 @@ from ..constants import CONTEXT_PARAMETERS_SUFFIX
 # Shared by the FastAPI and kopf event loops when no database is configured.
 # InMemoryStore is not bound to an event loop, so a single instance can be used by both.
 _IN_MEMORY_STORE = InMemoryStore()
+
+DEFAULT_SQLITE_PATH = "/tmp/ai-agent-store.db"
+
+
+def postgres_enabled() -> bool:
+    return os.environ.get("DB_ENABLED", "false").lower() == "true"
+
+
+def sqlite_store_enabled() -> bool:
+    """SQLite backs the store only when enabled and Postgres is not (Postgres takes precedence)."""
+    if os.environ.get("SQLITE_ENABLED", "false").lower() != "true":
+        return False
+    if postgres_enabled():
+        logging.warning("Both DB_ENABLED and SQLITE_ENABLED are set; using PostgreSQL for the store.")
+        return False
+    return True
+
+
+def sqlite_store_path() -> str:
+    return os.environ.get("SQLITE_PATH") or DEFAULT_SQLITE_PATH
+
+
+async def create_sqlite_store(path: str) -> tuple[AsyncSqliteStore, aiosqlite.Connection]:
+    """
+    Open a SQLite-backed LangGraph store at *path* (tables are created if needed).
+
+    Returns the store and its connection; the caller must close the connection.
+    The connection is bound to the current event loop, so the FastAPI and kopf loops
+    each open their own. WAL mode lets them read and write the same file concurrently.
+    """
+    conn = await aiosqlite.connect(path, isolation_level=None)
+    try:
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
+        store = AsyncSqliteStore(conn)
+        await store.setup()
+    except BaseException:
+        await conn.close()
+        raise
+    return store, conn
 
 
 async def create_store(pool: AsyncConnectionPool | None) -> BaseStore:
@@ -49,10 +91,11 @@ class MemoryManager:
         self.db_pool: AsyncConnectionPool | None = None
         self.checkpointer: AsyncPostgresSaver | InMemorySaver | None = None
         self.store: BaseStore | None = None
+        self.sqlite_conn: aiosqlite.Connection | None = None
         self.storage_type: StorageType | None = None
 
     async def initialize(self):
-        if os.environ.get("DB_ENABLED", "false").lower() == "true":
+        if postgres_enabled():
             logging.info("Initializing PostgreSQL Checkpointer...")
 
             self.db_pool = AsyncConnectionPool(
@@ -73,15 +116,24 @@ class MemoryManager:
             logging.info("Using PostgreSQL Checkpointer for checkpoints.")
         else:
             self.checkpointer = InMemorySaver()
-            self.store = await create_store(None)
+            if sqlite_store_enabled():
+                path = sqlite_store_path()
+                self.store, self.sqlite_conn = await create_sqlite_store(path)
+                logging.info(f"Using SQLite store at {path}.")
+            else:
+                self.store = await create_store(None)
             self.storage_type = StorageType.IN_MEMORY
-            
+
             logging.info("Using InMemorySaver for checkpoints.")
                         
     async def destroy(self):
         if self.db_pool:
             await self.db_pool.close()
             logging.info("PostgreSQL pool closed.")
+        if self.sqlite_conn:
+            await self.sqlite_conn.close()
+            self.sqlite_conn = None
+            logging.info("SQLite connection closed.")
 
     def get_checkpointer(self) -> AsyncPostgresSaver | InMemorySaver:
         if not self.checkpointer:

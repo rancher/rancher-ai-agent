@@ -44,6 +44,11 @@ langfuseHost:
 storage:
   enabled: false
   connectionString: ""
+  # SQLite store for AITask outputs, used when storage.enabled (Postgres) is false.
+  # Put the path on a mounted volume to keep outputs across pod restarts.
+  sqlite:
+    enabled: false
+    path: 
 probes:
   startup:
     initialDelaySeconds: 5

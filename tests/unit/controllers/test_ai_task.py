@@ -110,3 +110,21 @@ async def test_finished_task_is_not_rerun(store):
 ])
 def test_parse_result(output, expected):
     assert ai_task.parse_result(output) == expected
+
+
+@pytest.mark.asyncio
+async def test_startup_uses_sqlite_store_and_cleanup_closes_it(tmp_path, monkeypatch):
+    from langgraph.store.sqlite.aio import AsyncSqliteStore
+
+    monkeypatch.setenv("DB_ENABLED", "false")
+    monkeypatch.setenv("SQLITE_ENABLED", "true")
+    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "store.db"))
+
+    await ai_task.on_startup(logger=MagicMock())
+    try:
+        assert isinstance(ai_task._store, AsyncSqliteStore)
+        assert ai_task._sqlite_conn is not None
+    finally:
+        await ai_task.on_cleanup()
+    assert ai_task._store is None
+    assert ai_task._sqlite_conn is None

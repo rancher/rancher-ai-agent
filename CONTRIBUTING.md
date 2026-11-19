@@ -55,6 +55,8 @@ The following environment variables must be set at minimum to run the agent: `RA
 | :--- | :--- | :--- |
 | `DB_ENABLED` | `false` | Set to `true` to use PostgreSQL for conversation memory instead of in-memory storage. |
 | `DB_CONNECTION_STRING` | `postgresql://user:pass@localhost/db` | PostgreSQL connection string. Required when `DB_ENABLED=true`. |
+| `SQLITE_ENABLED` | `false` | Set to `true` to persist the AITask output store in a SQLite file. Ignored when `DB_ENABLED=true`. Chat history stays in memory. |
+| `SQLITE_PATH` | `/tmp/ai-agent-store.db` | SQLite file path used when `SQLITE_ENABLED=true`. |
 
 **Observability (Optional)**
 

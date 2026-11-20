@@ -25,6 +25,7 @@ from .middleware import (
     tool_response_overflow_middleware,
 )
 from .system_prompts import SEQUENTIAL_TOOL_CALLS
+from .tool_meta import requires_human_validation
 from ..llm import get_llm_with_model
 
 INTERRUPT_PREVIOUS_TOOL_FAILED_MESSAGE = "tool execution cancelled because previous tool call failed"
@@ -53,6 +54,13 @@ def create_child_agent(
     planning_tools = [t for t in tools if t.name.endswith("Plan")]
     execution_tools = [t for t in tools if not t.name.endswith("Plan")]
     planning_tools_by_name = {t.name: t for t in planning_tools}
+
+    # Tools the MCP server marks as changing resources need human validation, in addition to the ones configured
+    # on the agent, so that new tools don't have to be added to the agent config.
+    marked_tools = [t.name for t in execution_tools if requires_human_validation(t)]
+    agent_config = agent_config.model_copy(update={
+        "human_validation_tools": list(dict.fromkeys([*agent_config.human_validation_tools, *marked_tools])),
+    })
 
     middleware = [
         MessagesHistoryMiddleware(),

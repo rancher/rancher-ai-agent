@@ -104,7 +104,7 @@ Human validation is the mechanism that pauses tool execution to ask the user for
 
 The `child_human_validation_middleware` (a `@wrap_tool_call` middleware in `app/services/agent/middleware/human_validation.py`) handles the gate at the child level:
 
-1. Before executing a tool call, it checks if the tool is listed in the agent's `human_validation_tools` configuration.
+1. Before executing a tool call, it checks if the tool requires human validation. A tool does if it is listed in the agent's `human_validation_tools` configuration, or if the MCP server marks it with `requiresHumanValidation: true` in the tool's `_meta`. `create_child_agent` merges the tools marked by the MCP server into the configured list, so a new tool of the Rancher MCP server doesn't need to be added to the agent configuration.
 2. If it is, the middleware invokes the corresponding **planning tool** (`<tool_name>Plan`) to produce a preview of the intended changes (e.g. a diff or resource manifest).
 3. It then calls `langgraph.types.interrupt()` with the plan response, pausing the child graph and surfacing the confirmation prompt to the client.
 4. When the graph is resumed:

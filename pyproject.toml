@@ -10,7 +10,7 @@ dependencies = [
     "langchain-google-genai==4.5.0",
     "fastapi[standard]==0.163.1",
     "langchain-ollama==1.1.0",
-    "langchain-openai==1.8.0",
+    "langchain-openai==1.8.1",
     "langchain-text-splitters==1.1.3",
     "langchain-community==0.4.2",
     "langfuse==5.2.0",

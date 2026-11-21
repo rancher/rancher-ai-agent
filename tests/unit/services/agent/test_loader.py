@@ -351,6 +351,19 @@ def test_rancher_agent_human_validation_tools():
     ]
 
 
+def test_provisioning_agent_human_validation_tools():
+    """Verify the provisioning agent requires human validation for its write tools."""
+    defaults = {d["metadata"]["name"]: d for d in _get_default_ai_agent_config_crds()}
+
+    assert defaults["provisioning"]["spec"]["humanValidationTools"] == [
+        "createImportedCluster",
+        "scaleClusterNodePool",
+        "createK3kCluster",
+        "investigateFailedProvisioningPlanApplication",
+        "updateNodePoolAutoscaling",
+    ]
+
+
 # ============================================================================
 # get_header_auth_headers Tests
 # ============================================================================

@@ -418,7 +418,8 @@ def _get_default_ai_agent_config_crds() -> list:
                     "createImportedCluster",
                     "scaleClusterNodePool",
                     "createK3kCluster",
-                    "investigateFailedProvisioningPlanApplication"
+                    "investigateFailedProvisioningPlanApplication",
+                    "updateNodePoolAutoscaling",
                 ]
             }
         }

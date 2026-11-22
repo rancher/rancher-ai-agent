@@ -1712,7 +1712,7 @@ wheels = [
 
 [[package]]
 name = "langchain-google-genai"
-version = "4.5.0"
+version = "4.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filetype" },
@@ -1720,9 +1720,9 @@ dependencies = [
     { name = "langchain-core" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/b5/735a935a72ee93538035efea8893e7782041e03b9f6f1b28271e94b5e000/langchain_google_genai-4.5.0.tar.gz", hash = "sha256:54f2d887b454ff94635af13c5edca7ec4d1b8f4ad77cb51f63d3443ce4a83514", size = 370586, upload-time = "2026-11-11T19:20:20.991Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/2e/05e48516f3861b7b5d347274de41a9b1d5529e7b1b9cb41ed0e32d05c1b1/langchain_google_genai-4.5.1.tar.gz", hash = "sha256:494747fac64ea0f2bf20e7bf4a607db324c47a4f20bb20996649a23c102588e0", size = 372449, upload-time = "2026-11-18T22:30:09.273Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dc/6f/7e95c6c06cdcf6f13ac42a65b39c36d4483498a352342582782daa2049b0/langchain_google_genai-4.5.0-py3-none-any.whl", hash = "sha256:0b04ca96696b41dba1e1fa29e4dd7132afab9cb6ae7d8fc173fd0b3858bdaf72", size = 89965, upload-time = "2026-11-11T19:20:19.652Z" },
+    { url = "https://files.pythonhosted.org/packages/79/f0/e6073ff14dfb142c14dcf57e8d2975cb01028885ca0c054eff7663ed4064/langchain_google_genai-4.5.1-py3-none-any.whl", hash = "sha256:fef75fd027bda5d60485fa48475a99a747f5b222c1d69bda161af27a3b01b8e0", size = 90425, upload-time = "2026-11-18T22:30:08.027Z" },
 ]
 
 [[package]]
@@ -3214,7 +3214,7 @@ requires-dist = [
     { name = "langchain", extras = ["mcp"], specifier = "==1.5.0" },
     { name = "langchain-aws", specifier = "==1.9.3" },
     { name = "langchain-community", specifier = "==0.4.2" },
-    { name = "langchain-google-genai", specifier = "==4.5.0" },
+    { name = "langchain-google-genai", specifier = "==4.5.1" },
     { name = "langchain-ollama", specifier = "==1.1.0" },
     { name = "langchain-openai", specifier = "==1.8.1" },
     { name = "langchain-text-splitters", specifier = "==1.1.3" },

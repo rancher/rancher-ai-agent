@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "asyncio==4.0.0",
-    "langchain[mcp]==1.5.0",
+    "langchain[mcp]==1.5.2",
     "langchain-google-genai==4.5.1",
     "fastapi[standard]==0.163.2",
     "langchain-ollama==1.1.0",

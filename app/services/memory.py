@@ -50,6 +50,9 @@ async def create_sqlite_store(path: str) -> tuple[AsyncSqliteStore, aiosqlite.Co
     The connection is bound to the current event loop, so the FastAPI and kopf loops
     each open their own. WAL mode lets them read and write the same file concurrently.
     """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     conn = await aiosqlite.connect(path, isolation_level=None)
     try:
         await conn.execute("PRAGMA journal_mode=WAL")

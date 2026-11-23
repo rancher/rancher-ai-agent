@@ -49,6 +49,11 @@ storage:
   sqlite:
     enabled: false
     path: 
+    # Optional: name of an existing PVC to mount in the rancher-ai-agent pod.
+    # When set (and path is empty) the DB is stored at <mountPath>/ai-agent-store.db.
+    pvc:
+      existingClaim: ""
+      mountPath: /data
 probes:
   startup:
     initialDelaySeconds: 5

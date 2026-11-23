@@ -473,3 +473,16 @@ def test_sqlite_store_disabled_when_postgres_enabled(monkeypatch):
     assert sqlite_store_enabled() is True
     monkeypatch.setenv("SQLITE_ENABLED", "false")
     assert sqlite_store_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_create_sqlite_store_creates_missing_parent_dirs(tmp_path):
+    from app.services.memory import create_sqlite_store
+
+    path = tmp_path / "nested" / "dir" / "store.db"
+    store, conn = await create_sqlite_store(str(path))
+    try:
+        await store.aput(("aitasks",), "uid-1", {"output": "ok"})
+    finally:
+        await conn.close()
+    assert path.exists()

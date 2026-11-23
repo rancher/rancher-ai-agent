@@ -22,6 +22,7 @@ from ..rbac import accessible_agent_configs, rbac_enabled, RBACError
 from ..oauth2 import get_oauth_cookie_names
 from .supervisor import create_supervisor_agent, ChildAgent, SupervisorGraph
 from .child import create_child_agent
+from .tool_meta import get_tool_meta
 from ._constants import NoAgentAvailableError, NeedsOauth2
 from fastapi import  WebSocket
 from langchain_core._api import suppress_langchain_beta_warning
@@ -211,7 +212,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket) -> list:
             t for t in tools
             if agent_cfg.toolset in [
                 ts.strip() 
-                for ts in (_tool_meta(t).get("toolset") or "").split(",")
+                for ts in (get_tool_meta(t).get("toolset") or "").split(",")
             ]
         ]                
         logging.debug(f"Filtered {len(tools)} tools for toolset '{agent_cfg.toolset}'")
@@ -239,11 +240,6 @@ def needs_oauth2_login(agent_cfg: AgentConfig, mcp_client: MCPAdapter, error_mes
         or "not authorized" in error_lower
         or "access denied" in error_lower
     )
-
-
-def _tool_meta(tool) -> dict:
-    """Return the MCP ``_meta`` of a tool loaded through ``langchain.mcp`` (stored under ``metadata["mcp"]["tool"]``)."""
-    return ((((tool.metadata or {}).get("mcp") or {}).get("tool") or {}).get("_meta")) or {}
 
 
 async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MCPAdapter:

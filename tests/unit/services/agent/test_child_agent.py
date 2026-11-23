@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 from langchain_core.tools import tool as langchain_tool
 
 from app.services.agent.child import create_child_agent
+from app.services.agent.loader import AgentConfig
+from app.services.agent.tool_meta import REQUIRES_HUMAN_VALIDATION_META_KEY
 
 
 def _make_langchain_tool(name: str):
@@ -17,6 +19,12 @@ def _make_langchain_tool(name: str):
         """A test tool."""
         return "result"
     return _tool
+
+
+def _mark_requires_human_validation(tool, required: bool = True):
+    """Give a tool the metadata that langchain.mcp attaches to tools loaded from an MCP server."""
+    tool.metadata = {"mcp": {"tool": {"_meta": {REQUIRES_HUMAN_VALIDATION_META_KEY: required}}}}
+    return tool
 
 
 @pytest.fixture
@@ -35,12 +43,14 @@ def mock_checkpointer():
 
 @pytest.fixture
 def agent_config():
-    """Minimal AgentConfig mock."""
-    config = MagicMock()
-    config.human_validation_tools = []
-    config.llm_model_enabled = False
-    config.llm_model = None
-    return config
+    """Minimal AgentConfig."""
+    return AgentConfig(
+        name="test",
+        displayName="Test",
+        description="A test agent",
+        system_prompt="You are a test agent.",
+        mcp_url="mcp.test.svc",
+    )
 
 
 # ============================================================================
@@ -197,3 +207,60 @@ def test_create_child_agent_uses_default_llm_when_model_not_set(mock_create_agen
     mock_get_llm_with_model.assert_not_called()
     call_args = mock_create_agent.call_args
     assert call_args[0][0] == mock_llm
+
+# ============================================================================
+# Human validation tools marked by the MCP server
+# ============================================================================
+
+
+def _human_validation_tools_of(mock_create_agent, tools, mock_llm, mock_checkpointer, agent_config) -> list[str]:
+    """Create a child agent and return the human validation tools given to the human validation middleware."""
+    mock_create_agent.return_value = MagicMock()
+
+    with patch("app.services.agent.child.human_validation_middleware") as mock_middleware:
+        create_child_agent(llm=mock_llm, tools=tools, checkpointer=mock_checkpointer, agent_config=agent_config)
+
+    return mock_middleware.call_args[0][1].human_validation_tools
+
+
+@patch("app.services.agent.child.create_agent")
+def test_create_child_agent_requires_human_validation_for_marked_tools(mock_create_agent, mock_llm, mock_checkpointer, agent_config):
+    """Verify tools the MCP server marks as changing resources require human validation without being configured."""
+    tools = [
+        _mark_requires_human_validation(_make_langchain_tool("createPod")),
+        _make_langchain_tool("createPodPlan"),
+        _make_langchain_tool("listPods"),
+        _mark_requires_human_validation(_make_langchain_tool("notMarked"), required=False),
+    ]
+
+    result = _human_validation_tools_of(mock_create_agent, tools, mock_llm, mock_checkpointer, agent_config)
+
+    assert result == ["createPod"]
+
+
+@patch("app.services.agent.child.create_agent")
+def test_create_child_agent_keeps_configured_human_validation_tools(mock_create_agent, mock_llm, mock_checkpointer, agent_config):
+    """Verify configured human validation tools are kept, without duplicates, next to the marked ones."""
+    agent_config.human_validation_tools = ["legacyTool", "createPod"]
+    tools = [
+        _mark_requires_human_validation(_make_langchain_tool("createPod")),
+        _mark_requires_human_validation(_make_langchain_tool("deletePod")),
+        _make_langchain_tool("legacyTool"),
+    ]
+
+    result = _human_validation_tools_of(mock_create_agent, tools, mock_llm, mock_checkpointer, agent_config)
+
+    assert result == ["legacyTool", "createPod", "deletePod"]
+    assert agent_config.human_validation_tools == ["legacyTool", "createPod"], "the agent config must not be modified"
+
+
+@patch("app.services.agent.child.create_agent")
+def test_create_child_agent_without_marked_tools_uses_configured_list(mock_create_agent, mock_llm, mock_checkpointer, agent_config):
+    """Verify an MCP server that doesn't mark its tools still works with the configured list."""
+    agent_config.human_validation_tools = ["createPod"]
+
+    result = _human_validation_tools_of(
+        mock_create_agent, [_make_langchain_tool("createPod")], mock_llm, mock_checkpointer, agent_config
+    )
+
+    assert result == ["createPod"]

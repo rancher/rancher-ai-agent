@@ -154,12 +154,18 @@ async def _run_pending_subtask(
     evaluation = await _evaluate_subtask(llm, instructions, content, results)
     if evaluation == "needs_input":
         logging.debug("Planner subtask for agent '%s' is waiting for user input", agent_name)
-        return {
+        update = {
             "subtasks": subtasks,
             "results": results,
             "awaiting_input": True,
             "messages": [AIMessage(content=content)],
         }
+        if emit_plan:
+            dispatch_custom_event(
+                "planner-plan-awaiting-input",
+                _format_plan_event(subtasks, approval=False, awaiting_input=update["awaiting_input"]),
+            )
+        return update
     if evaluation == "failed":
         logging.debug("Planner subtask for agent '%s' evaluated as failed", agent_name)
         # Keep the child's own explanation so later turns (failure details, retry
@@ -379,10 +385,14 @@ def _plan_status(subtasks: list[dict]) -> str:
     return "in_progress"
 
 
-def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None = None) -> str:
+def _format_plan_event(
+    subtasks: list[dict], approval: bool, status: str | None = None, awaiting_input: bool = False
+) -> str:
     """Render the ``<plan>`` payload streamed to the client for plan-progress events.
 
     The global ``status`` is derived from the subtasks unless given explicitly.
+    ``awaitingInput`` mirrors the planner's ``awaiting_input`` state: the plan is paused on a
+    question to the user.
     """
     
     # Convert any actions in the subtasks into a tool call format for the client.
@@ -400,7 +410,12 @@ def _format_plan_event(subtasks: list[dict], approval: bool, status: str | None 
         for st in subtasks
     ]
 
-    payload = {"tasks": tasks, "approval": approval, "status": status or _plan_status(subtasks)}
+    payload = {
+        "tasks": tasks,
+        "approval": approval,
+        "status": status or _plan_status(subtasks),
+        "awaitingInput": awaiting_input,
+    }
     return f"<plan>{json.dumps(payload)}</plan>"
 
 

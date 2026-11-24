@@ -376,7 +376,6 @@ async def test_middleware_no_changes_plan_skips_interrupt_and_tool(
     assert result.content == "role 'project-member' already granted, no changes needed"
     assert result.tool_call_id == "call-1"
     assert result.name == "applyResource"
-    assert result.additional_kwargs["no_changes"] is True
     assert "confirmation" not in result.additional_kwargs
 
 
@@ -400,7 +399,6 @@ async def test_middleware_normal_plan_still_interrupts(mock_get_config, mock_int
     handler.assert_awaited_once()
     assert result.content == "done"
     assert result.additional_kwargs["confirmation"] is True
-    assert "no_changes" not in result.additional_kwargs
 
 
 @pytest.mark.asyncio
@@ -420,7 +418,6 @@ async def test_middleware_plan_error_returns_error_message(mock_get_config, mock
     mock_interrupt.assert_not_called()
     handler.assert_not_called()
     assert result.content.startswith("Could not prepare confirmation for tool 'applyResource'")
-    assert "no_changes" not in result.additional_kwargs
 
 
 # ---------------------------------------------------------------------------

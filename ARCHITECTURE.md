@@ -123,7 +123,7 @@ A planning tool (`<tool_name>Plan`) must return one of:
   {"type": "no_changes", "message": "role 'project-member' is already granted in project 'p-abc12', no changes needed"}
   ```
 
-  The middleware skips the confirmation interrupt, does **not** execute the real tool, and returns a `ToolMessage` whose content is `message` (falling back to a generic text if `message` is missing) with `additional_kwargs["no_changes"] = True`, so the model can tell the user that nothing needed to be done.
+  The middleware skips the confirmation interrupt, does **not** execute the real tool, and returns a `ToolMessage` whose content is `message` (falling back to a generic text if `message` is missing), so the model can tell the user that nothing needed to be done.
 
 ### Supervisor Side
 

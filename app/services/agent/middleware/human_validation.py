@@ -86,7 +86,6 @@ def human_validation_middleware(
 
         if isinstance(interrupt_message, NoChangesPlan):
             logging.debug(f"No changes needed for tool '{tool_call['name']}', skipping confirmation and execution")
-            additional_kwargs["no_changes"] = True
             return ToolMessage(
                 content=interrupt_message.message,
                 name=tool_call["name"],

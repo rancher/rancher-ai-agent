@@ -1235,7 +1235,7 @@ def _cancelled_plan_event():
         {("additionalInfo" if key == "additional_info" else key): value for key, value in st.items()}
         for st in _plan_subtasks()
     ]
-    return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled"})}</plan>'
+    return f'<plan>{json.dumps({"tasks": tasks, "approval": False, "status": "cancelled", "awaitingInput": False})}</plan>'
 
 
 class TestStoppedPlanEvent:

@@ -903,8 +903,13 @@ class TestRunPendingSubtask:
         assert subtasks[0]["status"] == "in_progress"
         assert "actions" not in subtasks[0]
         assert results == []
-        # Only the in-progress plan is emitted; no failed plan follows.
-        dispatch.assert_called_once()
+        # The in-progress plan, then the same plan flagged as waiting for the user.
+        assert dispatch.call_count == 2
+        name, payload = dispatch.call_args.args
+        assert name == "planner-plan-awaiting-input"
+        plan = json.loads(payload.removeprefix("<plan>").removesuffix("</plan>"))
+        assert plan["awaitingInput"] is True
+        assert plan["tasks"][0]["status"] == "in_progress"
 
     @pytest.mark.asyncio
     async def test_forwards_user_reply_to_waiting_child(self, dispatch):

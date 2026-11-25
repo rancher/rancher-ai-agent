@@ -13,9 +13,14 @@ Rules:
   (``status.lastScheduleTime``), whether it was run or skipped.
 * AITask names are deterministic (``<definition>-<unix minutes>``), so creation is
   idempotent across restarts.
+
+Run now: setting the ``ai.cattle.io/run-requested-at`` annotation to a new value creates one
+AITask with the ``manual`` trigger (``<definition>-<hash of the value>``), even if the
+definition is suspended or manual only. It is skipped if an AITask is still active.
 """
 
 import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,9 +30,11 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from ..constants import (
+    ANNOTATION_RUN_REQUESTED_AT,
     ANNOTATION_SCHEDULED_AT,
     LABEL_TASK_DEFINITION,
     LABEL_TRIGGER,
+    TRIGGER_MANUAL,
     TRIGGER_SCHEDULED,
 )
 from ..services.agent.loader import _load_k8s_config
@@ -92,17 +99,38 @@ def task_name(definition_name: str, due: datetime) -> str:
     return f"{definition_name}-{int(due.timestamp() // 60)}"
 
 
+def manual_task_name(definition_name: str, requested_at: str) -> str:
+    """Name of the AITask created for a Run now request. At most 52 + 1 + 10 = 63 chars."""
+    return f"{definition_name}-{hashlib.sha1(requested_at.encode()).hexdigest()[:10]}"
+
+
 def build_task_body(definition_name: str, definition_uid: str, spec: dict, due: datetime) -> dict:
+    """AITask for the scheduled run at ``due``."""
+    return _task_body(
+        definition_name, definition_uid, spec, task_name(definition_name, due),
+        TRIGGER_SCHEDULED, {ANNOTATION_SCHEDULED_AT: format_time(due)},
+    )
+
+
+def build_manual_task_body(definition_name: str, definition_uid: str, spec: dict, requested_at: str) -> dict:
+    """AITask for the Run now request ``requested_at``."""
+    return _task_body(
+        definition_name, definition_uid, spec, manual_task_name(definition_name, requested_at),
+        TRIGGER_MANUAL, {ANNOTATION_RUN_REQUESTED_AT: requested_at},
+    )
+
+
+def _task_body(definition_name: str, definition_uid: str, spec: dict, name: str, trigger: str, annotations: dict) -> dict:
     return {
         "apiVersion": f"{GROUP}/{VERSION}",
         "kind": "AITask",
         "metadata": {
-            "name": task_name(definition_name, due),
+            "name": name,
             "labels": {
                 LABEL_TASK_DEFINITION: definition_name,
-                LABEL_TRIGGER: TRIGGER_SCHEDULED,
+                LABEL_TRIGGER: trigger,
             },
-            "annotations": {ANNOTATION_SCHEDULED_AT: format_time(due)},
+            "annotations": annotations,
             "ownerReferences": [{
                 "apiVersion": f"{GROUP}/{VERSION}",
                 "kind": "AITaskDefinition",
@@ -127,7 +155,7 @@ def _api() -> client.CustomObjectsApi:
     return client.CustomObjectsApi()
 
 
-async def _has_active_task(api, namespace: str, definition_name: str) -> bool:
+async def has_active_task(api, namespace: str, definition_name: str) -> bool:
     tasks = await asyncio.to_thread(
         api.list_namespaced_custom_object,
         group=GROUP, version=VERSION, namespace=namespace, plural="aitasks",
@@ -234,7 +262,7 @@ class _Scheduler:
     async def handle_due(self, spec: dict, due: datetime, now: datetime) -> None:
         if now - due > STARTING_DEADLINE:
             self.logger.warning(f"AITaskDefinition {self.namespace}/{self.name}: missed run at {format_time(due)}, skipping")
-        elif await _has_active_task(self.api, self.namespace, self.name):
+        elif await has_active_task(self.api, self.namespace, self.name):
             self.logger.info(f"AITaskDefinition {self.namespace}/{self.name}: previous AITask still active, skipping run at {format_time(due)}")
         else:
             await _create_task(self.api, self.namespace, build_task_body(self.name, self.uid, spec, due), self.logger)
@@ -254,3 +282,16 @@ async def schedule_daemon(spec, status, meta, name, namespace, uid, stopped, log
             logger.error(f"AITaskDefinition {namespace}/{name}: scheduling failed, retrying")
             sleep_for = MAX_SLEEP_SECONDS
         await stopped.wait(sleep_for)
+
+
+@kopf.on.field(GROUP, VERSION, "aitaskdefinitions", field=("metadata", "annotations", ANNOTATION_RUN_REQUESTED_AT))
+async def run_now(new, spec, name, namespace, uid, logger, **kwargs):
+    """Create a manual AITask when the run-requested-at annotation gets a new value."""
+    requested_at = (new or "").strip()
+    if not requested_at:
+        return
+    api = _api()
+    if await has_active_task(api, namespace, name):
+        logger.warning(f"AITaskDefinition {namespace}/{name}: Run now ({requested_at}) skipped, previous AITask still active")
+        return
+    await _create_task(api, namespace, build_manual_task_body(name, uid, dict(spec), requested_at), logger)

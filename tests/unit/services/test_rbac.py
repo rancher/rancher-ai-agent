@@ -210,3 +210,66 @@ async def test_aitaskdefinitions_list_as_user(_url, _tls):
         result = await accessible_resources("tok", AITASK_DEFINITION_STEVE_TYPE, "ns")
     assert result == [{"metadata": {"name": "daily"}}]
     assert client.get.call_args.args[0] == "https://rancher.test/v1/ai.cattle.io.aitaskdefinition/ns"
+
+
+# --- patch_resource ---------------------------------------------------------------------------
+
+from app.services.rbac import patch_resource  # noqa: E402
+
+
+def _mock_http_patch(status_code=200, payload=None, side_effect=None):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = payload if payload is not None else {}
+    client = AsyncMock()
+    client.request.return_value = resp
+    client.request.side_effect = side_effect
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return client, patch("app.services.rbac.httpx.AsyncClient", return_value=ctx)
+
+
+@pytest.mark.asyncio
+@patch("app.services.rbac._get_tls_verify", return_value=True)
+@patch("app.services.rbac._rancher_url", return_value="https://rancher.test")
+async def test_patch_resource_as_user(_url, _tls):
+    body = {"metadata": {"annotations": {"a": "b"}}}
+    client, p = _mock_http_patch(payload={"metadata": {"name": "d1"}})
+    with p:
+        assert await patch_resource("tok", AITASK_DEFINITION_STEVE_TYPE, "ns", "d1", body) == {"metadata": {"name": "d1"}}
+    args, kwargs = client.request.call_args
+    assert args == ("PATCH", "https://rancher.test/v1/ai.cattle.io.aitaskdefinition/ns/d1")
+    assert kwargs["json"] == body
+    assert kwargs["headers"]["Cookie"] == "R_SESS=tok"
+    assert kwargs["headers"]["Content-Type"] == "application/merge-patch+json"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code,exc_type", [
+    (401, AccessDenied),
+    (403, AccessDenied),
+    (404, NotFound),
+    (500, RBACError),
+])
+@patch("app.services.rbac._get_tls_verify", return_value=True)
+@patch("app.services.rbac._rancher_url", return_value="https://rancher.test")
+async def test_patch_resource_errors(_url, _tls, code, exc_type):
+    _, p = _mock_http_patch(status_code=code)
+    with p, pytest.raises(exc_type):
+        await patch_resource("tok", AITASK_DEFINITION_STEVE_TYPE, "ns", "d1", {})
+
+
+@pytest.mark.asyncio
+@patch("app.services.rbac._get_tls_verify", return_value=True)
+@patch("app.services.rbac._rancher_url", return_value="https://rancher.test")
+async def test_patch_resource_request_error(_url, _tls):
+    _, p = _mock_http_patch(side_effect=Exception("boom"))
+    with p, pytest.raises(RBACError):
+        await patch_resource("tok", AITASK_DEFINITION_STEVE_TYPE, "ns", "d1", {})
+
+
+@pytest.mark.asyncio
+async def test_patch_resource_missing_token():
+    with pytest.raises(RBACError):
+        await patch_resource("", AITASK_DEFINITION_STEVE_TYPE, "ns", "d1", {})

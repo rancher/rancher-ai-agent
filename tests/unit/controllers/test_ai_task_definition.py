@@ -238,3 +238,64 @@ async def test_daemon_survives_errors():
             name="daily", namespace="ns", uid="uid-1", stopped=stopped, logger=MagicMock(),
         )
     stopped.wait.assert_awaited_once_with(sched.MAX_SLEEP_SECONDS)
+
+
+# --- Run now --------------------------------------------------------------------
+
+def test_manual_task_name_is_deterministic_and_fits():
+    name = "a" * 52
+    assert sched.manual_task_name(name, "t1") == sched.manual_task_name(name, "t1")
+    assert sched.manual_task_name(name, "t1") != sched.manual_task_name(name, "t2")
+    assert len(sched.manual_task_name(name, "2026-01-01T00:00:00.000Z")) == 63
+
+
+def test_manual_task_body():
+    body = sched.build_manual_task_body("daily", "uid-1", {"prompt": "check"}, "2026-01-01T10:00:00.000Z")
+    assert body["metadata"]["name"] == sched.manual_task_name("daily", "2026-01-01T10:00:00.000Z")
+    assert body["metadata"]["labels"] == {"ai.cattle.io/task-definition": "daily", "ai.cattle.io/trigger": "manual"}
+    assert body["metadata"]["annotations"] == {"ai.cattle.io/run-requested-at": "2026-01-01T10:00:00.000Z"}
+    assert body["metadata"]["ownerReferences"][0]["uid"] == "uid-1"
+    assert body["spec"] == {"taskDefinitionRef": "daily", "prompt": "check"}
+
+
+async def _run_now(api, new):
+    logger = MagicMock()
+    with patch.object(sched, "_api", return_value=api):
+        await sched.run_now(
+            new=new, spec={"prompt": "check", "suspend": True}, name="daily", namespace="ns",
+            uid="uid-1", logger=logger,
+        )
+    return logger
+
+
+@pytest.mark.asyncio
+async def test_run_now_creates_manual_task():
+    api = _api()
+    await _run_now(api, "2026-01-01T10:00:00.000Z")
+    body = api.create_namespaced_custom_object.call_args.kwargs["body"]
+    assert body["metadata"]["labels"]["ai.cattle.io/trigger"] == "manual"
+    assert not api.patch_namespaced_custom_object_status.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new", [None, "", "  "])
+async def test_run_now_ignores_empty_value(new):
+    api = _api()
+    await _run_now(api, new)
+    assert not api.create_namespaced_custom_object.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["", "Pending", "Running"])
+async def test_run_now_skips_when_task_active(phase):
+    api = _api(active_phases=[phase])
+    logger = await _run_now(api, "t1")
+    assert not api.create_namespaced_custom_object.called
+    logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_now_ignores_conflict():
+    api = _api()
+    api.create_namespaced_custom_object.side_effect = ApiException(status=409)
+    await _run_now(api, "t1")

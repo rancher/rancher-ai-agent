@@ -57,9 +57,12 @@ def _rancher_url() -> str | None:
     return os.environ.get("RANCHER_URL", "").strip() or _load_rancher_url()
 
 
-async def _steve_get(token: str, path: str, params: dict | None = None) -> httpx.Response:
+async def _steve_request(
+    method: str, token: str, path: str, params: dict | None = None,
+    json: dict | None = None, content_type: str | None = None,
+) -> httpx.Response:
     """
-    GET ``/v1/<path>`` from Rancher's Steve API as the holder of *token*.
+    Send *method* ``/v1/<path>`` to Rancher's Steve API as the holder of *token*.
 
     Raises:
         RBACError: If the token/URL is missing or the request fails.
@@ -76,9 +79,18 @@ async def _steve_get(token: str, path: str, params: dict | None = None) -> httpx
 
     try:
         async with httpx.AsyncClient(timeout=5.0, verify=_get_tls_verify()) as http_client:
-            return await http_client.get(url, headers=headers, params=params)
+            if method == "GET":
+                return await http_client.get(url, headers=headers, params=params)
+            if content_type:
+                headers["Content-Type"] = content_type
+            return await http_client.request(method, url, headers=headers, params=params, json=json)
     except Exception as e:
         raise RBACError(f"Request to Rancher /v1/{path} failed: {e}") from e
+
+
+async def _steve_get(token: str, path: str, params: dict | None = None) -> httpx.Response:
+    """GET ``/v1/<path>`` from Rancher's Steve API as the holder of *token*."""
+    return await _steve_request("GET", token, path, params)
 
 
 async def accessible_agent_configs(token: str) -> list[AgentConfig]:
@@ -143,4 +155,28 @@ async def accessible_resource(token: str, steve_type: str, namespace: str, name:
         raise NotFound(f"{steve_type} {name} not found")
     if resp.status_code != 200:
         raise RBACError(f"Rancher {steve_type} {name} request returned HTTP {resp.status_code}")
+    return resp.json()
+
+
+async def patch_resource(token: str, steve_type: str, namespace: str, name: str, body: dict) -> dict:
+    """
+    Merge-patch the *steve_type* object *name* in *namespace* as the holder of *token*.
+
+    Rancher checks that the user may ``patch`` this object (honoring ``resourceNames``).
+
+    Raises:
+        NotFound: If the object does not exist (or is hidden from the user).
+        AccessDenied: If Rancher denies the user patching the object.
+        RBACError: If the request fails (fail closed).
+    """
+    resp = await _steve_request(
+        "PATCH", token, f"{steve_type}/{namespace}/{name}",
+        json=body, content_type="application/merge-patch+json",
+    )
+    if resp.status_code in (401, 403):
+        raise AccessDenied(f"Access denied patching {steve_type} {name} (HTTP {resp.status_code})")
+    if resp.status_code == 404:
+        raise NotFound(f"{steve_type} {name} not found")
+    if not 200 <= resp.status_code < 300:
+        raise RBACError(f"Rancher {steve_type} {name} patch returned HTTP {resp.status_code}")
     return resp.json()

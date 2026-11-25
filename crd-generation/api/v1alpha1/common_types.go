@@ -12,6 +12,9 @@ const (
 	LabelTaskCredentials = "ai.cattle.io/task-credentials"
 	// AnnotationScheduledAt holds the RFC3339 scheduled time of scheduled AITasks.
 	AnnotationScheduledAt = "ai.cattle.io/scheduled-at"
+	// AnnotationRunRequestedAt is set on an AITaskDefinition to request a manual run ("Run now").
+	// Every new value creates one AITask with the manual trigger, also copied to that AITask.
+	AnnotationRunRequestedAt = "ai.cattle.io/run-requested-at"
 
 	TriggerLabelScheduled = "scheduled"
 	TriggerLabelManual    = "manual"

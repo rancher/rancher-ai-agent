@@ -35,4 +35,7 @@ def agentic_tasks_enabled() -> bool:
 LABEL_TASK_DEFINITION = "ai.cattle.io/task-definition"
 LABEL_TRIGGER = "ai.cattle.io/trigger"
 ANNOTATION_SCHEDULED_AT = "ai.cattle.io/scheduled-at"
+# Set on an AITaskDefinition to request a manual run ("Run now"). Every new value creates one AITask.
+ANNOTATION_RUN_REQUESTED_AT = "ai.cattle.io/run-requested-at"
 TRIGGER_SCHEDULED = "scheduled"
+TRIGGER_MANUAL = "manual"

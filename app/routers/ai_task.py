@@ -1,10 +1,18 @@
 import logging
 import os
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 
-from ..constants import AITASK_STORE_NAMESPACE, LABEL_TASK_DEFINITION
+from ..constants import (
+    AITASK_STORE_NAMESPACE,
+    ANNOTATION_RUN_REQUESTED_AT,
+    LABEL_TASK_DEFINITION,
+    LABEL_TRIGGER,
+)
+from ..controllers.ai_task_definition import _api as _k8s_api
+from ..controllers.ai_task_definition import has_active_task, manual_task_name
 from ..services.rbac import (
     AITASK_DEFINITION_STEVE_TYPE,
     AITASK_STEVE_TYPE,
@@ -13,6 +21,7 @@ from ..services.rbac import (
     RBACError,
     accessible_resource,
     accessible_resources,
+    patch_resource,
 )
 
 router = APIRouter(prefix="/v1/api", tags=["aitasks"])
@@ -33,6 +42,7 @@ def _summary(task: dict) -> dict:
     return {
         "name": metadata.get("name"),
         "taskDefinitionRef": spec.get("taskDefinitionRef"),
+        "trigger": (metadata.get("labels") or {}).get(LABEL_TRIGGER),
         "phase": task_status.get("phase") or "Pending",
         "startTime": task_status.get("startTime"),
         "completionTime": task_status.get("completionTime"),
@@ -103,6 +113,47 @@ async def get_ai_task_definitions(request: Request) -> JSONResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Internal server error"},
         )
+
+
+@router.post("/aitaskdefinitions/{name}/run", status_code=status.HTTP_202_ACCEPTED)
+async def run_ai_task_definition(
+    request: Request,
+    name: str = Path(..., max_length=63, pattern=_LABEL_VALUE_PATTERN),
+) -> JSONResponse:
+    """
+    Run an AITaskDefinition now.
+
+    Sets the run-requested-at annotation on the definition as the calling user, so
+    Rancher checks that the user may ``patch`` it. The scheduler controller then
+    creates the AITask, whose name is returned. Returns 409 if an AITask of the
+    definition is still active.
+    """
+    token = _session_token(request)
+
+    try:
+        await accessible_resource(token, AITASK_DEFINITION_STEVE_TYPE, NAMESPACE, name)
+    except RBACError as e:
+        raise _rbac_http_error(e, "AITaskDefinition")
+
+    try:
+        active = await has_active_task(_k8s_api(), NAMESPACE, name)
+    except Exception as e:
+        logging.error(f"Error checking active AITasks of {name}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+    if active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An AITask of this definition is still active")
+
+    requested_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    patch = {"metadata": {"annotations": {ANNOTATION_RUN_REQUESTED_AT: requested_at}}}
+    try:
+        await patch_resource(token, AITASK_DEFINITION_STEVE_TYPE, NAMESPACE, name, patch)
+    except RBACError as e:
+        raise _rbac_http_error(e, "AITaskDefinition")
+
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={"name": manual_task_name(name, requested_at), "requestedAt": requested_at},
+    )
 
 
 @router.get("/aitasks")

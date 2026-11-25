@@ -18,9 +18,9 @@ appVersion: "0.1.0-beta"
 annotations:
   catalog.cattle.io/certified: rancher
   catalog.cattle.io/display-name: Rancher AI Agent
-  catalog.cattle.io/kube-version: '>= 1.31.4-0 < 1.35.0-0'
+  catalog.cattle.io/kube-version: '>= 1.35-0 < 1.38.0-0'
   catalog.cattle.io/os: linux
   catalog.cattle.io/permits-os: linux
-  catalog.cattle.io/rancher-version: '>= 2.13.0-0 < 2.14.0-0'
-  catalog.cattle.io/release-name: cattle-ai-agent-system
+  catalog.cattle.io/rancher-version: '>= 2.16.0-0 < 2.17.0-0'
+  catalog.cattle.io/release-name: rancher-ai-agent
   catalog.cattle.io/hidden: "true"

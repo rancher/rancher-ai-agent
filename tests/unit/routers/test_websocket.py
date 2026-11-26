@@ -26,6 +26,7 @@ class MockWebSocket:
     def __init__(self, messages=None):
         self.accepted = False
         self.closed = False
+        self.close_code = None
         self.cookies = {"R_SESS": "fake_token"}
         self.url = MagicMock()
         self.url.hostname = "fake.hostname"
@@ -39,6 +40,7 @@ class MockWebSocket:
         self.app.memory_manager = MagicMock()
         self.app.memory_manager.storage_type = MagicMock(value="in-memory")
         self.app.memory_manager.get_checkpointer = MagicMock(return_value=MagicMock())
+        self.app.memory_manager.can_access_thread = AsyncMock(return_value=True)
 
     async def accept(self):
         self.accepted = True
@@ -51,8 +53,9 @@ class MockWebSocket:
     async def send_text(self, data):
         self._send_queue.append(data)
 
-    async def close(self):
+    async def close(self, code=1000, reason=None):
         self.closed = True
+        self.close_code = code
 
 
 @pytest.fixture
@@ -154,6 +157,47 @@ async def test_websocket_endpoint_with_thread_id(mock_dependencies):
     assert mock_ws.accepted
     metadata_msg = mock_ws._send_queue[0]
     assert "custom-thread-id" in metadata_msg
+    mock_ws.app.memory_manager.can_access_thread.assert_awaited_once_with("custom-thread-id", "user-123")
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_closes_without_user(mock_dependencies):
+    mock_dependencies["get_user_id"].return_value = None
+    mock_ws = MockWebSocket(messages=["hello"])
+
+    await websocket_endpoint(mock_ws, "custom-thread-id", MagicMock())
+
+    assert not mock_ws.accepted
+    assert mock_ws.closed
+    assert mock_ws.close_code == 1008
+    mock_ws.app.memory_manager.can_access_thread.assert_not_awaited()
+    mock_dependencies["build_agent"].assert_not_called()
+    mock_dependencies["call_agent"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_closes_on_thread_of_other_user(mock_dependencies):
+    mock_ws = MockWebSocket(messages=["hello"])
+    mock_ws.app.memory_manager.can_access_thread.return_value = False
+
+    await websocket_endpoint(mock_ws, "other-thread-id", MagicMock())
+
+    assert not mock_ws.accepted
+    assert mock_ws.closed
+    assert mock_ws.close_code == 1008
+    assert mock_ws._send_queue == []
+    mock_dependencies["build_agent"].assert_not_called()
+    mock_dependencies["call_agent"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_new_chat_skips_thread_check(mock_dependencies):
+    mock_ws = MockWebSocket(messages=["hello"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock())
+
+    assert mock_ws.accepted
+    mock_ws.app.memory_manager.can_access_thread.assert_not_awaited()
 
 
 @pytest.mark.asyncio

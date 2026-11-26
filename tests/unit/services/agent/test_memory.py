@@ -68,6 +68,18 @@ async def test_fetch_chat_returns_chat_if_exists():
     assert chat["createdAt"] == "2024-01-01T00:00:00Z"
 
 @pytest.mark.asyncio
+async def test_fetch_chat_returns_none_for_another_users_chat():
+    mock_checkpointer = MagicMock()
+    tuple1 = MagicMock()
+    tuple1.metadata = {"user_id": "owner"}
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=tuple1)
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    manager._is_empty_chat = MagicMock(return_value=False)
+    assert await manager.fetch_chat("chat1", "intruder") is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_chat_returns_none_if_not_found():
     mock_checkpointer = MagicMock()
     mock_checkpointer.aget_tuple = AsyncMock(return_value=None)
@@ -75,6 +87,85 @@ async def test_fetch_chat_returns_none_if_not_found():
     manager.checkpointer = mock_checkpointer
     chat = await manager.fetch_chat("chat1", "user1")
     assert chat is None
+
+async def _manager_with_owned_chat(chat_id: str, user_id: str) -> MemoryManager:
+    from langchain_core.messages import HumanMessage
+    from langgraph.checkpoint.base import empty_checkpoint
+    from langgraph.checkpoint.memory import InMemorySaver
+    manager = MemoryManager()
+    manager.checkpointer = InMemorySaver()
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"] = {"messages_history": [
+        HumanMessage(content="private question", additional_kwargs={"request_metadata": {}}),
+    ]}
+    version = manager.checkpointer.get_next_version(None, None)
+    checkpoint["channel_versions"] = {"messages_history": version}
+    await manager.checkpointer.aput(
+        config={"configurable": {"thread_id": chat_id, "checkpoint_ns": ""}},
+        checkpoint=checkpoint,
+        metadata={"user_id": user_id, "chat_name": "original", "source": "update", "step": 0, "parents": {}},
+        new_versions={"messages_history": version},
+    )
+    return manager
+
+@pytest.mark.asyncio
+async def test_update_chat_ignores_another_users_chat():
+    manager = await _manager_with_owned_chat("chat1", "owner")
+
+    assert await manager.update_chat("chat1", "intruder", {"name": "renamed"}) is None
+
+    checkpoint_tuple = await manager.checkpointer.aget_tuple({"configurable": {"thread_id": "chat1"}})
+    assert checkpoint_tuple.metadata["chat_name"] == "original"
+    assert checkpoint_tuple.metadata["user_id"] == "owner"
+
+@pytest.mark.asyncio
+async def test_update_chat_renames_own_chat():
+    manager = await _manager_with_owned_chat("chat1", "owner")
+
+    await manager.update_chat("chat1", "owner", {"name": "renamed"})
+
+    checkpoint_tuple = await manager.checkpointer.aget_tuple({"configurable": {"thread_id": "chat1"}})
+    assert checkpoint_tuple.metadata["chat_name"] == "renamed"
+
+@pytest.mark.asyncio
+async def test_fetch_messages_returns_nothing_for_another_users_chat():
+    manager = await _manager_with_owned_chat("chat1", "owner")
+
+    assert await manager.fetch_messages("chat1", "intruder", {}) == []
+    assert len(await manager.fetch_messages("chat1", "owner", {})) == 1
+
+def _manager_with_thread(checkpoint_tuple):
+    mock_checkpointer = MagicMock()
+    mock_checkpointer.aget_tuple = AsyncMock(return_value=checkpoint_tuple)
+    manager = MemoryManager()
+    manager.checkpointer = mock_checkpointer
+    return manager
+
+@pytest.mark.asyncio
+async def test_can_access_thread_same_user():
+    manager = _manager_with_thread(MagicMock(metadata={"user_id": "user1"}))
+    assert await manager.can_access_thread("chat1", "user1") is True
+
+@pytest.mark.asyncio
+async def test_can_access_thread_other_user():
+    manager = _manager_with_thread(MagicMock(metadata={"user_id": "user-a"}))
+    assert await manager.can_access_thread("chat1", "user-b") is False
+
+@pytest.mark.asyncio
+async def test_can_access_thread_without_user_metadata():
+    manager = _manager_with_thread(MagicMock(metadata={}))
+    assert await manager.can_access_thread("chat1", "user1") is False
+
+@pytest.mark.asyncio
+async def test_can_access_thread_new_thread():
+    manager = _manager_with_thread(None)
+    assert await manager.can_access_thread("new-chat", "user1") is True
+
+@pytest.mark.asyncio
+async def test_can_access_thread_missing_user():
+    manager = _manager_with_thread(None)
+    assert await manager.can_access_thread("new-chat", None) is False
+    manager.checkpointer.aget_tuple.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_delete_chat_deletes_thread_if_exists():
@@ -145,6 +236,7 @@ async def test_fetch_messages_payload():
     }
     
     # Setup checkpoint tuple
+    checkpoint_tuple.metadata = {"user_id": "user1"}
     checkpoint_tuple.checkpoint = {
         "channel_values": {
             "messages_history": [human_msg, ai_msg],
@@ -239,6 +331,7 @@ async def test_message_types_have_correct_fields():
     }
     
     # Setup checkpoint tuple
+    checkpoint_tuple.metadata = {"user_id": "user1"}
     checkpoint_tuple.checkpoint = {
         "channel_values": {
             "messages_history": [human_msg, ai_msg, tool_msg],

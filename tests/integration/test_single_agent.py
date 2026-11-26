@@ -438,3 +438,61 @@ def test_websocket_with_ui_tools():
                     mock_load_configmap.assert_called(), "UI tools config should be loaded from ConfigMap"
     finally:
         LLMManager._instance = None
+
+
+def test_websocket_resume_thread_per_user(monkeypatch):
+    """A thread can only be resumed by the user that created it."""
+    import asyncio
+    from starlette.websockets import WebSocketDisconnect
+    from app.services.memory import MemoryManager
+
+    memory_manager = MemoryManager()
+    asyncio.run(memory_manager.initialize())  # in-memory checkpointer that persists across connections
+    monkeypatch.setattr(app, "memory_manager", memory_manager)
+    current_user = {"id": "user-a"}
+    monkeypatch.setattr(
+        "app.routers.websocket.get_user_id_from_token",
+        AsyncMock(side_effect=lambda cookies: current_user["id"]),
+    )
+
+    LLMManager._instance = FakeMessagesListChatModelWithTools(responses=[
+        AIMessage(content="first answer"),
+        AIMessage(content="second answer"),
+    ])
+    try:
+        thread_id = "11111111-1111-1111-1111-111111111111"
+
+        # user-a starts the chat.
+        with client.websocket_connect(f"/v1/ws/messages/{thread_id}") as websocket:
+            websocket.receive_text()
+            websocket.send_text("prompt 1")
+            msg = ""
+            while not msg.endswith("</message>"):
+                msg += websocket.receive_text()
+        assert msg == "<message>first answer</message>"
+
+        # A different user is closed during the handshake.
+        current_user["id"] = "user-b"
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(f"/v1/ws/messages/{thread_id}"):
+                pass
+        assert exc.value.code == 1008
+
+        # So is a connection without a user.
+        current_user["id"] = None
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(f"/v1/ws/messages/{thread_id}"):
+                pass
+
+        # user-a can resume the chat.
+        current_user["id"] = "user-a"
+        with client.websocket_connect(f"/v1/ws/messages/{thread_id}") as websocket:
+            websocket.receive_text()
+            websocket.send_text("prompt 2")
+            msg = ""
+            while not msg.endswith("</message>"):
+                msg += websocket.receive_text()
+        assert msg == "<message>second answer</message>"
+        assert asyncio.run(memory_manager.can_access_thread(thread_id, "user-a"))
+    finally:
+        LLMManager._instance = None

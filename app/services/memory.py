@@ -218,7 +218,7 @@ class MemoryManager:
         config = RunnableConfig(configurable={"thread_id": chat_id, "user_id": user_id})
         checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
-        if checkpoint_tuple:
+        if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
             logging.debug(f"Found checkpoint_tuple for chat_id: {chat_id}, user_id: {user_id}")
 
             if self._is_empty_chat(checkpoint_tuple):
@@ -235,6 +235,30 @@ class MemoryManager:
             return chat
 
         return None
+
+    async def can_access_thread(self, thread_id: str, user_id: str) -> bool:
+        """
+        Check whether a user may read or write a thread.
+
+        A thread that does not exist yet can be used by anyone, as it will be created for
+        that user. An existing thread can only be used by the user that owns its latest
+        checkpoint; one without an owner is refused.
+
+        Args:
+            thread_id: The ID of the thread.
+            user_id: The ID of the user.
+        Returns:
+            True if the user may use the thread, False otherwise.
+        """
+        if not user_id:
+            return False
+
+        config = RunnableConfig(configurable={"thread_id": thread_id})
+        checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
+        if not checkpoint_tuple:
+            return True
+
+        return checkpoint_tuple.metadata.get("user_id") == user_id
 
     async def update_chat(self, chat_id: str, user_id: str, chat_data: dict) -> dict | None:
         """
@@ -254,7 +278,7 @@ class MemoryManager:
             
             checkpoint_tuple = await self.get_checkpointer().aget_tuple(config)
             
-            if checkpoint_tuple:
+            if checkpoint_tuple and checkpoint_tuple.metadata.get("user_id") == user_id:
                 current_metadata = dict(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else {}
 
                 new_metadata = {**current_metadata, "chat_name": name}
@@ -310,7 +334,7 @@ class MemoryManager:
         config = RunnableConfig(configurable={"thread_id": chat_id, "user_id": user_id})
         checkpoint_tuple = await self.get_checkpointer().aget_tuple(config=config)
 
-        if not checkpoint_tuple:
+        if not checkpoint_tuple or checkpoint_tuple.metadata.get("user_id") != user_id:
             return rows
 
         all_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get("messages_history", [])

@@ -13,7 +13,7 @@ from ..services.oauth2 import handle_oauth_authentication
 from ..services.oauth2.models import OAuth2Canceled
 from dataclasses import dataclass
 from fastapi import APIRouter
-from fastapi import  WebSocket, WebSocketDisconnect, Depends
+from fastapi import  WebSocket, WebSocketDisconnect, Depends, status
 from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
@@ -62,11 +62,18 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
     """
     
     user_id = await get_user_id_from_token(websocket.cookies)
-    
+
+    if not user_id:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     if not thread_id:
         thread_id = str(uuid.uuid4())
+    elif not await websocket.app.memory_manager.can_access_thread(thread_id, user_id):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     logging.debug(f"Starting websocket session with thread_id: {thread_id}, user_id: {user_id}")
-    
+
     await websocket.accept()
     logging.debug("ws/messages connection opened")
     

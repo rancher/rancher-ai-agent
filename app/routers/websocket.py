@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from ..dependencies import get_llm
 from ..services.agent._constants import NoAgentAvailableError, NeedsOauth2
@@ -16,16 +16,21 @@ from ..services.oauth2 import handle_oauth_authentication
 from ..services.oauth2.models import OAuth2Canceled
 from dataclasses import dataclass
 from fastapi import APIRouter
-from fastapi import  WebSocket, WebSocketDisconnect, Depends
+from fastapi import  WebSocket, WebSocketDisconnect, Depends, Query
 from starlette.websockets import WebSocketState
 from langgraph.graph.state import CompiledStateGraph
 from langfuse.langchain import CallbackHandler
 from langchain_core.language_models.llms import BaseLanguageModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..services.auth import get_user_id_from_token
+from ..services.aitask_chat import TaskNotFinished, aitask_chat_id, resolve_aitask_chat, session_token
+from ..services.rbac import AccessDenied, NotFound, RBACError
 from ..constants import (
+    AITASK_SEED_KWARG,
+    LABEL_VALUE_PATTERN,
+    agentic_tasks_enabled,
     CONTEXT_PARAMETERS_SUFFIX,
     STOP_TAG,
     STOP_CANCEL_REPLY,
@@ -64,22 +69,42 @@ class WebSocketRequest:
 
 @router.websocket("/v1/ws/messages")
 @router.websocket("/v1/ws/messages/{thread_id}")
-async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: BaseLanguageModel = Depends(get_llm)):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    thread_id: str = None,
+    llm: BaseLanguageModel = Depends(get_llm),
+    aitask: Annotated[str | None, Query(max_length=63, pattern=LABEL_VALUE_PATTERN)] = None,
+):
     """
     WebSocket endpoint for the agent.
     
     Accepts a WebSocket connection, sets up the agent and
     handles the back-and-forth communication with the client.
+
+    With ``?aitask=<name>`` the conversation is the user's follow-up on that AITask
+    run: the thread id is derived from the task and the user (``thread_id`` is
+    ignored), and the first turn starts from the task prompt and output.
     """
     
     user_id = await get_user_id_from_token(websocket.cookies)
     
     if not thread_id:
         thread_id = str(uuid.uuid4())
-    logging.debug(f"Starting websocket session with thread_id: {thread_id}, user_id: {user_id}")
     
     await websocket.accept()
     logging.debug("ws/messages connection opened")
+
+    seed_messages: list[BaseMessage] = []
+    if aitask:
+        try:
+            thread_id, seed_messages = await _resolve_aitask_chat(websocket, aitask, user_id)
+        except _AITaskChatError as e:
+            logging.warning(f"Cannot open follow-up chat on AITask {aitask}: {e}")
+            await websocket.send_text(f'<chat-error>{json.dumps({"message": str(e)})}</chat-error>')
+            await websocket.close()
+            return
+
+    logging.debug(f"Starting websocket session with thread_id: {thread_id}, user_id: {user_id}")
     
     try:
         agent, agents_metadata =  await build_agent(llm=llm, websocket=websocket) 
@@ -108,6 +133,13 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             "user_id": user_id,
         },
     }
+
+    # Seed of an AITask follow-up, added to the first turn of a still empty thread.
+    pending_seed: list[BaseMessage] = []
+    if seed_messages:
+        state = await agent.aget_state(config=base_config)
+        if not (state and state.values.get("messages")):
+            pending_seed = seed_messages
 
     if os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_HOST"):
         langfuse_handler = CallbackHandler()
@@ -138,7 +170,9 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
             target_agent, target_config = await _resolve_target_agent(agent, config, ws_request, websocket, llm)
             if not target_agent:
                 continue
-            input_data = await _build_input_data(target_agent, target_config, ws_request)
+            input_data = await _build_input_data(target_agent, target_config, ws_request, pending_seed)
+            if not isinstance(input_data, Command):
+                pending_seed = []
 
             # A run can need OAuth2 several times (e.g. a plan whose subtasks use
             # different agents), so authenticate and resume until it completes.
@@ -197,6 +231,43 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str = None, llm: B
         finally:
             if message_opened and websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_text("</message>")
+
+class _AITaskChatError(Exception):
+    """A follow-up chat on an AITask can't be opened. The message is sent to the client."""
+    pass
+
+
+async def _resolve_aitask_chat(websocket: WebSocket, name: str, user_id: str | None) -> tuple[str, list[BaseMessage]]:
+    """
+    Resolve the user's follow-up conversation on AITask *name*.
+
+    The task is read through Rancher as the user, so the user must be allowed to
+    get it. Returns the thread id of the conversation and its seed messages.
+
+    Raises:
+        _AITaskChatError: If the feature is off, the user is unknown, the task is not
+            accessible or has not finished.
+    """
+    if not agentic_tasks_enabled():
+        raise _AITaskChatError("Agentic tasks are not enabled.")
+    token = session_token(websocket.cookies)
+    if not token or not user_id:
+        raise _AITaskChatError("Unauthorized.")
+    try:
+        uid, seed_messages = await resolve_aitask_chat(token, websocket.app.memory_manager.get_store(), name)
+    except AccessDenied:
+        raise _AITaskChatError(f"You are not allowed to access AITask {name}.")
+    except NotFound:
+        raise _AITaskChatError(f"AITask {name} not found.")
+    except TaskNotFinished:
+        raise _AITaskChatError(f"AITask {name} has not finished yet.")
+    except RBACError:
+        raise _AITaskChatError("Unable to verify permissions with Rancher.")
+    except Exception as e:
+        logging.error(f"Error loading AITask {name} for a follow-up chat: {e}", exc_info=True)
+        raise _AITaskChatError(f"Unable to load AITask {name}.")
+    return aitask_chat_id(uid, user_id), seed_messages
+
 
 async def _handle_single_agent_oauth(
     llm: BaseLanguageModel,
@@ -379,10 +450,11 @@ async def _record_stopped_in_history(agent: CompiledStateGraph, config: dict, pa
 
     request_id = config["configurable"].get("request_id")
     for msg in state.values.get("messages", []):
-        if (
-            isinstance(msg, HumanMessage)
-            and msg.additional_kwargs.get("request_id") == request_id
-            and msg.id not in history_ids
+        if msg.id in history_ids:
+            continue
+        # The seed of an AITask follow-up is part of the first turn's input.
+        if msg.additional_kwargs.get(AITASK_SEED_KWARG) or (
+            isinstance(msg, HumanMessage) and msg.additional_kwargs.get("request_id") == request_id
         ):
             history.append(msg)
 
@@ -817,17 +889,24 @@ async def _resolve_target_agent(
     return child_agent.agent, config
 
 
-async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request: WebSocketRequest) -> dict | Command:
+async def _build_input_data(
+    agent: CompiledStateGraph,
+    config: dict,
+    ws_request: WebSocketRequest,
+    seed_messages: list[BaseMessage] | None = None,
+) -> dict | Command:
     """
     Builds the input data for the agent, handling interrupt resumption.
     
     If the agent is waiting on an interrupt, resumes with the user's response.
-    Otherwise, creates a new user message.
+    Otherwise, creates a new user message, preceded by ``seed_messages`` if given
+    (the task prompt and output a follow-up conversation on an AITask starts with).
     
     Args:
         agent: The compiled LangGraph agent.
         config: The configuration dictionary for the agent run.
         ws_request: The parsed WebSocket request.
+        seed_messages: Messages to add before the user message.
         
     Returns:
         Either a Command to resume an interrupt, or a messages dict for a new turn.
@@ -839,6 +918,7 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
         return Command(resume=ws_request.prompt)
 
     input_messages = [
+        *(seed_messages or []),
         HumanMessage(
             content=ws_request.prompt,
             additional_kwargs={
@@ -849,8 +929,14 @@ async def _build_input_data(agent: CompiledStateGraph, config: dict, ws_request:
         )
     ]
 
+    if not seed_messages:
+        return {"messages": input_messages}
+
+    # Graphs that keep messages_history with MessagesHistoryMiddleware copy the seed from
+    # messages (and ignore this key); the planner graph only records what it is given.
     return {
         "messages": input_messages,
+        "messages_history": list(seed_messages),
     }
 
 def _build_stop_reply(reason: str) -> str:

@@ -27,6 +27,13 @@ STOP_CONTEXT_REPLY = (
 # LangGraph store namespace holding AITask outcomes (keyed by AITask uid).
 AITASK_STORE_NAMESPACE = ("aitasks",)
 
+# additional_kwargs flag of the messages a follow-up conversation on an AITask starts with.
+AITASK_SEED_KWARG = "aitask_seed"
+
+# Label values are at most 63 chars of [a-z0-9.-], starting/ending alphanumeric.
+# AITask and AITaskDefinition names are used as label values.
+LABEL_VALUE_PATTERN = r"^[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?$"
+
 
 def agentic_tasks_enabled() -> bool:
     """AITask support (controller and endpoints) is enabled with AGENTIC_TASK_ENABLED=true."""

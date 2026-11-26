@@ -1,5 +1,4 @@
 import logging
-import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, status
@@ -10,9 +9,12 @@ from ..constants import (
     ANNOTATION_RUN_REQUESTED_AT,
     LABEL_TASK_DEFINITION,
     LABEL_TRIGGER,
+    LABEL_VALUE_PATTERN,
 )
 from ..controllers.ai_task_definition import _api as _k8s_api
 from ..controllers.ai_task_definition import has_active_task, manual_task_name
+from ..services.aitask_chat import aitask_chat_id, session_token
+from ..services.auth import get_user_id_from_token
 from ..services.rbac import (
     AITASK_DEFINITION_STEVE_TYPE,
     AITASK_STEVE_TYPE,
@@ -28,10 +30,9 @@ router = APIRouter(prefix="/v1/api", tags=["aitasks"])
 
 NAMESPACE = "cattle-ai-agent-system"
 
-# Label values are at most 63 chars of [a-z0-9.-], starting/ending alphanumeric.
-# AITaskDefinition names are used as label values, so this also keeps the label
-# selector built from ``definition`` a single equality term.
-_LABEL_VALUE_PATTERN = r"^[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?$"
+# AITaskDefinition names are used as label values, so validating them as such also
+# keeps the label selector built from ``definition`` a single equality term.
+_LABEL_VALUE_PATTERN = LABEL_VALUE_PATTERN
 
 
 def _summary(task: dict) -> dict:
@@ -76,7 +77,7 @@ def _session_token(request: Request) -> str:
     user, so Rancher authenticates the token and enforces the user's (and their
     groups') permissions on ``aitasks.ai.cattle.io``.
     """
-    token = os.environ.get("RANCHER_API_TOKEN", request.cookies.get("R_SESS", ""))
+    token = session_token(request.cookies)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     return token
@@ -189,7 +190,9 @@ async def get_ai_tasks(
 async def get_ai_task(request: Request, name: str) -> JSONResponse:
     """
     Get an AITask (if the user may access it) with the outcome stored by the
-    executor (``output``/``error``).
+    executor (``output``/``error``) and the id of the user's follow-up chat on it
+    (``chatId``, opened with ``/v1/ws/messages?aitask=<name>``; the chat exists once
+    the user has sent a first message).
     """
     token = _session_token(request)
 
@@ -203,6 +206,7 @@ async def get_ai_task(request: Request, name: str) -> JSONResponse:
         uid = task.get("metadata", {}).get("uid", "")
         item = await request.app.memory_manager.get_store().aget(AITASK_STORE_NAMESPACE, uid) if uid else None
         stored = item.value if item else {}
+        user_id = await get_user_id_from_token(request.cookies) if uid else None
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -212,6 +216,7 @@ async def get_ai_task(request: Request, name: str) -> JSONResponse:
                 "agents": spec.get("agents") or [],
                 "output": stored.get("output"),
                 "error": stored.get("error"),
+                "chatId": aitask_chat_id(uid, user_id) if user_id else None,
             },
         )
     except Exception as e:

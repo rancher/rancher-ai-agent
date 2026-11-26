@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from langgraph.store.memory import InMemoryStore
 
 from app.routers import ai_task as ai_task_router
+from app.services.aitask_chat import aitask_chat_id
 from app.services.rbac import (
     AITASK_DEFINITION_STEVE_TYPE,
     AITASK_STEVE_TYPE,
@@ -44,6 +45,12 @@ def mock_request(store, monkeypatch):
     req.app.memory_manager.get_store.return_value = store
     req.cookies = {"R_SESS": "token"}
     return req
+
+
+@pytest.fixture(autouse=True)
+def user_id():
+    with patch.object(ai_task_router, "get_user_id_from_token", AsyncMock(return_value="user-1")) as m:
+        yield m
 
 
 @pytest.fixture
@@ -202,6 +209,15 @@ async def test_get_includes_stored_result(mock_request, get_resource, store):
     assert body["prompt"] == "check"
     assert body["agents"] == ["rancher"]
     get_resource.assert_awaited_once_with("token", AITASK_STEVE_TYPE, ai_task_router.NAMESPACE, "t1")
+    assert body["chatId"] == aitask_chat_id("u1", "user-1")
+
+
+@pytest.mark.asyncio
+async def test_get_without_user_has_no_chat_id(mock_request, get_resource, user_id):
+    user_id.return_value = None
+    get_resource.return_value = _task("t1", "2026-01-01T00:00:00Z", uid="u1", phase="Succeeded")
+    body = json.loads((await ai_task_router.get_ai_task(mock_request, name="t1")).body)
+    assert body["chatId"] is None
 
 
 @pytest.mark.asyncio

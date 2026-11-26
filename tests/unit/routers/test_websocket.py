@@ -1341,3 +1341,154 @@ class TestCancelWaitingPlan:
         assert result is False
         websocket.send_text.assert_not_awaited()
         mock_close.assert_not_awaited()
+
+
+# --- AITask follow-up conversations ---
+
+def _seed():
+    return [
+        HumanMessage(content="check the clusters", id="seed-h", additional_kwargs={"aitask_seed": True}),
+        AIMessage(content="report", id="seed-a", additional_kwargs={"aitask_seed": True}),
+    ]
+
+
+def _plain_request(prompt="why?"):
+    return WebSocketRequest(prompt=prompt, user_input=prompt, context={}, tags=[], labels={}, agent="", ui_tools={})
+
+
+class TestBuildInputDataSeed:
+    @pytest.mark.asyncio
+    async def test_seed_precedes_user_message(self):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(interrupts=[]))
+        config = {"configurable": {"request_id": "r1", "request_metadata": {}}}
+
+        result = await _build_input_data(agent, config, _plain_request(), _seed())
+
+        assert [m.content for m in result["messages"]] == ["check the clusters", "report", "why?"]
+        assert [m.id for m in result["messages_history"]] == ["seed-h", "seed-a"]
+
+    @pytest.mark.asyncio
+    async def test_no_seed_has_no_history_key(self):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(interrupts=[]))
+        config = {"configurable": {"request_id": "r1", "request_metadata": {}}}
+
+        result = await _build_input_data(agent, config, _plain_request(), [])
+
+        assert list(result) == ["messages"]
+
+    @pytest.mark.asyncio
+    async def test_seed_ignored_on_interrupt_resume(self):
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=MagicMock(interrupts=[MagicMock()], values={"messages": []}))
+        config = {"configurable": {"request_id": "r1", "request_metadata": {}}}
+
+        result = await _build_input_data(agent, config, _plain_request("yes"), _seed())
+
+        assert isinstance(result, Command)
+
+
+@pytest.mark.asyncio
+async def test_record_stopped_keeps_seed_messages():
+    seed = _seed()
+    human = HumanMessage(content="why?", id="h1", additional_kwargs={"request_id": "req1"})
+    agent = MagicMock()
+    agent.aget_state = AsyncMock(return_value=MagicMock(values={"messages": [*seed, human], "messages_history": []}))
+    agent.aupdate_state = AsyncMock()
+    config = {"configurable": {"request_id": "req1", "request_metadata": {}}}
+
+    await _record_stopped_in_history(agent, config, "partial", STOP_REASON_MESSAGE_MANUAL)
+
+    history = agent.aupdate_state.call_args.kwargs["values"]["messages_history"]
+    assert [m.id for m in history[:3]] == ["seed-h", "seed-a", "h1"]
+    assert history[3].additional_kwargs["stopped"] == STOP_REASON_MESSAGE_MANUAL
+
+
+@pytest.fixture
+def aitask_chat_deps(mock_dependencies):
+    with patch("app.routers.websocket.agentic_tasks_enabled", return_value=True) as enabled, \
+         patch("app.routers.websocket.resolve_aitask_chat", new_callable=AsyncMock) as resolve:
+        resolve.return_value = ("task-uid", _seed())
+        mock_dependencies["agent"].aget_state = AsyncMock(return_value=MagicMock(interrupts=[], values={}))
+        yield {**mock_dependencies, "enabled": enabled, "resolve": resolve}
+
+
+@pytest.mark.asyncio
+async def test_aitask_chat_uses_derived_thread_and_seeds_first_turn_only(aitask_chat_deps, monkeypatch):
+    from app.services.aitask_chat import aitask_chat_id
+    monkeypatch.delenv("RANCHER_API_TOKEN", raising=False)
+    mock_ws = MockWebSocket(messages=["why?", "and then?"])
+
+    await websocket_endpoint(mock_ws, "ignored-thread", MagicMock(), aitask="daily-1")
+
+    thread_id = aitask_chat_id("task-uid", "user-123")
+    assert thread_id in mock_ws._send_queue[0]
+    assert "ignored-thread" not in mock_ws._send_queue[0]
+    aitask_chat_deps["resolve"].assert_awaited_once()
+    assert aitask_chat_deps["resolve"].call_args.args[0] == "fake_token"
+
+    calls = aitask_chat_deps["call_agent"].call_args_list
+    assert len(calls) == 2
+    first, second = (c.kwargs["input_data"] for c in calls)
+    assert [m.content for m in first["messages"]] == ["check the clusters", "report", "why?"]
+    assert [m.content for m in second["messages"]] == ["and then?"]
+    assert calls[0].kwargs["config"]["configurable"]["thread_id"] == thread_id
+
+
+@pytest.mark.asyncio
+async def test_aitask_chat_not_reseeded_when_thread_has_messages(aitask_chat_deps):
+    aitask_chat_deps["agent"].aget_state = AsyncMock(
+        return_value=MagicMock(interrupts=[], values={"messages": [HumanMessage(content="old")]})
+    )
+    mock_ws = MockWebSocket(messages=["why?"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    input_data = aitask_chat_deps["call_agent"].call_args.kwargs["input_data"]
+    assert [m.content for m in input_data["messages"]] == ["why?"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error, text", [
+    ("AccessDenied", "not allowed"),
+    ("NotFound", "not found"),
+    ("TaskNotFinished", "not finished"),
+    ("RBACError", "Unable to verify"),
+])
+async def test_aitask_chat_errors_close_socket(aitask_chat_deps, error, text):
+    from app.services import aitask_chat, rbac
+    exc_type = getattr(rbac, error, None) or getattr(aitask_chat, error)
+    aitask_chat_deps["resolve"].side_effect = exc_type("x")
+    mock_ws = MockWebSocket(messages=["why?"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert mock_ws.closed
+    assert "<chat-error>" in mock_ws._send_queue[0]
+    assert text in mock_ws._send_queue[0]
+    aitask_chat_deps["build_agent"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_aitask_chat_requires_feature_flag(aitask_chat_deps):
+    aitask_chat_deps["enabled"].return_value = False
+    mock_ws = MockWebSocket(messages=["why?"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert mock_ws.closed
+    assert "not enabled" in mock_ws._send_queue[0]
+    aitask_chat_deps["resolve"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_aitask_chat_requires_user(aitask_chat_deps):
+    aitask_chat_deps["get_user_id"].return_value = None
+    mock_ws = MockWebSocket(messages=["why?"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert mock_ws.closed
+    assert "Unauthorized" in mock_ws._send_queue[0]
+    aitask_chat_deps["resolve"].assert_not_called()

@@ -148,7 +148,7 @@ below).
 | `GET /v1/api/aitaskdefinitions` | Definitions the user can access, sorted by display name. |
 | `POST /v1/api/aitaskdefinitions/{name}/run` | Run now, see [Run now](#run-now). |
 | `GET /v1/api/aitasks?definition=<name>` | Tasks of a definition the user can access, newest first. The definition name is validated as a label value. |
-| `GET /v1/api/aitasks/{name}` | Task summary plus `prompt`, `agents`, and `output`/`error` from the store. |
+| `GET /v1/api/aitasks/{name}` | Task summary plus `prompt`, `agents`, `output`/`error` from the store, and `chatId` of the user's follow-up conversation (see [Follow-up conversation](#follow-up-conversation)). |
 
 Authorization is delegated to Rancher. Resources are read through Steve (`/v1/ai.cattle.io.aitask...`)
 with the caller's `R_SESS` token, so Rancher applies the user's and group roles, including
@@ -156,6 +156,31 @@ with the caller's `R_SESS` token, so Rancher applies the user's and group roles,
 `accessible_resource` helpers with `AccessDenied` (403) and `NotFound` (404) errors. These
 checks are always on and do not depend on `RBAC_ENABLED`.
 
+### Follow-up conversation
+
+A user who can read an AITask can continue a conversation from its output, for example "why is
+cluster X critical?". There is **one private conversation per AITask run and per user**.
+
+- The client opens the normal chat websocket with the task:
+  `/v1/ws/messages?aitask=<aitask name>`. The task is read through Steve as the user (same check as
+  `GET /aitasks/{name}`). It must be `Succeeded` or `Failed`. Otherwise a `<chat-error>` is sent and
+  the socket is closed. This also happens when `AGENTIC_TASK_ENABLED` is off.
+- The thread id is deterministic, `aitask-<task uid>-<sha256(user id)[:16]>`, so opening the same
+  task again continues the same conversation, and users never share one. A `thread_id` in the path
+  is ignored in this mode. The id is returned as `chatId` by `GET /aitasks/{name}`.
+- On the first turn of an empty thread, the user's message is preceded by two seed messages: the
+  task prompt (`HumanMessage`) and the task output, or `The task failed: <error>` (`AIMessage`).
+  The output is read from the store. The seed goes into `messages` (LLM context) and
+  `messages_history` (chat history), flagged with `additional_kwargs.aitask_seed`.
+- From then on it is a normal chat. The follow-up runs **as the user asking**: their agents, their
+  token and RBAC, the interactive prompts and human validation. It is listed in `GET /chats` (named
+  `Task <definition>: <task>` from the seed's `labels.summary`) and can be reopened with
+  `/v1/ws/messages/{chatId}`. It only shows up in the chat list after the first question.
+- Storage: the task output stays in the store. The conversation lives in the chat checkpointer
+  (`AsyncPostgresSaver` with `DB_ENABLED=true`, otherwise in memory). With SQLite only the store is
+  persistent, so follow-up chats are lost on restart, but the task output is not.
+
+Code: `app/services/aitask_chat.py`, websocket handling in `app/routers/websocket.py`.
 
 ### Known limitations of the POC
 
@@ -170,6 +195,11 @@ checks are always on and do not depend on `RBAC_ENABLED`.
 - It only works with a single replica (the scheduler runs in every replica, and SQLite is a single
   writer).
 - The same LLM as interactive chat is used.
+- Follow-up conversations use the user's own agents, so they may see different data than the task
+  run did. Reopening one with `/v1/ws/messages/{chatId}` does not check access to the AITask again
+  (its content is already in the user's chat). Deleting the AITask does not delete them. Supervisor
+  child threads (`::child::`) don't get the seed; the supervisor passes the context it needs when it
+  delegates.
 
 ## Gaps against the v1 scope
 
@@ -181,7 +211,7 @@ checks are always on and do not depend on `RBAC_ENABLED`.
 | Non-interactive MCP agents only | Partly. `OAUTH2` agents are skipped, but the reason is not shown. |
 | Action level (Report / Propose / Fix) | Missing. See [Human validation](#human-validation). |
 | Mode (adaptive or single agent) | Partly. No `spec.mode`, planner always disabled. |
-| Conversation per task | Missing. See [Task conversation](#task-conversation). |
+| Conversation per task | Partly. One follow-up conversation per run and per user, see [Follow-up conversation](#follow-up-conversation). No shared conversation per definition, see [Task conversation](#task-conversation). |
 | Run summary (✅/⚠️/🔴, findings, actions, skipped checks) | Partly. Only `RESULT:` is parsed. |
 | Notifications | Missing. |
 | Actions recorded per task and service account | Missing. |
@@ -207,9 +237,13 @@ using a Slack webhook/bot token or SMTP credentials stored in a Secret. Tickets 
 
 ### Task conversation
 
-- Create the conversation when the definition is saved and store its id in `status`.
-- Each run appends its summary. Admins of the task must be able to read it.
-- Follow-up questions run as the user asking, not as the task's service account.
+A private follow-up conversation per run and per user is implemented (see
+[Follow-up conversation](#follow-up-conversation)). Still open:
+
+- A shared conversation per definition: created when the definition is saved, with its id in
+  `status`. Each run appends its summary, and admins of the task can read it. This needs a thread
+  owned by the definition instead of a user, which the chat endpoints and the checkpointer
+  `user_id` filter don't support today.
 - Approvals could be given from the conversation (needs a persistent checkpointer).
 
 ### RBAC: how to use permissions?

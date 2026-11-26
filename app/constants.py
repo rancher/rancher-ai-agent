@@ -46,3 +46,9 @@ ANNOTATION_SCHEDULED_AT = "ai.cattle.io/scheduled-at"
 ANNOTATION_RUN_REQUESTED_AT = "ai.cattle.io/run-requested-at"
 TRIGGER_SCHEDULED = "scheduled"
 TRIGGER_MANUAL = "manual"
+# Set on an AITask to answer its pending human validation. JSON with "response" (e.g. "yes") and
+# optionally "validationId", "userId", "answeredAt" and "via".
+ANNOTATION_VALIDATION_RESPONSE = "ai.cattle.io/validation-response"
+# "via" of answers given in the follow-up chat. The websocket resumes those runs itself,
+# so the controller ignores them.
+VALIDATION_VIA_CHAT = "chat"

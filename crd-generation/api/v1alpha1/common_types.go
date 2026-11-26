@@ -15,6 +15,9 @@ const (
 	// AnnotationRunRequestedAt is set on an AITaskDefinition to request a manual run ("Run now").
 	// Every new value creates one AITask with the manual trigger, also copied to that AITask.
 	AnnotationRunRequestedAt = "ai.cattle.io/run-requested-at"
+	// AnnotationValidationResponse is set on an AITask waiting for human validation to answer it.
+	// JSON: {"response": "yes"} plus optional "validationId", "userId", "answeredAt" and "via".
+	AnnotationValidationResponse = "ai.cattle.io/validation-response"
 
 	TriggerLabelScheduled = "scheduled"
 	TriggerLabelManual    = "manual"

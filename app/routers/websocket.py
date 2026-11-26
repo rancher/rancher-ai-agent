@@ -25,7 +25,16 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langgraph.types import Command
 
 from ..services.auth import get_user_id_from_token
-from ..services.aitask_chat import TaskNotFinished, aitask_chat_id, resolve_aitask_chat, session_token
+from ..services.aitask_chat import (
+    AITaskChat,
+    TaskNotFinished,
+    aitask_chat_id,
+    build_seed_messages,
+    resolve_aitask_chat,
+    session_token,
+    submit_validation,
+)
+from ..services.aitask_runner import claim_validation, continue_task, load_record
 from ..services.rbac import AccessDenied, NotFound, RBACError
 from ..constants import (
     AITASK_SEED_KWARG,
@@ -83,7 +92,9 @@ async def websocket_endpoint(
 
     With ``?aitask=<name>`` the conversation is the user's follow-up on that AITask
     run: the thread id is derived from the task and the user (``thread_id`` is
-    ignored), and the first turn starts from the task prompt and output.
+    ignored), and the first turn starts from the task prompt and output. If the
+    task is waiting for human validation, the confirmation prompt is sent on
+    connect and the user's next message is the answer, which resumes the task run.
     """
     
     user_id = await get_user_id_from_token(websocket.cookies)
@@ -94,10 +105,10 @@ async def websocket_endpoint(
     await websocket.accept()
     logging.debug("ws/messages connection opened")
 
-    seed_messages: list[BaseMessage] = []
+    aitask_chat: AITaskChat | None = None
     if aitask:
         try:
-            thread_id, seed_messages = await _resolve_aitask_chat(websocket, aitask, user_id)
+            thread_id, aitask_chat = await _resolve_aitask_chat(websocket, aitask, user_id)
         except _AITaskChatError as e:
             logging.warning(f"Cannot open follow-up chat on AITask {aitask}: {e}")
             await websocket.send_text(f'<chat-error>{json.dumps({"message": str(e)})}</chat-error>')
@@ -136,10 +147,10 @@ async def websocket_endpoint(
 
     # Seed of an AITask follow-up, added to the first turn of a still empty thread.
     pending_seed: list[BaseMessage] = []
-    if seed_messages:
-        state = await agent.aget_state(config=base_config)
-        if not (state and state.values.get("messages")):
-            pending_seed = seed_messages
+    if aitask_chat:
+        pending_seed = await _initial_seed(agent, base_config, aitask_chat.seed_messages)
+        if aitask_chat.pending:
+            await _send_message(websocket, aitask_chat.pending.get("message", ""))
 
     if os.environ.get("LANGFUSE_SECRET_KEY") and os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_HOST"):
         langfuse_handler = CallbackHandler()
@@ -159,6 +170,18 @@ async def websocket_endpoint(
             request_id = str(uuid.uuid4())
 
             ws_request = _parse_websocket_request(request)
+            if aitask_chat and aitask_chat.pending:
+                # The message answers the task's pending validation. The answer sends its
+                # own complete <message> blocks.
+                message_opened = False
+                if STOP_TAG in (ws_request.tags or []):
+                    continue
+                aitask_chat = await _answer_aitask_validation(websocket, llm, aitask_chat, ws_request.prompt, user_id)
+                if aitask_chat is None:
+                    await websocket.close()
+                    break
+                pending_seed = await _initial_seed(agent, base_config, aitask_chat.seed_messages)
+                continue
             if STOP_TAG in (ws_request.tags or []):
                 # Nothing is running, but a plan waiting for the user's input must be cancelled.
                 config = _build_config(base_config, request_id, ws_request)
@@ -237,12 +260,13 @@ class _AITaskChatError(Exception):
     pass
 
 
-async def _resolve_aitask_chat(websocket: WebSocket, name: str, user_id: str | None) -> tuple[str, list[BaseMessage]]:
+async def _resolve_aitask_chat(websocket: WebSocket, name: str, user_id: str | None) -> tuple[str, AITaskChat]:
     """
     Resolve the user's follow-up conversation on AITask *name*.
 
     The task is read through Rancher as the user, so the user must be allowed to
-    get it. Returns the thread id of the conversation and its seed messages.
+    get it. Returns the thread id of the conversation and the task's chat state
+    (seed messages, or the pending validation).
 
     Raises:
         _AITaskChatError: If the feature is off, the user is unknown, the task is not
@@ -254,7 +278,7 @@ async def _resolve_aitask_chat(websocket: WebSocket, name: str, user_id: str | N
     if not token or not user_id:
         raise _AITaskChatError("Unauthorized.")
     try:
-        uid, seed_messages = await resolve_aitask_chat(token, websocket.app.memory_manager.get_store(), name)
+        chat = await resolve_aitask_chat(token, websocket.app.memory_manager.get_store(), name)
     except AccessDenied:
         raise _AITaskChatError(f"You are not allowed to access AITask {name}.")
     except NotFound:
@@ -266,7 +290,132 @@ async def _resolve_aitask_chat(websocket: WebSocket, name: str, user_id: str | N
     except Exception as e:
         logging.error(f"Error loading AITask {name} for a follow-up chat: {e}", exc_info=True)
         raise _AITaskChatError(f"Unable to load AITask {name}.")
-    return aitask_chat_id(uid, user_id), seed_messages
+    return aitask_chat_id(chat.uid, user_id), chat
+
+
+async def _initial_seed(agent, config: dict, seed_messages: list[BaseMessage]) -> list[BaseMessage]:
+    """*seed_messages* if the conversation thread is still empty, otherwise nothing."""
+    if not seed_messages:
+        return []
+    state = await agent.aget_state(config=config)
+    if state and state.values.get("messages"):
+        return []
+    return seed_messages
+
+
+class _TolerantSender:
+    """
+    Sends to a websocket and drops the messages once it is gone, so a resumed
+    AITask run streamed to the client always completes even if the client leaves.
+    """
+
+    def __init__(self, websocket: WebSocket):
+        self._websocket = websocket
+        self.closed = False
+
+    async def send_text(self, data: str) -> None:
+        if self.closed:
+            return
+        try:
+            await self._websocket.send_text(data)
+        except Exception:
+            logging.debug("Client gone while streaming a resumed AITask run")
+            self.closed = True
+
+
+async def _send_message(websocket, text: str) -> None:
+    """Send *text* as a complete ``<message>`` (the tags are separate frames)."""
+    await websocket.send_text("<message>")
+    await websocket.send_text(text)
+    await websocket.send_text("</message>")
+
+
+async def _refresh_aitask_chat(websocket: WebSocket, chat: AITaskChat, notice: str) -> AITaskChat | None:
+    """
+    Reload AITask *chat* after its validation was answered by someone else.
+
+    Sends *notice* and, if the task waits for a new validation, its prompt.
+    Returns the new chat state, or None if the task is running again (the socket
+    is then closed: there is nothing to follow up on yet).
+    """
+    await _send_message(websocket, notice)
+    try:
+        chat = await resolve_aitask_chat(
+            session_token(websocket.cookies), websocket.app.memory_manager.get_store(), chat.name,
+        )
+    except TaskNotFinished:
+        await _send_message(websocket, f"AITask {chat.name} is running again. Reopen it when it has finished.")
+        return None
+    if chat.pending:
+        await _send_message(websocket, chat.pending.get("message", ""))
+    else:
+        await _send_message(websocket, f"AITask {chat.name} has finished, you can now continue the conversation.")
+    return chat
+
+
+async def _answer_aitask_validation(
+    websocket: WebSocket,
+    llm: BaseLanguageModel,
+    chat: AITaskChat,
+    response: str,
+    user_id: str | None,
+) -> AITaskChat | None:
+    """
+    Answer the pending validation of AITask *chat* with *response* and resume the
+    task run, streaming it to the client.
+
+    The answer is first recorded on the AITask as the user (Rancher checks that
+    they may patch it), then the run is resumed with the task's own agents and
+    identity. Returns the new chat state: still pending (a new validation was
+    requested, or the answer was refused), or finished with its seed messages.
+    Returns None if the socket must be closed.
+    """
+    store = websocket.app.memory_manager.get_store()
+    pending = chat.pending or {}
+    validation_id = pending.get("id", "")
+
+    record = await load_record(store, chat.uid) or {}
+    if (record.get("pendingValidation") or {}).get("id") != validation_id:
+        return await _refresh_aitask_chat(websocket, chat, "This validation was already answered.")
+
+    try:
+        answer = await submit_validation(session_token(websocket.cookies), chat.name, validation_id, response, user_id)
+    except AccessDenied:
+        await websocket.send_text(f'<error>{json.dumps({"message": f"You are not allowed to validate AITask {chat.name}."})}</error>')
+        return chat
+    except RBACError as e:
+        logging.error(f"Unable to record the validation of AITask {chat.name}: {e}")
+        await websocket.send_text(f'<error>{json.dumps({"message": "Unable to verify permissions with Rancher."})}</error>')
+        return chat
+
+    if not claim_validation(validation_id):
+        return await _refresh_aitask_chat(websocket, chat, "This validation was already answered.")
+
+    sender = _TolerantSender(websocket)
+
+    async def stream(graph, input_data, config):
+        await sender.send_text("<message>")
+        try:
+            await _stream_agent_events(graph, input_data, config, sender)
+        finally:
+            await sender.send_text("</message>")
+
+    metadata = chat.task.get("metadata", {})
+    record = await continue_task(
+        store, llm, metadata.get("namespace") or "cattle-ai-agent-system", chat.name, chat.uid,
+        list(chat.task.get("spec", {}).get("agents") or []), record, answer, stream,
+    )
+
+    if record.get("pendingValidation"):
+        # The new confirmation prompt was streamed with the run.
+        return AITaskChat(name=chat.name, uid=chat.uid, task=chat.task, record=record, pending=record["pendingValidation"])
+
+    if record.get("phase") == "Failed":
+        await _send_message(sender, f'The task failed: {record.get("error") or "unknown error"}')
+    return AITaskChat(
+        name=chat.name, uid=chat.uid, task=chat.task, record=record,
+        seed_messages=build_seed_messages(chat.task, record),
+    )
 
 
 async def _handle_single_agent_oauth(

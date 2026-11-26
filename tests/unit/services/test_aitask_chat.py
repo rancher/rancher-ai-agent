@@ -12,6 +12,7 @@ from app.services.aitask_chat import (
     build_seed_messages,
     resolve_aitask_chat,
     session_token,
+    submit_validation,
 )
 from app.services.rbac import AITASK_STEVE_TYPE, AccessDenied, NotFound
 
@@ -77,10 +78,11 @@ async def test_resolve_reads_task_as_user_and_store(get_resource):
     await store.aput(AITASK_STORE_NAMESPACE, "u1", {"output": "report"})
     get_resource.return_value = _task()
 
-    uid, seed = await resolve_aitask_chat("token", store, "daily-1")
+    chat = await resolve_aitask_chat("token", store, "daily-1")
 
-    assert uid == "u1"
-    assert [m.content for m in seed] == ["check the clusters", "report"]
+    assert chat.uid == "u1"
+    assert chat.pending is None
+    assert [m.content for m in chat.seed_messages] == ["check the clusters", "report"]
     get_resource.assert_awaited_once_with("token", AITASK_STEVE_TYPE, aitask_chat.NAMESPACE, "daily-1")
 
 
@@ -103,3 +105,76 @@ async def test_resolve_propagates_access_errors(get_resource, error):
     with pytest.raises(type(error)):
         await resolve_aitask_chat("token", store, "daily-1")
     store.aget.assert_not_called()
+
+
+# --- human validation ---
+
+_PENDING = {"id": "v1", "message": '<confirmation-response>{"type": "update"}</confirmation-response>', "requestedAt": "t0"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_task_waiting_for_validation(get_resource):
+    store = InMemoryStore()
+    await store.aput(AITASK_STORE_NAMESPACE, "u1", {"pendingValidation": _PENDING})
+    task = _task(phase="Running")
+    task["status"]["pendingValidation"] = True
+    get_resource.return_value = task
+
+    chat = await resolve_aitask_chat("token", store, "daily-1")
+
+    assert chat.pending == _PENDING
+    assert chat.seed_messages == []
+    assert chat.name == "daily-1"
+
+
+@pytest.mark.asyncio
+async def test_resolve_running_task_without_stored_validation_is_not_finished(get_resource):
+    task = _task(phase="Running")
+    task["status"]["pendingValidation"] = True
+    get_resource.return_value = task
+    with pytest.raises(TaskNotFinished):
+        await resolve_aitask_chat("token", InMemoryStore(), "daily-1")
+
+
+def test_seed_messages_include_validations():
+    record = {
+        "output": "scaled it",
+        "validations": [{"message": _PENDING["message"], "response": "yes", "requestedAt": "t1", "answeredAt": "t2"}],
+    }
+
+    seed = build_seed_messages(_task(), record)
+
+    assert [type(m) for m in seed] == [HumanMessage, AIMessage, HumanMessage, AIMessage]
+    request = seed[1].content
+    assert "asked for validation" in request
+    assert '"type": "update"' in request
+    assert "confirmation-response" not in request
+    assert seed[2].content == "yes"
+    assert seed[2].additional_kwargs["created_at"] == "t2"
+    assert seed[3].content == "scaled it"
+    assert all(m.additional_kwargs[AITASK_SEED_KWARG] for m in seed)
+    assert len({m.id for m in seed}) == 4
+
+
+@pytest.mark.asyncio
+async def test_submit_validation_patches_annotation_as_user():
+    import json
+    from app.constants import ANNOTATION_VALIDATION_RESPONSE
+    with patch.object(aitask_chat, "patch_resource", AsyncMock()) as patch_resource:
+        answer = await submit_validation("token", "daily-1", "v1", "yes", "u-1")
+
+    args = patch_resource.call_args.args
+    assert args[:4] == ("token", AITASK_STEVE_TYPE, aitask_chat.NAMESPACE, "daily-1")
+    value = json.loads(args[4]["metadata"]["annotations"][ANNOTATION_VALIDATION_RESPONSE])
+    assert value == answer
+    assert value["validationId"] == "v1"
+    assert value["response"] == "yes"
+    assert value["userId"] == "u-1"
+    assert value["via"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_submit_validation_propagates_access_denied():
+    with patch.object(aitask_chat, "patch_resource", AsyncMock(side_effect=AccessDenied("no"))):
+        with pytest.raises(AccessDenied):
+            await submit_validation("token", "daily-1", "v1", "yes", "u-1")

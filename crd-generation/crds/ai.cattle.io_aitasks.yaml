@@ -28,6 +28,9 @@ spec:
     - jsonPath: .status.result
       name: Result
       type: string
+    - jsonPath: .status.pendingValidation
+      name: Validation
+      type: boolean
     - jsonPath: .status.startTime
       name: Started
       priority: 1
@@ -96,6 +99,12 @@ spec:
               completionTime:
                 format: date-time
                 type: string
+              pendingValidation:
+                description: |-
+                  PendingValidation is true while the run is paused (phase Running) waiting for a user to
+                  answer a human validation request, in the follow-up chat or with the
+                  ai.cattle.io/validation-response annotation.
+                type: boolean
               phase:
                 description: TaskPhase is the lifecycle phase of an AITask.
                 enum:

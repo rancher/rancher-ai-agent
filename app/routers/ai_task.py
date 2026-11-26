@@ -45,6 +45,7 @@ def _summary(task: dict) -> dict:
         "taskDefinitionRef": spec.get("taskDefinitionRef"),
         "trigger": (metadata.get("labels") or {}).get(LABEL_TRIGGER),
         "phase": task_status.get("phase") or "Pending",
+        "pendingValidation": bool(task_status.get("pendingValidation")),
         "startTime": task_status.get("startTime"),
         "completionTime": task_status.get("completionTime"),
         "createdAt": metadata.get("creationTimestamp"),
@@ -190,7 +191,8 @@ async def get_ai_tasks(
 async def get_ai_task(request: Request, name: str) -> JSONResponse:
     """
     Get an AITask (if the user may access it) with the outcome stored by the
-    executor (``output``/``error``) and the id of the user's follow-up chat on it
+    executor (``output``/``error``, ``validationId``/``validationMessage`` while the task waits for
+    human validation, and the answered ``validations``) and the id of the user's follow-up chat on it
     (``chatId``, opened with ``/v1/ws/messages?aitask=<name>``; the chat exists once
     the user has sent a first message).
     """
@@ -207,6 +209,9 @@ async def get_ai_task(request: Request, name: str) -> JSONResponse:
         item = await request.app.memory_manager.get_store().aget(AITASK_STORE_NAMESPACE, uid) if uid else None
         stored = item.value if item else {}
         user_id = await get_user_id_from_token(request.cookies) if uid else None
+        pending_validation = (
+            (stored.get("pendingValidation") or {}) if (task.get("status") or {}).get("pendingValidation") else {}
+        )
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -216,6 +221,9 @@ async def get_ai_task(request: Request, name: str) -> JSONResponse:
                 "agents": spec.get("agents") or [],
                 "output": stored.get("output"),
                 "error": stored.get("error"),
+                "validationId": pending_validation.get("id"),
+                "validationMessage": pending_validation.get("message"),
+                "validations": stored.get("validations") or [],
                 "chatId": aitask_chat_id(uid, user_id) if user_id else None,
             },
         )

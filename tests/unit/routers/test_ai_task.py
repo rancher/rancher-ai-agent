@@ -229,6 +229,36 @@ async def test_get_without_stored_result(mock_request, get_resource):
 
 
 @pytest.mark.asyncio
+async def test_get_task_waiting_for_validation(mock_request, get_resource, store):
+    task = _task("t1", "2026-01-01T00:00:00Z", uid="u1", phase="Running")
+    task["status"]["pendingValidation"] = True
+    get_resource.return_value = task
+    answered = {"message": "first", "response": "yes"}
+    await store.aput(("aitasks",), "u1", {"pendingValidation": {"id": "v2", "message": "second"}, "validations": [answered]})
+
+    body = json.loads((await ai_task_router.get_ai_task(mock_request, name="t1")).body)
+
+    assert body["phase"] == "Running"
+    assert body["pendingValidation"] is True
+    assert body["validationId"] == "v2"
+    assert body["validationMessage"] == "second"
+    assert body["validations"] == [answered]
+
+
+@pytest.mark.asyncio
+async def test_get_finished_task_has_no_validation_message(mock_request, get_resource, store):
+    get_resource.return_value = _task("t1", "2026-01-01T00:00:00Z", uid="u1", phase="Succeeded")
+    await store.aput(("aitasks",), "u1", {"output": "report", "pendingValidation": None})
+
+    body = json.loads((await ai_task_router.get_ai_task(mock_request, name="t1")).body)
+
+    assert body["pendingValidation"] is False
+    assert body["validationId"] is None
+    assert body["validationMessage"] is None
+    assert body["validations"] == []
+
+
+@pytest.mark.asyncio
 async def test_get_requires_token(mock_request, get_resource):
     mock_request.cookies = {}
     with pytest.raises(HTTPException) as exc:

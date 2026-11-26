@@ -24,6 +24,9 @@ from app.routers.websocket import (
 )
 from app.constants import STOP_TAG, STOP_CANCEL_REPLY, STOP_CONTEXT_REPLY, STOP_REASON_PLANNING_MANUAL, STOP_REASON_MESSAGE_MANUAL, STOP_REASON_NEW_REQUEST
 from app.services.agent._constants import NeedsOauth2
+from app.services.aitask_chat import AITaskChat, TaskNotFinished
+from app.services import aitask_runner
+from app.services.rbac import AccessDenied
 from app.services.agent.supervisor import SupervisorGraph
 from app.services.oauth2.models import OAuth2Canceled
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1352,6 +1355,14 @@ def _seed():
     ]
 
 
+def _aitask():
+    return {
+        "metadata": {"name": "daily-1", "uid": "task-uid", "namespace": "cattle-ai-agent-system"},
+        "spec": {"taskDefinitionRef": "daily", "prompt": "check the clusters", "agents": ["rancher"]},
+        "status": {"phase": "Running", "pendingValidation": True, "startTime": "t0"},
+    }
+
+
 def _plain_request(prompt="why?"):
     return WebSocketRequest(prompt=prompt, user_input=prompt, context={}, tags=[], labels={}, agent="", ui_tools={})
 
@@ -1409,7 +1420,7 @@ async def test_record_stopped_keeps_seed_messages():
 def aitask_chat_deps(mock_dependencies):
     with patch("app.routers.websocket.agentic_tasks_enabled", return_value=True) as enabled, \
          patch("app.routers.websocket.resolve_aitask_chat", new_callable=AsyncMock) as resolve:
-        resolve.return_value = ("task-uid", _seed())
+        resolve.return_value = AITaskChat(name="daily-1", uid="task-uid", task=_aitask(), record={}, seed_messages=_seed())
         mock_dependencies["agent"].aget_state = AsyncMock(return_value=MagicMock(interrupts=[], values={}))
         yield {**mock_dependencies, "enabled": enabled, "resolve": resolve}
 
@@ -1492,3 +1503,156 @@ async def test_aitask_chat_requires_user(aitask_chat_deps):
     assert mock_ws.closed
     assert "Unauthorized" in mock_ws._send_queue[0]
     aitask_chat_deps["resolve"].assert_not_called()
+
+
+# --- AITask human validation in the follow-up chat ---
+
+_CONFIRMATION = '<confirmation-response>{"type": "update"}</confirmation-response>'
+_PENDING = {"id": "v1", "message": _CONFIRMATION, "requestedAt": "t0"}
+
+
+def _pending_chat():
+    return AITaskChat(name="daily-1", uid="task-uid", task=_aitask(), record={"pendingValidation": _PENDING}, pending=dict(_PENDING))
+
+
+@pytest.fixture
+def validation_deps(aitask_chat_deps):
+    aitask_runner._claimed_validations.clear()
+    aitask_chat_deps["resolve"].return_value = _pending_chat()
+    aitask_chat_deps["call_agent"].return_value = None
+
+    async def finished(store, llm, namespace, name, uid, agents, record, answer, stream):
+        await stream(MagicMock(), Command(resume=answer["response"]), {})
+        return {**record, "phase": "Succeeded", "output": "scaled", "pendingValidation": None,
+                "validations": [{"message": _CONFIRMATION, "response": answer["response"]}]}
+
+    with patch("app.routers.websocket.submit_validation", new_callable=AsyncMock) as submit, \
+         patch("app.routers.websocket.continue_task", new_callable=AsyncMock) as cont, \
+         patch("app.routers.websocket.load_record", new_callable=AsyncMock) as load, \
+         patch("app.routers.websocket._stream_agent_events", new_callable=AsyncMock) as stream_events:
+        submit.side_effect = lambda token, name, vid, response, user_id: aitask_runner.build_validation_answer(vid, response, user_id)
+        cont.side_effect = finished
+        load.return_value = {"pendingValidation": dict(_PENDING)}
+        yield {**aitask_chat_deps, "submit": submit, "continue": cont, "load": load, "stream_events": stream_events}
+    aitask_runner._claimed_validations.clear()
+
+
+@pytest.mark.asyncio
+async def test_pending_validation_prompt_sent_on_connect(validation_deps):
+    mock_ws = MockWebSocket(messages=[])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert mock_ws._send_queue[1:4] == ["<message>", _CONFIRMATION, "</message>"]
+    validation_deps["submit"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_answer_resumes_task_then_chat_continues_with_seed(validation_deps):
+    mock_ws = MockWebSocket(messages=["yes", "why?"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    submit_args = validation_deps["submit"].call_args.args
+    assert submit_args == ("fake_token", "daily-1", "v1", "yes", "user-123")
+    cont_args = validation_deps["continue"].call_args.args
+    assert cont_args[2:6] == ("cattle-ai-agent-system", "daily-1", "task-uid", ["rancher"])
+    assert cont_args[7]["via"] == "chat"
+    validation_deps["stream_events"].assert_awaited_once()
+
+    # The answer is not sent to the user's own agent; the next message is the first follow-up turn.
+    calls = validation_deps["call_agent"].call_args_list
+    assert len(calls) == 1
+    contents = [m.content for m in calls[0].kwargs["input_data"]["messages"]]
+    assert contents[0] == "check the clusters"
+    assert "asked for validation" in contents[1]
+    assert contents[2:] == ["yes", "scaled", "why?"]
+    # The confirmation prompt, then the resumed run streamed in its own <message>.
+    assert mock_ws._send_queue[1:6] == ["<message>", _CONFIRMATION, "</message>", "<message>", "</message>"]
+
+
+@pytest.mark.asyncio
+async def test_answer_denied_keeps_task_pending(validation_deps):
+    validation_deps["submit"].side_effect = AccessDenied("no")
+    mock_ws = MockWebSocket(messages=["yes", "yes"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert validation_deps["submit"].await_count == 2
+    validation_deps["continue"].assert_not_called()
+    validation_deps["call_agent"].assert_not_called()
+    assert any("not allowed to validate" in m for m in mock_ws._send_queue)
+
+
+@pytest.mark.asyncio
+async def test_stale_answer_is_rejected_and_chat_refreshed(validation_deps):
+    validation_deps["load"].return_value = {"pendingValidation": {"id": "v2", "message": "second"}}
+    refreshed = AITaskChat(name="daily-1", uid="task-uid", task=_aitask(), record={}, pending={"id": "v2", "message": "second"})
+    validation_deps["resolve"].side_effect = [_pending_chat(), refreshed]
+    mock_ws = MockWebSocket(messages=["yes"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    validation_deps["submit"].assert_not_called()
+    validation_deps["continue"].assert_not_called()
+    assert "This validation was already answered." in mock_ws._send_queue
+    assert "second" in mock_ws._send_queue
+
+
+@pytest.mark.asyncio
+async def test_answer_claimed_elsewhere_closes_when_task_runs(validation_deps):
+    assert aitask_runner.claim_validation("v1")
+    validation_deps["resolve"].side_effect = [_pending_chat(), TaskNotFinished("running")]
+    mock_ws = MockWebSocket(messages=["yes", "why?"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    validation_deps["continue"].assert_not_called()
+    validation_deps["call_agent"].assert_not_called()
+    assert mock_ws.closed
+    assert any("running again" in m for m in mock_ws._send_queue)
+
+
+@pytest.mark.asyncio
+async def test_second_validation_keeps_chat_pending(validation_deps):
+    second = {"id": "v2", "message": "second"}
+
+    async def pending_again(store, llm, namespace, name, uid, agents, record, answer, stream):
+        return {**record, "phase": "Running", "pendingValidation": second}
+
+    validation_deps["continue"].side_effect = pending_again
+    validation_deps["load"].side_effect = [{"pendingValidation": dict(_PENDING)}, {"pendingValidation": second}]
+    mock_ws = MockWebSocket(messages=["yes", "no"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert [c.args[2] for c in validation_deps["submit"].call_args_list] == ["v1", "v2"]
+    validation_deps["call_agent"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_is_reported(validation_deps):
+    async def failed(store, llm, namespace, name, uid, agents, record, answer, stream):
+        return {**record, "phase": "Failed", "error": aitask_runner.LOST_RUN_ERROR, "pendingValidation": None}
+
+    validation_deps["continue"].side_effect = failed
+    mock_ws = MockWebSocket(messages=["yes"])
+
+    await websocket_endpoint(mock_ws, None, MagicMock(), aitask="daily-1")
+
+    assert f"The task failed: {aitask_runner.LOST_RUN_ERROR}" in mock_ws._send_queue
+
+
+@pytest.mark.asyncio
+async def test_tolerant_sender_drops_messages_after_disconnect():
+    from app.routers.websocket import _TolerantSender
+    ws = MagicMock()
+    ws.send_text = AsyncMock(side_effect=[None, RuntimeError("closed"), None])
+    sender = _TolerantSender(ws)
+
+    await sender.send_text("a")
+    await sender.send_text("b")  # fails: client gone
+    await sender.send_text("c")  # dropped
+
+    assert sender.closed
+    assert ws.send_text.await_count == 2

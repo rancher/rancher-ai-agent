@@ -103,7 +103,8 @@
                 }
 
                 info.textContent = `AITask ${task.name} (definition ${task.taskDefinitionRef}, ${task.trigger || 'unknown'} trigger) - ` +
-                    `phase ${task.phase}, completed ${task.completionTime || '-'} - chatId ${task.chatId || '-'}`;
+                    `phase ${task.phase}${task.pendingValidation ? ' (pending validation)' : ''}, ` +
+                    `completed ${task.completionTime || '-'} - chatId ${task.chatId || '-'}`;
                 history.replaceState(null, '', `${location.pathname}?aitask=${encodeURIComponent(name)}`);
 
                 // Existing follow-up: its history already starts with the task prompt and output.
@@ -127,7 +128,15 @@
                     }
                 } else {
                     addLine(`Task prompt: ${task.prompt || ''}`, { bold: true, className: 'seed' });
-                    if (task.error) {
+                    for (const v of (task.validations || [])) {
+                        addLine(`The task asked for validation: ${v.message}`, { className: 'seed' });
+                        addLine(`${v.userId || 'Someone'}: ${v.response}`, { bold: true, className: 'seed' });
+                    }
+                    if (task.pendingValidation) {
+                        // The confirmation prompt itself is sent by the websocket on connect.
+                        addLine('The task is waiting for validation. Reply "yes" to approve or anything else to cancel.',
+                            { className: 'seed', color: '#ff9800' });
+                    } else if (task.error) {
                         addLine(`The task failed: ${task.error}`, { className: 'seed', color: '#c62828' });
                     } else {
                         addLine(task.output || '(no output)', { className: 'seed' });

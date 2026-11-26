@@ -52,9 +52,11 @@ The name is limited to 52 characters so that `<definition>-<unix minutes>` fits 
 | `status.phase` | `Pending`, `Running`, `Succeeded`, `Failed`. |
 | `status.startTime` / `status.completionTime` | Run timestamps. |
 | `status.result` | `Healthy`, `Warning`, `Critical`. |
+| `status.pendingValidation` | `true` while the run is paused waiting for a human validation answer (phase stays `Running`). See [Human validation in tasks](#human-validation-in-tasks). |
 
 AITasks have the labels `ai.cattle.io/task-definition` and `ai.cattle.io/trigger`, the
-annotation `ai.cattle.io/scheduled-at`, and an owner reference to the definition, so they are
+annotations `ai.cattle.io/scheduled-at` and `ai.cattle.io/validation-response` (the answer to a
+pending validation), and an owner reference to the definition, so they are
 garbage-collected together. `common_types.go` also defines a `CredentialsSecretRef` and the
 `ai.cattle.io/task-credentials` label. These are not wired yet, see [RBAC](#rbac--permissions).
 
@@ -111,14 +113,162 @@ A `kopf.on.create`/`on.resume` handler (timeout 1h) runs each new AITask:
      `RESULT: Healthy|Warning|Critical`.
    - Child agents get `AITASK_CHILD_INSTRUCTIONS` appended to their prompt.
    - `aitask` is forwarded from the supervisor to child agents (`_FORWARDED_CONFIG_KEYS`).
-5. If the graph ends in a human-validation **interrupt**, the task fails. Nobody is there to
-   approve it.
+5. If the graph ends in a human-validation **interrupt**, the run is paused: the task gets
+   `status.pendingValidation=true` (phase stays `Running`) and the confirmation prompt is stored.
+   See [Human validation in tasks](#human-validation-in-tasks).
 6. The verdict is parsed from the last line of the output (`parse_result`). The record
    (prompt, agents, phase, result, output, error, times) is written to the LangGraph **store** under
    namespace `("aitasks",)`, keyed by the AITask uid. Status is patched with the phase, the
    completion time and the result.
 
-The checkpointer used for task runs is an in-memory `InMemorySaver` (see TODO in the code).
+The checkpointer used for task runs is an in-memory `InMemorySaver` (see TODO in the code). It is
+process-wide (`app/services/aitask_runner.py`), so a paused run can be resumed from the kopf loop or
+the FastAPI loop.
+
+### Human validation in tasks
+
+A tool listed in an agent's `humanValidationTools` pauses the run instead of failing it:
+
+1. The executor stores `pendingValidation: {id, interruptId, message, requestedAt}` in the task
+   record (`message` is the usual `<confirmation-response>` payload) and sets
+   `status.pendingValidation=true`. The phase stays `Running`, so no new run of the definition
+   starts while it waits.
+2. A user opens the follow-up chat (`/v1/ws/messages?aitask=<name>`), which is allowed while the
+   task waits. The confirmation prompt is sent on connect, like a live interrupt, and the user's
+   next message is the answer (`yes` approves, anything else cancels).
+3. The answer is written as the user through Steve, as the annotation
+   `ai.cattle.io/validation-response` on the AITask. Rancher only accepts it if the user may
+   **`patch` that AITask** (`resourceNames` works), so being able to read the task is not enough to
+   approve. A denied user gets an error and the task keeps waiting. The annotation is also the
+   audit record of who answered (Kubernetes audit log).
+4. The websocket then resumes the paused graph with `Command(resume=<answer>)`, with the **task's**
+   agents and identity (not the user's), and streams it to the user. Once it finishes, the record
+   and status are updated, and the chat continues as a normal follow-up whose seed contains the
+   prompt, each validation request and answer, and the output. A new interrupt asks again.
+5. Answers can also be given with kubectl:
+   `kubectl annotate ait <name> ai.cattle.io/validation-response='{"response":"yes"}' --overwrite`.
+   A kopf `on.field` handler resumes the run in the controller (no streaming). The value is JSON:
+   `response`, plus optional `validationId` (must match the pending one), `userId`, `answeredAt` and
+   `via`. Chat answers have `via: chat` and the controller ignores them, because the websocket is
+   already resuming them.
+
+Only one answer resumes a given validation: the pending `id` is checked against the store and
+claimed in-process (`claim_validation`). A later answer gets "already answered". A stream to a
+client that disconnects keeps running, so the task is never left waiting. If the agent restarts
+while a task waits, the paused state is lost and the task is marked `Failed`.
+
+Answered validations are listed in `GET /aitasks/{name}` (`validations`), with the pending prompt in
+`validationMessage` and its id in `validationId`.
+
+### How to answer a validation
+
+#### Prerequisites
+
+1. `AGENTIC_TASK_ENABLED=true` (Helm: `agenticTask.enabled`).
+2. An agent used by the task lists the tool in `humanValidationTools`, for example:
+
+   ```yaml
+   apiVersion: ai.cattle.io/v1alpha1
+   kind: AIAgentConfig
+   metadata:
+     name: rancher-core-agent
+     namespace: cattle-ai-agent-system
+   spec:
+     # ...
+     humanValidationTools:
+       - name: "patch_resource"
+         type: UPDATE
+   ```
+
+3. The user who answers needs `get` and `patch` on the AITask (or `aitasks` in general) in
+   `cattle-ai-agent-system`. Grant them through Rancher (a role template or a global role with
+   `namespacedRules`), since the chat checks the user's permissions through Steve. A plain
+   Kubernetes Role is enough for kubectl:
+
+   ```yaml
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: Role
+   metadata:
+     name: aitask-approver
+     namespace: cattle-ai-agent-system
+   rules:
+     - apiGroups: ["ai.cattle.io"]
+       resources: ["aitasks"]
+       verbs: ["get", "list", "watch", "patch"]
+   ```
+
+#### Find tasks waiting for validation
+
+```sh
+kubectl get ait -n cattle-ai-agent-system
+# NAME             DEFINITION   PHASE     RESULT   VALIDATION   AGE
+# daily-29374512   daily        Running            true         3m
+```
+
+The prompt itself is not in the CR. Read it with the API, as the user (`R_SESS` cookie):
+
+```sh
+curl -s -b "R_SESS=$TOKEN" https://<agent>/v1/api/aitasks/daily-29374512 | jq '{phase, pendingValidation, validationId, validationMessage}'
+```
+
+`validationMessage` is a `<confirmation-response>` with the action, for example
+`{"type": "update", "resource": {...}, "payload": {"original": ..., "patched": ...}}`.
+
+#### Option 1: answer in the follow-up chat (websocket)
+
+1. Open the follow-up chat of the task:
+   - Test UI: `/ui?aitask=<aitask name>`, or type the name in the AITask field and press Open.
+   - Any client: connect to `/v1/ws/messages?aitask=<aitask name>` with the user's `R_SESS` cookie.
+2. After `<chat-metadata>`, the server sends the confirmation prompt as a message:
+   `<message>`, `<confirmation-response>{...}</confirmation-response>`, `</message>`.
+3. Send the answer as the next message, as plain text or as `{"prompt": "yes"}`:
+   - `yes` approves and runs the action.
+   - Anything else (for example `no`) cancels it. The task then goes on without it.
+4. The resumed run is streamed in a new `<message>`. Then:
+   - If the task asks for another validation, its prompt is streamed too. Answer it the same way.
+   - If the task finished (`Succeeded` or `Failed`), the chat goes on as a normal follow-up. The
+     next message is the first question about the result, and the conversation history starts
+     with the prompt, the validation requests and answers, and the output.
+5. Possible replies instead of the resumed run:
+   - `<error>` "You are not allowed to validate AITask X." when the user lacks `patch`. The task
+     keeps waiting.
+   - "This validation was already answered." when someone else answered first (in another chat or
+     with kubectl). The chat then shows the new prompt, or says that the task is running again
+     and closes.
+
+#### Option 2: answer with kubectl
+
+1. Set the answer annotation on the AITask. `--overwrite` is needed for every new answer, since
+   the controller only reacts when the value changes:
+
+   ```sh
+   # Approve
+   kubectl annotate ait daily-29374512 -n cattle-ai-agent-system --overwrite \
+     ai.cattle.io/validation-response='{"response":"yes"}'
+
+   # Cancel
+   kubectl annotate ait daily-29374512 -n cattle-ai-agent-system --overwrite \
+     ai.cattle.io/validation-response='{"response":"no"}'
+   ```
+
+   The value is JSON. Only `response` is required. To make sure you answer the request you
+   reviewed, and not a newer one, add its id (`validationId` in the API response above):
+   `{"response":"yes","validationId":"<id>"}`. A mismatching id is ignored. Don't set
+   `"via":"chat"`: those answers are left to the websocket and are not resumed by the controller.
+
+2. The controller resumes the run in the background (no streaming). Follow it with:
+
+   ```sh
+   kubectl get ait daily-29374512 -n cattle-ai-agent-system -w
+   ```
+
+   `VALIDATION` goes back to `false` right away, and the phase ends `Succeeded`/`Failed`, or
+   `VALIDATION` is `true` again if the task asks for another validation.
+3. The output, and the answers with `"via": "kubectl"`, are in `GET /v1/api/aitasks/<name>`
+   (`output`, `validations`). The follow-up chat on the task can be opened as usual.
+
+An annotation set while the task is not waiting (or with invalid JSON) is ignored and logged by the
+controller.
 
 ### Storage (`app/services/memory.py`)
 
@@ -163,7 +313,8 @@ cluster X critical?". There is **one private conversation per AITask run and per
 
 - The client opens the normal chat websocket with the task:
   `/v1/ws/messages?aitask=<aitask name>`. The task is read through Steve as the user (same check as
-  `GET /aitasks/{name}`). It must be `Succeeded` or `Failed`. Otherwise a `<chat-error>` is sent and
+  `GET /aitasks/{name}`). It must be `Succeeded` or `Failed`, or waiting for validation (see
+  [Human validation in tasks](#human-validation-in-tasks)). Otherwise a `<chat-error>` is sent and
   the socket is closed. This also happens when `AGENTIC_TASK_ENABLED` is off.
 - The thread id is deterministic, `aitask-<task uid>-<sha256(user id)[:16]>`, so opening the same
   task again continues the same conversation, and users never share one. A `thread_id` in the path
@@ -187,13 +338,14 @@ Code: `app/services/aitask_chat.py`, websocket handling in `app/routers/websocke
 - **No real identity for task runs.** Tasks run with `user_id="aitask"`. For `RANCHER` auth agents
   the MCP client falls back to the `RANCHER_API_TOKEN` env var (dev only), because there is no user
   session. `OAUTH2` agents are skipped.
-- Human validation is not supported. A tool that requires it makes the task fail.
+- Paused runs waiting for validation are lost on restart (in-memory checkpointer) and the task is
+  failed. Approvals don't expire, and nothing notifies users that a task is waiting.
 - There is no create/update API for definitions (only `kubectl`).
 - There is no retention/cleanup of old AITasks or stored outputs.
 - The in-memory checkpointer means a task interrupted by a pod restart can't be resumed. It is just
   never re-run (`Running` is skipped on resume).
-- It only works with a single replica (the scheduler runs in every replica, and SQLite is a single
-  writer).
+- It only works with a single replica (the scheduler runs in every replica, SQLite is a single
+  writer, and paused runs and validation claims are kept in process memory).
 - The same LLM as interactive chat is used.
 - Follow-up conversations use the user's own agents, so they may see different data than the task
   run did. Reopening one with `/v1/ws/messages/{chatId}` does not check access to the AITask again
@@ -209,7 +361,7 @@ Code: `app/services/aitask_chat.py`, websocket handling in `app/routers/websocke
 | Run now | Done. See [Run now](#run-now). |
 | One service account per task | Missing. See [RBAC](#rbac-how-to-use-permissions). |
 | Non-interactive MCP agents only | Partly. `OAUTH2` agents are skipped, but the reason is not shown. |
-| Action level (Report / Propose / Fix) | Missing. See [Human validation](#human-validation). |
+| Action level (Report / Propose / Fix) | Partly. Tools that need validation pause the run until a user with `patch` on the AITask answers, see [Human validation in tasks](#human-validation-in-tasks). No per-definition action level. |
 | Mode (adaptive or single agent) | Partly. No `spec.mode`, planner always disabled. |
 | Conversation per task | Partly. One follow-up conversation per run and per user, see [Follow-up conversation](#follow-up-conversation). No shared conversation per definition, see [Task conversation](#task-conversation). |
 | Run summary (✅/⚠️/🔴, findings, actions, skipped checks) | Partly. Only `RESULT:` is parsed. |
@@ -244,7 +396,9 @@ A private follow-up conversation per run and per user is implemented (see
   `status`. Each run appends its summary, and admins of the task can read it. This needs a thread
   owned by the definition instead of a user, which the chat endpoints and the checkpointer
   `user_id` filter don't support today.
-- Approvals could be given from the conversation (needs a persistent checkpointer).
+- Approvals are given from the per-user follow-up conversation (see
+  [Human validation in tasks](#human-validation-in-tasks)). They don't survive a restart until a
+  persistent checkpointer is used.
 
 ### RBAC: how to use permissions?
 
@@ -290,12 +444,11 @@ validated. The **existing Postgres issues must be fixed first**. After that:
 
 ### Human validation
 
-Today a tool that needs human validation makes the task fail. Questions:
+A tool that needs human validation pauses the run until a user answers (see
+[Human validation in tasks](#human-validation-in-tasks)). Still open:
 
 - Should tasks be **read-only** by default, with write tools disabled instead of interrupted?
-- If write actions are allowed, how is approval asked for and given? Options are: the task waits
-  in a new phase such as `WaitingForApproval` and shows up in the UI, or a notification. **CIBA
-  could help** here: the backchannel authentication request could also be the approval step
+- Notifying users that a task waits for approval. **CIBA could help** here: the backchannel authentication request could also be the approval step
   (binding message: "Liz wants to scale deployment X, approve?").
 - **Stale approvals**: what happens if the cluster state changed between the request and the
   approval, so the action no longer makes sense? Options:
@@ -303,7 +456,7 @@ Today a tool that needs human validation makes the task fail. Questions:
     and abort, or re-plan, if they changed.
   - Make the approval expire after a timeout, and fail or skip the task.
   - Re-run the analysis after approval and only execute if it still reaches the same conclusion.
-- This needs a persistent checkpointer (see Postgres) to keep the interrupted run until approval.
+- A persistent checkpointer (see Postgres) is needed to keep the interrupted run across restarts.
 
 ### Choose a different LLM for agentic tasks
 

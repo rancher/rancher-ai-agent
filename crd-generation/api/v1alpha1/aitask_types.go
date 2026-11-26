@@ -41,6 +41,12 @@ type AITaskStatus struct {
 	// Result is the overall health verdict of the task.
 	// +optional
 	Result TaskResult `json:"result,omitempty"`
+
+	// PendingValidation is true while the run is paused (phase Running) waiting for a user to
+	// answer a human validation request, in the follow-up chat or with the
+	// ai.cattle.io/validation-response annotation.
+	// +optional
+	PendingValidation bool `json:"pendingValidation,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -49,6 +55,7 @@ type AITaskStatus struct {
 // +kubebuilder:printcolumn:name="Definition",type=string,JSONPath=`.spec.taskDefinitionRef`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Result",type=string,JSONPath=`.status.result`
+// +kubebuilder:printcolumn:name="Validation",type=boolean,JSONPath=`.status.pendingValidation`
 // +kubebuilder:printcolumn:name="Started",type=date,JSONPath=`.status.startTime`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

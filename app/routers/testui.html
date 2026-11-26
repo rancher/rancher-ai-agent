@@ -9,24 +9,133 @@
             #messages li:nth-child(odd) { background: #f2f2f2; }
             input { padding: 10px; width: 80%; }
             button { padding: 10px; width: 18%; }
+            #aitaskForm { margin-bottom: 10px; }
+            #aitaskForm input { width: 40%; }
+            #aitaskForm button { width: auto; }
+            #aitaskInfo { color: #555; margin-bottom: 10px; }
+            #messages li.seed { white-space: pre-wrap; border-left: 3px solid #2196f3; }
         </style>
     </head>
     <body>
         <h1>Rancher AI Chat</h1>
+        <form id="aitaskForm" onsubmit="openAITask(event)">
+            <input type="text" id="aitaskName" placeholder="AITask name (continue the conversation of a task run)" autocomplete="off"/>
+            <button>Open AITask chat</button>
+            <button type="button" onclick="newChat()">New chat</button>
+        </form>
+        <div id="aitaskInfo"></div>
         <ul id='messages'></ul>
         <form action="" onsubmit="sendMessage(event)">
             <input type="text" id="messageText" autocomplete="off"/>
             <button>Send</button>
         </form>
         <script>
-            // Establish a WebSocket connection
-            const ws = new WebSocket("ws://localhost:8000/v1/ws/messages");
-            ws.onopen = function(event) {
-                console.log("WebSocket connection established.");
+            const WS_BASE = "ws://localhost:8000/v1/ws/messages";
+            let ws;
+
+            function addLine(text, options = {}) {
+                const messages = document.getElementById('messages');
                 const li = document.createElement('li');
-                li.textContent = "Connected to the server!";
-                document.getElementById('messages').appendChild(li);
-            };
+                li.textContent = text;
+                if (options.className) li.className = options.className;
+                if (options.bold) li.style.fontWeight = "bold";
+                if (options.color) li.style.color = options.color;
+                messages.appendChild(li);
+                messages.scrollTop = messages.scrollHeight;
+                return li;
+            }
+
+            // Open (or reopen) the chat websocket. With aitask set, the conversation is the
+            // user's follow-up on that AITask run (/v1/ws/messages?aitask=<name>).
+            function connect(aitask) {
+                if (ws) {
+                    ws.onclose = null; // don't report the close of the replaced socket
+                    ws.close();
+                }
+                currentMessageLi = null;
+                const url = aitask ? `${WS_BASE}?aitask=${encodeURIComponent(aitask)}` : WS_BASE;
+                ws = new WebSocket(url);
+                ws.onopen = function(event) {
+                    console.log("WebSocket connection established: " + url);
+                    addLine(aitask ? `Connected to the follow-up chat of AITask ${aitask}!` : "Connected to the server!");
+                };
+                ws.onmessage = onMessage;
+                ws.onclose = function(event) {
+                    console.log("WebSocket connection closed.");
+                    addLine("Connection closed.");
+                };
+                ws.onerror = function(error) {
+                    console.error("WebSocket error: ", error);
+                };
+            }
+
+            function newChat() {
+                document.getElementById('messages').innerHTML = '';
+                document.getElementById('aitaskInfo').textContent = '';
+                document.getElementById('aitaskName').value = '';
+                history.replaceState(null, '', location.pathname);
+                connect(null);
+            }
+
+            // Load an AITask, show its follow-up history (or its prompt and output if the
+            // conversation has not started yet) and connect to its follow-up chat.
+            async function openAITask(event) {
+                if (event) event.preventDefault();
+                const name = document.getElementById('aitaskName').value.trim();
+                if (!name) return;
+
+                const info = document.getElementById('aitaskInfo');
+                document.getElementById('messages').innerHTML = '';
+                info.textContent = `Loading AITask ${name}...`;
+
+                let task;
+                try {
+                    const resp = await fetch(`/v1/api/aitasks/${encodeURIComponent(name)}`, { credentials: "same-origin" });
+                    if (!resp.ok) {
+                        const body = await resp.json().catch(() => ({}));
+                        info.textContent = `Cannot load AITask ${name}: ${resp.status} ${body.detail || ''}`;
+                        return;
+                    }
+                    task = await resp.json();
+                } catch (e) {
+                    info.textContent = `Cannot load AITask ${name}: ${e}`;
+                    return;
+                }
+
+                info.textContent = `AITask ${task.name} (definition ${task.taskDefinitionRef}, ${task.trigger || 'unknown'} trigger) - ` +
+                    `phase ${task.phase}, completed ${task.completionTime || '-'} - chatId ${task.chatId || '-'}`;
+                history.replaceState(null, '', `${location.pathname}?aitask=${encodeURIComponent(name)}`);
+
+                // Existing follow-up: its history already starts with the task prompt and output.
+                let previous = [];
+                if (task.chatId) {
+                    try {
+                        const resp = await fetch(`/v1/api/chats/${encodeURIComponent(task.chatId)}/messages`, { credentials: "same-origin" });
+                        if (resp.ok) previous = await resp.json();
+                    } catch (e) {
+                        console.warn("Failed to load follow-up history:", e);
+                    }
+                }
+
+                if (previous.length) {
+                    for (const m of previous) {
+                        if (m.role === "user") {
+                            addLine(`You: ${m.message}`, { bold: true, className: 'seed' });
+                        } else if (m.message) {
+                            addLine(m.message, { className: 'seed' });
+                        }
+                    }
+                } else {
+                    addLine(`Task prompt: ${task.prompt || ''}`, { bold: true, className: 'seed' });
+                    if (task.error) {
+                        addLine(`The task failed: ${task.error}`, { className: 'seed', color: '#c62828' });
+                    } else {
+                        addLine(task.output || '(no output)', { className: 'seed' });
+                    }
+                }
+
+                connect(name);
+            }
 
             let currentMessageLi;
 
@@ -46,10 +155,19 @@
                 }
             };
 
-            ws.onmessage = function(event) {
+            function onMessage(event) {
                 console.log("msg received."+ event.data);
                 const messages = document.getElementById('messages');
                 const data = event.data;
+
+                // The follow-up chat on an AITask can't be opened (sent before the socket closes)
+                if (data.startsWith("<chat-error>")) {
+                    const jsonStr = data.substring(12, data.indexOf("</chat-error>"));
+                    let message = jsonStr;
+                    try { message = JSON.parse(jsonStr).message; } catch (e) {}
+                    addLine(`Error: ${message}`, { color: '#c62828' });
+                    return;
+                }
 
                 if (data.startsWith("<error>")) {
                     alert(data.substring(7)); // Show alert without the <error> tag
@@ -127,19 +245,7 @@
                     messages.appendChild(message);
                 }*/
                 messages.scrollTop = messages.scrollHeight; // Auto-scroll to the bottom
-            };
-
-
-            ws.onclose = function(event) {
-                console.log("WebSocket connection closed.");
-                const li = document.createElement('li');
-                li.textContent = "Connection closed.";
-                document.getElementById('messages').appendChild(li);
-            };
-
-            ws.onerror = function(error) {
-                console.error("WebSocket error: ", error);
-            };
+            }
 
             // Function to send a message
             function sendMessage(event) {
@@ -157,6 +263,15 @@
                     input.value = '';
                 }
                 event.preventDefault();
+            }
+
+            // /ui?aitask=<name> opens the follow-up chat of that AITask directly.
+            const initialAITask = new URLSearchParams(location.search).get("aitask");
+            if (initialAITask) {
+                document.getElementById('aitaskName').value = initialAITask;
+                openAITask();
+            } else {
+                connect(null);
             }
         </script>
     </body>

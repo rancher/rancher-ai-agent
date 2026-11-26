@@ -42,6 +42,12 @@ type AITaskDefinitionSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=253
 	Agents []string `json:"agents,omitempty"`
+
+	// CredentialsRef references the Secret (same namespace) with the Rancher token the task runs
+	// with. The Secret must have the label ai.cattle.io/task-credentials=true. Without it, runs
+	// fail unless the RANCHER_API_TOKEN env var (testing only) is set.
+	// +optional
+	CredentialsRef *CredentialsSecretRef `json:"credentialsRef,omitempty"`
 }
 
 // AITaskDefinitionStatus defines the observed state of AITaskDefinition.

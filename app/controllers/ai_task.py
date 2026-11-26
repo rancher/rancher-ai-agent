@@ -5,6 +5,8 @@ An AITask is one execution of an AITaskDefinition (created by the scheduler).
 For each new AITask this controller builds an agent from the agents listed in
 the task (a supervisor when there are several, a single agent when there is one)
 and invokes it with the task prompt, using the unattended AITask system prompts.
+The agents call their MCP servers with the Rancher token of the Secret referenced
+by ``spec.credentialsRef`` (``RANCHER_API_TOKEN`` wins, for testing).
 
 The outcome (report or error) is stored in the LangGraph store under
 ``AITASK_STORE_NAMESPACE`` keyed by the AITask uid.
@@ -39,6 +41,7 @@ from ..services.aitask_runner import (
     parse_validation_answer,
     save_record,
     status_patch,
+    task_token,
 )
 from ..services.llm import LLMManager
 from ..services.memory import create_sqlite_store, create_store, postgres_enabled, sqlite_store_enabled, sqlite_store_path
@@ -124,7 +127,8 @@ async def run_ai_task(spec, status, name, namespace, uid, logger, patch, **kwarg
     patch.status['startTime'] = record["startTime"]
 
     try:
-        graph, config, agents_metadata = await build_task_graph(LLMManager.get_instance(), record["agents"], uid)
+        token = await task_token(namespace, spec)
+        graph, config, agents_metadata = await build_task_graph(LLMManager.get_instance(), record["agents"], uid, token)
         logger.info(f"AITask {namespace}/{name}: running with agents {[a['name'] for a in agents_metadata]}")
         result = await graph.ainvoke({"messages": [HumanMessage(content=record["prompt"])]}, config)
         await finish_run(graph, config, record, result)
@@ -175,6 +179,6 @@ async def answer_validation(new, spec, status, name, namespace, uid, logger, **k
     logger.info(f"AITask {namespace}/{name}: resuming with validation answer '{answer['response']}'")
     record = await continue_task(
         _store, LLMManager.get_instance(), namespace, name, uid,
-        list(spec.get('agents') or []), record, answer,
+        dict(spec), record, answer,
     )
     logger.info(f"AITask {namespace}/{name} resumed, phase {record['phase']}")

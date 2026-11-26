@@ -73,6 +73,25 @@ spec:
                 maxItems: 64
                 type: array
                 x-kubernetes-list-type: set
+              credentialsRef:
+                description: |-
+                  CredentialsRef references the Secret (same namespace) with the Rancher token the task runs
+                  with. The Secret must have the label ai.cattle.io/task-credentials=true. Without it, runs
+                  fail unless the RANCHER_API_TOKEN env var (testing only) is set.
+                properties:
+                  key:
+                    default: token
+                    description: Key inside the Secret. Defaults to "token".
+                    maxLength: 253
+                    type: string
+                  name:
+                    description: Name is the name of the Secret.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
               displayName:
                 description: DisplayName is the human readable name of the task.
                 maxLength: 128

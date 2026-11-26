@@ -403,7 +403,7 @@ async def _answer_aitask_validation(
     metadata = chat.task.get("metadata", {})
     record = await continue_task(
         store, llm, metadata.get("namespace") or "cattle-ai-agent-system", chat.name, chat.uid,
-        list(chat.task.get("spec", {}).get("agents") or []), record, answer, stream,
+        chat.task.get("spec", {}), record, answer, stream,
     )
 
     if record.get("pendingValidation"):

@@ -22,6 +22,14 @@ def _patch():
     return p
 
 
+@pytest.fixture(autouse=True)
+def task_token():
+    """Task runs get their Rancher token from the task's credentials Secret."""
+    with patch.object(aitask_runner, "resolve_task_token", AsyncMock(return_value="task-token")) as m, \
+         patch.object(aitask_runner, "rbac_enabled", return_value=False):
+        yield m
+
+
 @pytest.fixture
 def store():
     s = InMemoryStore()
@@ -292,3 +300,47 @@ async def test_lost_checkpoint_fails_task(store, status_patches):
     assert stored["phase"] == "Failed"
     assert stored["error"] == aitask_runner.LOST_RUN_ERROR
     assert status_patches[-1]["phase"] == "Failed"
+
+
+# --- credentials ---
+
+@pytest.mark.asyncio
+async def test_run_uses_task_credentials(store, task_token):
+    spec = {"taskDefinitionRef": "daily", "prompt": "check clusters", "agents": [],
+            "credentialsRef": {"name": "liz-task-token"}}
+    status, _, build = await _run(_graph(), [_cfg()], store, spec=spec)
+
+    assert status["phase"] == "Succeeded"
+    task_token.assert_awaited_once_with("ns", {"name": "liz-task-token"})
+    assert build.call_args.kwargs["rancher_token"] == "task-token"
+
+
+@pytest.mark.asyncio
+async def test_credentials_error_fails_task(store, task_token):
+    task_token.side_effect = aitask_runner.TaskCredentialsError("Credentials Secret 'x' not found")
+    graph = _graph()
+
+    status, stored, build = await _run(graph, [_cfg()], store)
+
+    assert status["phase"] == "Failed"
+    assert stored["error"] == "Credentials Secret 'x' not found"
+    build.assert_not_called()
+    graph.ainvoke.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_task_credentials(store, status_patches, task_token):
+    await _pending_store(store)
+    graph = _resumable_graph()
+    with patch.object(aitask_runner, "load_agent_configs", return_value=[_cfg()]), \
+         patch.object(aitask_runner, "build_agent_from_configs", AsyncMock(return_value=(graph, [{"name": "rancher"}]))) as build, \
+         patch.object(ai_task.LLMManager, "get_instance", return_value=MagicMock()):
+        await ai_task.answer_validation(
+            new='{"response": "yes"}',
+            spec={"prompt": "check clusters", "agents": [], "credentialsRef": {"name": "s", "key": "k"}},
+            status={"phase": "Running", "pendingValidation": True},
+            name="t1", namespace="ns", uid="uid-1", logger=MagicMock(),
+        )
+
+    task_token.assert_awaited_once_with("ns", {"name": "s", "key": "k"})
+    assert build.call_args.kwargs["rancher_token"] == "task-token"

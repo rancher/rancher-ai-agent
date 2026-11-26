@@ -38,6 +38,7 @@ AITaskDefinition ──(scheduler daemon, cron)──▶ AITask ──(executor)
 | `spec.timeZone` | IANA time zone, UTC by default. |
 | `spec.suspend` | Stops new scheduled runs. |
 | `spec.agents` | `AIAgentConfig` names the task may use. Empty means every enabled agent. |
+| `spec.credentialsRef` | `{name, key}` (key `token` by default) of the Secret with the Rancher token the task runs with. See [Task credentials](#task-credentials). |
 | `status.conditions` | `ScheduleValid` and `Ready`. |
 | `status.lastScheduleTime` / `status.nextRunTime` | Owned by the scheduler. |
 
@@ -48,7 +49,7 @@ The name is limited to 52 characters so that `<definition>-<unix minutes>` fits 
 | Field | Description |
 | :--- | :--- |
 | `spec.taskDefinitionRef` | Owning definition. |
-| `spec.prompt`, `spec.agents` | Copied from the definition when the task is created. |
+| `spec.prompt`, `spec.agents`, `spec.credentialsRef` | Copied from the definition when the task is created. |
 | `status.phase` | `Pending`, `Running`, `Succeeded`, `Failed`. |
 | `status.startTime` / `status.completionTime` | Run timestamps. |
 | `status.result` | `Healthy`, `Warning`, `Critical`. |
@@ -57,8 +58,7 @@ The name is limited to 52 characters so that `<definition>-<unix minutes>` fits 
 AITasks have the labels `ai.cattle.io/task-definition` and `ai.cattle.io/trigger`, the
 annotations `ai.cattle.io/scheduled-at` and `ai.cattle.io/validation-response` (the answer to a
 pending validation), and an owner reference to the definition, so they are
-garbage-collected together. `common_types.go` also defines a `CredentialsSecretRef` and the
-`ai.cattle.io/task-credentials` label. These are not wired yet, see [RBAC](#rbac--permissions).
+garbage-collected together.
 
 The CRDs are installed by the chart (`chart/agent/templates/crds/`). The agent service account
 gets the needed permissions on `aitasks`, `aitaskdefinitions` and their `status` subresources.
@@ -101,7 +101,9 @@ A `kopf.on.create`/`on.resume` handler (timeout 1h) runs each new AITask:
 
 1. It skips the task if it is already `Running`/`Succeeded`/`Failed`, so a task is never run twice
    after an operator restart.
-2. It sets `phase=Running`, resolves `spec.agents` against the enabled `AIAgentConfig`s and skips
+2. It sets `phase=Running` and resolves the task's Rancher token (see
+   [Task credentials](#task-credentials)). It resolves `spec.agents` against the enabled
+   `AIAgentConfig`s (with `RBAC_ENABLED=true`, only the ones the token's user may access) and skips
    `OAUTH2` agents, which need an interactive login.
 3. It builds the graph with the new `build_agent_from_configs()` (`factory.py`): a single agent for
    one config, otherwise a supervisor. The planner is always disabled (`allow_planner=False`). No
@@ -124,6 +126,74 @@ A `kopf.on.create`/`on.resume` handler (timeout 1h) runs each new AITask:
 The checkpointer used for task runs is an in-memory `InMemorySaver` (see TODO in the code). It is
 process-wide (`app/services/aitask_runner.py`), so a paused run can be resumed from the kopf loop or
 the FastAPI loop.
+
+### Task credentials
+
+A task runs with the Rancher token of a dedicated user, stored in a Secret that the definition
+references with `spec.credentialsRef`. The token is passed to the MCP servers of `RANCHER` agents
+(`R_token`), so the task can only see and do what that user can. Code: `resolve_task_token` in
+`app/services/aitask_runner.py`.
+
+- The Secret must be in `cattle-ai-agent-system` and have the label
+  `ai.cattle.io/task-credentials=true`. Only labelled Secrets are used, so a definition can't make
+  the agent use any other Secret it can read (LLM keys, OAuth stores, ...).
+- `credentialsRef` is copied into each AITask, so a run keeps the credentials it started with. The
+  token is read again from the Secret on every run and on every validation resume, so a rotated
+  token is picked up by the next run. It is never stored in the record or logged.
+- With `RBAC_ENABLED=true`, `spec.agents` is also limited to the `AIAgentConfig`s the token's user
+  may access (`accessible_agent_configs`, as in the chat).
+- The task fails with a clear error if the Secret is missing, not labelled, has no (or an empty)
+  key, or if there is no `credentialsRef`.
+- **Testing:** if the `RANCHER_API_TOKEN` env var is set, it is used instead and `credentialsRef`
+  is ignored, as everywhere else in the agent.
+- Runs still use `user_id="aitask"` for their own thread. Only the Rancher token changes.
+- Non-Rancher agents keep their own auth (`BASIC`/`HEADER` Secrets from the `AIAgentConfig`).
+  `OAUTH2` agents are still skipped.
+
+### How to set the task credentials
+
+1. In Rancher, create a dedicated user (for example `liz-task-health`) and give it only the roles
+   the task needs, for example read-only on the clusters to check.
+2. Log in as that user and create an API token (**Account & API Keys** → **Create API Key**). Use
+   no scope, and an expiry that matches your rotation policy. Copy the bearer token
+   (`token-xxxxx:yyyy`).
+3. Create the Secret and label it:
+
+   ```sh
+   kubectl create secret generic liz-task-health-token -n cattle-ai-agent-system \
+     --from-literal=token='token-xxxxx:yyyy'
+   kubectl label secret liz-task-health-token -n cattle-ai-agent-system \
+     ai.cattle.io/task-credentials=true
+   ```
+
+4. Reference it from the definition (`key` is optional, `token` by default):
+
+   ```yaml
+   apiVersion: ai.cattle.io/v1alpha1
+   kind: AITaskDefinition
+   metadata:
+     name: daily-health
+     namespace: cattle-ai-agent-system
+   spec:
+     displayName: Daily cluster health
+     prompt: Check the health of all downstream clusters and report problems.
+     schedule: "@daily"
+     credentialsRef:
+       name: liz-task-health-token
+       key: token
+   ```
+
+   An existing definition can be patched too:
+   `kubectl patch aitd daily-health -n cattle-ai-agent-system --type merge -p '{"spec":{"credentialsRef":{"name":"liz-task-health-token"}}}'`.
+   Only AITasks created afterwards get it.
+5. Run it (`kubectl annotate aitd daily-health -n cattle-ai-agent-system --overwrite
+   ai.cattle.io/run-requested-at="$(date -u +%FT%TZ)"`) and check the result. If the credentials
+   can't be used, the task is `Failed` and `GET /v1/api/aitasks/<name>` shows the reason in
+   `error`.
+
+To rotate the token, update the Secret (`kubectl create secret generic … --dry-run=client -o yaml |
+kubectl apply -f -`). The next run uses the new token. Unset `RANCHER_API_TOKEN` in the deployment,
+otherwise it overrides every `credentialsRef`.
 
 ### Human validation in tasks
 
@@ -335,9 +405,9 @@ Code: `app/services/aitask_chat.py`, websocket handling in `app/routers/websocke
 
 ### Known limitations of the POC
 
-- **No real identity for task runs.** Tasks run with `user_id="aitask"`. For `RANCHER` auth agents
-  the MCP client falls back to the `RANCHER_API_TOKEN` env var (dev only), because there is no user
-  session. `OAUTH2` agents are skipped.
+- Task identity is a long-lived user token in a Secret (see [Task credentials](#task-credentials)).
+  Anyone who can create or edit an AITaskDefinition can reference any labelled Secret.
+  `OAUTH2` agents are skipped.
 - Paused runs waiting for validation are lost on restart (in-memory checkpointer) and the task is
   failed. Approvals don't expire, and nothing notifies users that a task is waiting.
 - There is no create/update API for definitions (only `kubectl`).
@@ -359,7 +429,7 @@ Code: `app/services/aitask_chat.py`, websocket handling in `app/routers/websocke
 | :--- | :--- |
 | Scheduled runs | Done. |
 | Run now | Done. See [Run now](#run-now). |
-| One service account per task | Missing. See [RBAC](#rbac-how-to-use-permissions). |
+| One service account per task | Partly. One Rancher user token per definition, from a labelled Secret, see [Task credentials](#task-credentials). |
 | Non-interactive MCP agents only | Partly. `OAUTH2` agents are skipped, but the reason is not shown. |
 | Action level (Report / Propose / Fix) | Partly. Tools that need validation pause the run until a user with `patch` on the AITask answers, see [Human validation in tasks](#human-validation-in-tasks). No per-definition action level. |
 | Mode (adaptive or single agent) | Partly. No `spec.mode`, planner always disabled. |
@@ -412,7 +482,7 @@ Options:
 1. **Dedicated user and token in a Secret.** Admins create a Rancher user, possibly one per task
    or team, with the needed roles, generate an API token, and store it in a Secret in
    `cattle-ai-agent-system`. The definition references it (`credentialsRef`, Secrets labelled
-   `ai.cattle.io/task-credentials`; the types already exist in `common_types.go`).
+   `ai.cattle.io/task-credentials=true`). **Implemented**, see [Task credentials](#task-credentials).
    - Pros: works today, simple, the permissions are explicit.
    - Cons: long-lived tokens to rotate and protect, manual setup, and the task does not run "as"
      the user who created it. We would need to check that the user who creates a definition is
@@ -428,7 +498,9 @@ Options:
      token is allowed.
 
 Still to decide: who "owns" a definition (creator vs. explicit identity), how to stop users from
-referencing credentials they shouldn't use, and how this works for non-Rancher MCP auth types
+referencing labelled credentials they shouldn't use (today any user who can create or edit a
+definition can reference any labelled Secret; a validating webhook could check that the user may
+`get` that Secret), and how this works for non-Rancher MCP auth types
 (`BASIC`, `HEADER`, `OAUTH2`).
 
 ### Postgres storage

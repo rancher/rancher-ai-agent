@@ -74,6 +74,24 @@ spec:
                 maxItems: 64
                 type: array
                 x-kubernetes-list-type: set
+              credentialsRef:
+                description: |-
+                  CredentialsRef is copied from the definition: the Secret with the Rancher token this task
+                  runs with.
+                properties:
+                  key:
+                    default: token
+                    description: Key inside the Secret. Defaults to "token".
+                    maxLength: 253
+                    type: string
+                  name:
+                    description: Name is the name of the Secret.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
               prompt:
                 description: Prompt is the plain-language description of what Liz
                   must do.

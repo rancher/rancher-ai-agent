@@ -144,6 +144,7 @@ def _task_body(definition_name: str, definition_uid: str, spec: dict, name: str,
             "taskDefinitionRef": definition_name,
             "prompt": spec["prompt"],
             **({"agents": list(spec["agents"])} if spec.get("agents") else {}),
+            **({"credentialsRef": dict(spec["credentialsRef"])} if spec.get("credentialsRef") else {}),
         },
     }
 

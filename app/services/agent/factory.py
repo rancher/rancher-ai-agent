@@ -93,12 +93,14 @@ async def build_agent_from_configs(
     checkpointer: Checkpointer,
     websocket: WebSocket | None = None,
     allow_planner: bool = True,
+    rancher_token: str | None = None,
 ) -> tuple[CompiledStateGraph | SupervisorGraph, list[dict]]:
     """
     Build a single agent (one config) or a supervisor (several configs) from
     already-resolved agent configs. The websocket is optional so this can be used
     headless (e.g. by the AITask controller). With ``allow_planner=False`` the
-    supervisor is always used, even when PLAN_ENABLED is set.
+    supervisor is always used, even when PLAN_ENABLED is set. ``rancher_token`` is
+    the Rancher token of ``RANCHER`` agents when there is no websocket (AITask runs).
 
     Raises:
         NoAgentAvailableError: If no agent could be created.
@@ -108,13 +110,13 @@ async def build_agent_from_configs(
 
     if len(agent_configs) == 1:
         agent_cfg = agent_configs[0]
-        tools = await _load_mcp_tools(agent_cfg, websocket)
+        tools = await _load_mcp_tools(agent_cfg, websocket, rancher_token)
         graph = create_child_agent(llm, tools, checkpointer, agent_cfg)
         return graph, [{"name": agent_cfg.name, "status": "active"}]
 
     # Multi-agent setup
     logging.info(f"Multi-agent setup detected, creating supervisor with {len(agent_configs)} agents.")
-    child_agents, agents_metadata = await _build_child_agents(llm, agent_configs, checkpointer, websocket)
+    child_agents, agents_metadata = await _build_child_agents(llm, agent_configs, checkpointer, websocket, rancher_token)
 
     if not child_agents:
         logging.error("Failed to create any child agents due to MCP connection issues")
@@ -143,6 +145,7 @@ async def _build_child_agents(
     agent_configs: list[AgentConfig],
     checkpointer: Checkpointer,
     websocket: WebSocket | None,
+    rancher_token: str | None = None,
 ) -> tuple[list[ChildAgent], list[dict]]:
     """
     Attempt to build a child agent for each config, collecting successes and failures.
@@ -155,7 +158,7 @@ async def _build_child_agents(
 
     for agent_cfg in agent_configs:
         try:
-            tools = await _load_mcp_tools(agent_cfg, websocket)
+            tools = await _load_mcp_tools(agent_cfg, websocket, rancher_token)
             child_agents.append(ChildAgent(
                 config=agent_cfg,
                 agent=create_child_agent(llm, tools, checkpointer, agent_cfg),
@@ -203,7 +206,7 @@ async def reload_agent_tools(
     return create_child_agent(llm, tools, checkpointer, agent_cfg)
 
 
-async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket | None) -> list:
+async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket | None, rancher_token: str | None = None) -> list:
     """
     Connect to the MCP server for an agent config, load tools, filter by toolset,
     and update the CRD status accordingly.
@@ -212,7 +215,7 @@ async def _load_mcp_tools(agent_cfg: AgentConfig, websocket: WebSocket | None) -
         NoAgentAvailableError: If the MCP connection fails.
     """
 
-    mcp_client = await create_mcp_client(agent_cfg, websocket)
+    mcp_client = await create_mcp_client(agent_cfg, websocket, rancher_token)
     
     try:
         tools = await mcp_client.list_tools()
@@ -268,7 +271,11 @@ def _tool_meta(tool) -> dict:
     return ((((tool.metadata or {}).get("mcp") or {}).get("tool") or {}).get("_meta")) or {}
 
 
-async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | None = None) -> MCPAdapter:
+async def create_mcp_client(
+    agent_config: AgentConfig,
+    websocket: WebSocket | None = None,
+    rancher_token: str | None = None,
+) -> MCPAdapter:
     """
     Create an MCP client for the agent based on the agent configuration.
     
@@ -280,12 +287,14 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
         agent_config: The configuration object for the agent, containing authentication details.
         websocket: Optional WebSocket connection used to extract cookies and URL information for Rancher authentication.
                    If not provided, falls back to environment variables only.
+        rancher_token: Rancher token for Rancher authentication without a websocket (AITask runs).
     
     Returns:
         MCPAdapter: A configured MCP adapter ready to connect to the server and load its tools.
     
     Note:
-        - For Rancher authentication, extracts R_SESS cookie and uses RANCHER_URL
+        - For Rancher authentication, the token is the RANCHER_API_TOKEN env var (dev/testing),
+          then ``rancher_token``, then the R_SESS cookie
         - Respects INSECURE_SKIP_TLS environment variable to disable TLS certificate verification
         - For BASIC authentication, encodes credentials in the Authorization header
         - For NONE authentication, creates client with no additional headers
@@ -294,11 +303,11 @@ async def create_mcp_client(agent_config: AgentConfig, websocket: WebSocket | No
     oauth2_auth = None
 
     if agent_config.authentication == AuthenticationType.RANCHER:
-        if websocket:
-            cookies = websocket.cookies
-            token = os.environ.get("RANCHER_API_TOKEN", cookies.get("R_SESS", ""))
-        else:
-            token = os.environ.get("RANCHER_API_TOKEN", "")
+        token = (
+            os.environ.get("RANCHER_API_TOKEN")
+            or rancher_token
+            or (websocket.cookies.get("R_SESS", "") if websocket else "")
+        )
         
         mcp_url = os.environ.get("MCP_URL", agent_config.mcp_url)
         if not mcp_url.startswith(("http://", "https://")):

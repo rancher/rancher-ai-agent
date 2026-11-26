@@ -8,7 +8,7 @@ const (
 	LabelTaskDefinition = "ai.cattle.io/task-definition"
 	// LabelTrigger is set on every AITask with the trigger ("scheduled" or "manual").
 	LabelTrigger = "ai.cattle.io/trigger"
-	// LabelTaskCredentials marks Secrets that may be referenced by credentialsRef.
+	// LabelTaskCredentials marks Secrets that may be referenced by credentialsRef (value "true").
 	LabelTaskCredentials = "ai.cattle.io/task-credentials"
 	// AnnotationScheduledAt holds the RFC3339 scheduled time of scheduled AITasks.
 	AnnotationScheduledAt = "ai.cattle.io/scheduled-at"

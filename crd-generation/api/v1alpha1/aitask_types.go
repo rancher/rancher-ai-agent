@@ -26,6 +26,11 @@ type AITaskSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=253
 	Agents []string `json:"agents,omitempty"`
+
+	// CredentialsRef is copied from the definition: the Secret with the Rancher token this task
+	// runs with.
+	// +optional
+	CredentialsRef *CredentialsSecretRef `json:"credentialsRef,omitempty"`
 }
 
 // AITaskStatus defines the observed state of AITask.

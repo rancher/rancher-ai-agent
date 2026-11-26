@@ -1556,7 +1556,8 @@ async def test_answer_resumes_task_then_chat_continues_with_seed(validation_deps
     submit_args = validation_deps["submit"].call_args.args
     assert submit_args == ("fake_token", "daily-1", "v1", "yes", "user-123")
     cont_args = validation_deps["continue"].call_args.args
-    assert cont_args[2:6] == ("cattle-ai-agent-system", "daily-1", "task-uid", ["rancher"])
+    assert cont_args[2:5] == ("cattle-ai-agent-system", "daily-1", "task-uid")
+    assert cont_args[5] == _aitask()["spec"]
     assert cont_args[7]["via"] == "chat"
     validation_deps["stream_events"].assert_awaited_once()
 

@@ -13,11 +13,19 @@ user who answered.
 The graphs are checkpointed in the process-wide in-memory ``checkpointer``, so a
 paused run can be resumed from either event loop (kopf or FastAPI), but not after
 a restart.
+
+Credentials: a task runs with the Rancher token stored in the Secret referenced by
+``spec.credentialsRef`` (copied from its AITaskDefinition). The Secret must be in
+the task namespace and labelled ``ai.cattle.io/task-credentials=true``. The
+``RANCHER_API_TOKEN`` env var, for testing only, takes precedence.
 """
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
+import os
 import re
 import threading
 from collections.abc import Awaitable, Callable
@@ -25,19 +33,28 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from kubernetes import client
+from kubernetes.client.rest import ApiException
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
-from ..constants import AITASK_STORE_NAMESPACE, VALIDATION_VIA_CHAT
+from ..constants import AITASK_STORE_NAMESPACE, LABEL_TASK_CREDENTIALS, VALIDATION_VIA_CHAT
 from .agent.factory import build_agent_from_configs
 from .agent.loader import AgentConfig, AuthenticationType, _load_k8s_config, load_agent_configs
 from .agent.system_prompts import AITASK_RESULT_VALUES
+from .rbac import RBACError, accessible_agent_configs, rbac_enabled
 
 GROUP = "ai.cattle.io"
 VERSION = "v1alpha1"
 
 LOST_RUN_ERROR = "The run waiting for validation can no longer be resumed (the agent restarted)."
+
+DEFAULT_CREDENTIALS_KEY = "token"
+
+
+class TaskCredentialsError(Exception):
+    """The Rancher token of an AITask can't be resolved. The message is shown in the task error."""
+    pass
 
 _RESULT_PATTERN = re.compile(r"^\s*\**RESULT:\**\s*\**(" + "|".join(AITASK_RESULT_VALUES) + r")\b", re.IGNORECASE)
 
@@ -73,14 +90,80 @@ def new_record(name: str, spec: dict) -> dict:
     }
 
 
-def resolve_agent_configs(agent_names: list[str]) -> list[AgentConfig]:
-    """Select the enabled AIAgentConfigs named by the task (all of them if the list is empty)."""
-    configs = load_agent_configs()
+async def resolve_task_token(namespace: str, credentials_ref: dict | None) -> str:
+    """
+    The Rancher token an AITask runs with.
+
+    ``RANCHER_API_TOKEN`` (testing only) wins. Otherwise the token is read from
+    ``credentials_ref`` (``{name, key}``, key ``token`` by default): a Secret in
+    *namespace* labelled ``ai.cattle.io/task-credentials=true``. Only labelled
+    Secrets are used, so a definition can't point at other Secrets the agent
+    service account can read.
+
+    Raises:
+        TaskCredentialsError: If there is no usable token.
+    """
+    env_token = os.environ.get("RANCHER_API_TOKEN")
+    if env_token:
+        return env_token
+
+    name = (credentials_ref or {}).get("name")
+    if not name:
+        raise TaskCredentialsError("The task has no credentialsRef and RANCHER_API_TOKEN is not set")
+    key = (credentials_ref or {}).get("key") or DEFAULT_CREDENTIALS_KEY
+
+    def _read():
+        _load_k8s_config()
+        return client.CoreV1Api().read_namespaced_secret(name, namespace)
+
+    try:
+        secret = await asyncio.to_thread(_read)
+    except ApiException as e:
+        if e.status == 404:
+            raise TaskCredentialsError(f"Credentials Secret '{name}' not found in namespace '{namespace}'")
+        raise TaskCredentialsError(f"Unable to read credentials Secret '{name}' (HTTP {e.status})")
+
+    labels = (secret.metadata.labels if secret.metadata else None) or {}
+    if labels.get(LABEL_TASK_CREDENTIALS) != "true":
+        raise TaskCredentialsError(
+            f"Credentials Secret '{name}' is not labelled {LABEL_TASK_CREDENTIALS}=true"
+        )
+
+    encoded = (secret.data or {}).get(key)
+    if not encoded:
+        raise TaskCredentialsError(f"Credentials Secret '{name}' has no '{key}' key")
+    try:
+        token = base64.b64decode(encoded).decode().strip()
+    except (binascii.Error, UnicodeDecodeError):
+        raise TaskCredentialsError(f"Key '{key}' of credentials Secret '{name}' is not a valid token")
+    if not token:
+        raise TaskCredentialsError(f"Key '{key}' of credentials Secret '{name}' is empty")
+    return token
+
+
+async def task_token(namespace: str, spec: dict) -> str:
+    """The Rancher token of the AITask with *spec* (see ``resolve_task_token``)."""
+    return await resolve_task_token(namespace, spec.get("credentialsRef"))
+
+
+async def resolve_agent_configs(agent_names: list[str], token: str) -> list[AgentConfig]:
+    """
+    Select the enabled AIAgentConfigs named by the task (all of them if the list is empty).
+
+    With RBAC enabled, only the agents the holder of *token* may access are used.
+    """
+    if rbac_enabled():
+        try:
+            configs = await accessible_agent_configs(token)
+        except RBACError as e:
+            raise RuntimeError(f"Unable to verify the task's agents with Rancher: {e}")
+    else:
+        configs = load_agent_configs()
     if agent_names:
         known = {c.name for c in configs}
         for name in agent_names:
             if name not in known:
-                logging.warning(f"AITask references unknown or disabled agent '{name}'")
+                logging.warning(f"AITask references unknown, disabled or inaccessible agent '{name}'")
         configs = [c for c in configs if c.name in agent_names]
 
     usable = []
@@ -92,18 +175,21 @@ def resolve_agent_configs(agent_names: list[str]) -> list[AgentConfig]:
     return usable
 
 
-async def build_task_graph(llm, agent_names: list[str], uid: str) -> tuple[object, dict, list[dict]]:
+async def build_task_graph(llm, agent_names: list[str], uid: str, token: str) -> tuple[object, dict, list[dict]]:
     """
-    Build the graph of the AITask with uid *uid* and its run config.
+    Build the graph of the AITask with uid *uid* and its run config. The agents
+    call their MCP servers with the task's Rancher *token*.
 
     One agent gives a single agent, several give a supervisor. The thread id is
     derived from the uid, so building it again resumes the same run.
     """
-    configs = resolve_agent_configs(agent_names)
+    configs = await resolve_agent_configs(agent_names, token)
     if not configs:
         raise RuntimeError("No usable agents available for this task")
 
-    graph, agents_metadata = await build_agent_from_configs(llm, configs, checkpointer, allow_planner=False)
+    graph, agents_metadata = await build_agent_from_configs(
+        llm, configs, checkpointer, allow_planner=False, rancher_token=token,
+    )
 
     configurable = {"thread_id": f"aitask-{uid}", "user_id": "aitask", "aitask": True}
     if len(configs) == 1:
@@ -296,21 +382,23 @@ async def continue_task(
     namespace: str,
     name: str,
     uid: str,
-    agent_names: list[str],
+    spec: dict,
     record: dict,
     answer: dict,
     stream: StreamFn | None = None,
 ) -> dict:
     """
-    Resume a paused AITask run with a validation *answer* that has been claimed
-    (``claim_validation``), then store the record and patch the AITask status.
+    Resume a paused AITask run (AITask *spec*) with a validation *answer* that has
+    been claimed (``claim_validation``), then store the record and patch the AITask
+    status. The run continues with the task's credentials.
 
     ``status.pendingValidation`` is cleared first so the run shows as in progress.
     Errors end the task as failed, so it is never left waiting.
     """
     try:
         await patch_task_status(namespace, name, {"pendingValidation": False})
-        graph, config, _ = await build_task_graph(llm, agent_names, uid)
+        token = await task_token(namespace, spec)
+        graph, config, _ = await build_task_graph(llm, list(spec.get("agents") or []), uid, token)
         record = await resume_task(graph, config, record, answer, stream)
     except Exception as e:
         logging.exception(f"Failed to resume AITask {namespace}/{name}")

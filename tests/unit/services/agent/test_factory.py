@@ -65,7 +65,7 @@ async def test_create_agent_single_agent(mock_create_child, mock_load_tools, moc
     # Verify
     assert result[0] == mock_agent
     assert result[1] == [{"name": "RancherAgent", "status": "active"}]
-    mock_load_tools.assert_called_once_with(mock_agent_config, mock_websocket)
+    mock_load_tools.assert_called_once_with(mock_agent_config, mock_websocket, None)
     mock_create_child.assert_called_once_with(
         mock_llm, mock_tools, mock_checkpointer, mock_agent_config
     )
@@ -426,6 +426,39 @@ async def test_create_mcp_client_rancher_auth_with_websocket(mock_transport, moc
     call_args = mock_transport.call_args
     assert call_args.args[0] == "https://mcp-service:8080"
     assert call_args.kwargs["headers"]['R_token'] == 'test-token'
+
+
+def _rancher_config():
+    config = MagicMock()
+    config.name = "TestAgent"
+    config.authentication = AuthenticationType.RANCHER
+    config.mcp_url = "mcp-service:8080"
+    config.ca_bundle_ref = None
+    return config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env_token, rancher_token, cookie, expected", [
+    (None, "task-token", None, "task-token"),        # AITask run: token from the task Secret
+    ("env-token", "task-token", None, "env-token"),  # RANCHER_API_TOKEN (testing) wins
+    (None, None, "cookie-token", "cookie-token"),    # chat: R_SESS cookie
+    (None, "task-token", "cookie-token", "task-token"),
+    (None, None, None, ""),
+])
+@patch('app.services.agent.factory.StreamableHttpTransport')
+async def test_create_mcp_client_rancher_token_precedence(mock_transport, mock_adapter, monkeypatch, env_token, rancher_token, cookie, expected):
+    if env_token:
+        monkeypatch.setenv("RANCHER_API_TOKEN", env_token)
+    else:
+        monkeypatch.delenv("RANCHER_API_TOKEN", raising=False)
+    websocket = None
+    if cookie:
+        websocket = MagicMock()
+        websocket.cookies = {"R_SESS": cookie}
+
+    await create_mcp_client(_rancher_config(), websocket, rancher_token)
+
+    assert mock_transport.call_args.kwargs["headers"]["R_token"] == expected
 
 
 @pytest.mark.asyncio

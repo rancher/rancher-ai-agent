@@ -75,6 +75,15 @@ def test_task_name_and_body():
 def test_body_omits_empty_agents():
     body = build_task_body("daily", "uid-1", {"prompt": "check"}, _dt(2026, 1, 1))
     assert "agents" not in body["spec"]
+    assert "credentialsRef" not in body["spec"]
+
+
+def test_body_copies_credentials_ref():
+    ref = {"name": "liz-task-token", "key": "token"}
+    body = build_task_body("daily", "uid-1", {"prompt": "check", "credentialsRef": ref}, _dt(2026, 1, 1))
+    assert body["spec"]["credentialsRef"] == ref
+    manual = sched.build_manual_task_body("daily", "uid-1", {"prompt": "check", "credentialsRef": ref}, "2026-01-01T10:00:00.000Z")
+    assert manual["spec"]["credentialsRef"] == ref
 
 
 # --- scheduler ------------------------------------------------------------------

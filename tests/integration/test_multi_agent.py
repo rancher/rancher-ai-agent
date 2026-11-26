@@ -10,7 +10,7 @@ CHILD_TOOL_USE_INSTRUCTIONS = _CHILD_TOOL_USE_INSTRUCTIONS + SEQUENTIAL_TOOL_CAL
 from app.services.llm import LLMManager
 from app.services.memory import StorageType
 from langchain_core.language_models import FakeMessagesListChatModel
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
 from _pytest.monkeypatch import MonkeyPatch
 from langchain_core.language_models.base import LanguageModelInput
@@ -31,8 +31,8 @@ CALCULATOR_AGENT_NAME = "calculator-agent"
 MATH_AGENT_PROMPT = "You are a math agent that can add numbers."
 CALCULATOR_AGENT_PROMPT = "You are a calculator agent that can multiply numbers."
 
-mock_mcp_1 = FastMCP("mock1")
-mock_mcp_2 = FastMCP("mock2")
+mock_mcp_1 = MCPServer("mock1")
+mock_mcp_2 = MCPServer("mock2")
 
 
 @mock_mcp_1.tool()

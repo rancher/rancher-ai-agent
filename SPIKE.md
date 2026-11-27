@@ -1,559 +1,230 @@
 # Spike: Agentic Tasks (POC)
 
-This document describes the proof of concept on the `agentic-tasks` branch and lists the open
-questions that still need to be answered before this becomes a real feature.
+This document summarizes the proof of concept on the `agentic-tasks` branch and the open questions
+to answer before it becomes a real feature.
 
 ## Goal
 
 Let Liz run **unattended tasks**: a prompt (for example "check the health of all downstream
-clusters and report problems") that runs on a schedule with no user watching. The result is stored
-so a user can read it later from the UI.
+clusters and report problems") that runs on a schedule or on demand, with nobody watching. A user
+reads the result later in the UI and can ask follow-up questions about it.
 
-## Overview
+## Summary of the POC
 
-The POC adds two CRDs and two kopf controllers to the existing agent process. Everything is behind a
-feature flag.
+Everything is behind the feature flag `AGENTIC_TASK_ENABLED` (Helm: `agenticTask.enabled`).
 
 ```
-AITaskDefinition ──(scheduler daemon, cron)──▶ AITask ──(executor)──▶ supervisor / agent ──▶ store
-        ▲                                         ▲                                           │
-        └──────────── GET /v1/api/aitaskdefinitions, /v1/api/aitasks[/{name}] ◀───────────────┘
-                       (read as the calling user through Rancher Steve)
+AITaskDefinition ──(schedule or "run now")──▶ AITask ──(executor)──▶ Liz agents ──▶ stored report
+                                                                                        │
+                       UI / API (read as the calling user, Rancher RBAC) ◀───────────────┘
 ```
 
-### Feature flag
-
-- `AGENTIC_TASK_ENABLED=true` (Helm: `agenticTask.enabled`) registers the AITask/AITaskDefinition
-  kopf handlers and the REST endpoints (`app/main.py`). When it is off, nothing changes.
-
-### CRDs (`crd-generation/api/v1alpha1/`, `ai.cattle.io/v1alpha1`, namespaced)
-
-**AITaskDefinition** (`aitd`): the template for a recurring or manual-only task.
-
-| Field | Description |
+| Concept | What it is |
 | :--- | :--- |
-| `spec.displayName` | Human readable name. |
-| `spec.prompt` | What Liz has to do (max 8192 chars). |
-| `spec.schedule` | Cron expression or macro (`@daily`, ...). Empty means manual only. `CRON_TZ`/`TZ` prefixes are rejected. |
-| `spec.timeZone` | IANA time zone, UTC by default. |
-| `spec.suspend` | Stops new scheduled runs. |
-| `spec.agents` | `AIAgentConfig` names the task may use. Empty means every enabled agent. |
-| `spec.credentialsRef` | `{name, key}` (key `token` by default) of the Secret with the Rancher token the task runs with. See [Task credentials](#task-credentials). |
-| `status.conditions` | `ScheduleValid` and `Ready`. |
-| `status.lastScheduleTime` / `status.nextRunTime` | Owned by the scheduler. |
+| **AITaskDefinition** | The template: prompt, schedule (cron, optional), time zone, allowed agents, suspend flag, and the credentials the task runs with. |
+| **AITask** | One run of a definition. Has a phase (`Pending`, `Running`, `Succeeded`, `Failed`) and a result (`Healthy`, `Warning`, `Critical`). Deleted together with its definition. |
+| **Report** | The full output of the run, kept in the agent's store (not in the CR, because it can be large). |
 
-The name is limited to 52 characters so that `<definition>-<unix minutes>` fits in 63.
+### What works
 
-**AITask** (`ait`): one execution of a definition. The spec is immutable (CEL rule).
+- **Scheduled runs.** Works like a small CronJob: no overlapping runs of the same definition, missed
+  runs are not caught up (only a run that is at most 5 minutes late is started), and a run is never
+  executed twice.
+- **Run now.** `POST /v1/api/aitaskdefinitions/{name}/run` starts a run, also for suspended or
+  manual-only definitions. The user needs `patch` on the definition.
+- **Unattended execution.** The task uses a single agent or the supervisor, without the planner.
+  Liz gets a special prompt: never ask questions, prefer read-only actions, write a structured
+  report, and end with a `Healthy`/`Warning`/`Critical` verdict.
+- **Task credentials.** Each definition references a Secret with the Rancher token of a dedicated
+  user. The task only sees and does what that user can. See [Task identity](#task-identity-token-secret-vs-ciba).
+- **Human validation.** If a tool needs approval, the run pauses instead of failing. Any user with
+  `patch` on the AITask can approve or reject it from the follow-up chat or with `kubectl`. Only the
+  first answer counts.
+- **Follow-up conversation.** A user who can read an AITask can open a private chat about its
+  result ("why is cluster X critical?"). There is one conversation per run and per user. It runs
+  with the user's own agents and permissions, and shows up in the normal chat list.
+- **Read API.** List definitions, list the tasks of a definition, and read one task with its
+  report. Access is always checked by Rancher as the calling user.
+- **Storage.** Postgres (not validated yet), SQLite (added for the POC, can use a PVC), or in-memory.
 
-| Field | Description |
-| :--- | :--- |
-| `spec.taskDefinitionRef` | Owning definition. |
-| `spec.prompt`, `spec.agents`, `spec.credentialsRef` | Copied from the definition when the task is created. |
-| `status.phase` | `Pending`, `Running`, `Succeeded`, `Failed`. |
-| `status.startTime` / `status.completionTime` | Run timestamps. |
-| `status.result` | `Healthy`, `Warning`, `Critical`. |
-| `status.pendingValidation` | `true` while the run is paused waiting for a human validation answer (phase stays `Running`). See [Human validation in tasks](#human-validation-in-tasks). |
+### Known limitations
 
-AITasks have the labels `ai.cattle.io/task-definition` and `ai.cattle.io/trigger`, the
-annotations `ai.cattle.io/scheduled-at` and `ai.cattle.io/validation-response` (the answer to a
-pending validation), and an owner reference to the definition, so they are
-garbage-collected together.
+- A run paused for validation, or interrupted by a restart, is lost on restart and the task is
+  marked `Failed`. Approvals don't expire and nobody is notified that a task is waiting.
+- Anyone who can create or edit a definition can reference any task credentials Secret.
+- No create/update API for definitions (only `kubectl`), no cleanup of old tasks and reports.
+- The task uses the same LLM as the chat.
 
-The CRDs are installed by the chart (`chart/agent/templates/crds/`). The agent service account
-gets the needed permissions on `aitasks`, `aitaskdefinitions` and their `status` subresources.
-
-### Scheduler (`app/controllers/ai_task_definition.py`)
-
-A `kopf.daemon` runs for each AITaskDefinition and works like a small CronJob controller:
-
-- It evaluates the cron schedule in the configured time zone (`croniter`). It sleeps until the next
-  run, for 60s at most, so changes to the spec are picked up.
-- **Suspended / manual only**: no tasks are created. When the definition is resumed, missed runs
-  are not caught up.
-- **Overlap**: if an AITask of the same definition is still `Pending`/`Running`, the run is skipped.
-- **Missed runs** (for example while the pod was down): only the latest missed time runs, and only
-  if it is at most 5 minutes late (`STARTING_DEADLINE`).
-- **Idempotency**: task names are deterministic (`<definition>-<unix minutes>`), so a 409 on
-  create is treated as "already created". Every handled time is recorded in
-  `status.lastScheduleTime`.
-- Status (conditions, `nextRunTime`) is only patched when it changes.
-
-### Run now
-
-`POST /v1/api/aitaskdefinitions/{name}/run` starts a run immediately, also for suspended or
-manual-only definitions.
-
-1. The definition is read through Steve as the user (403/404).
-2. If an AITask of the definition is still `Pending`/`Running`, it returns 409.
-3. It sets the annotation `ai.cattle.io/run-requested-at=<now>` on the definition through Steve
-   as the user, so the user needs `patch` on that AITaskDefinition (`resourceNames` works).
-4. It returns 202 with the name of the AITask that will be created.
-
-A `kopf.on.field` handler on the annotation creates the AITask with the agent service account:
-label `ai.cattle.io/trigger=manual`, name `<definition>-<hash of the annotation value>`, so it is
-idempotent. The same works with
-`kubectl annotate aitd <name> ai.cattle.io/run-requested-at=<value> --overwrite`.
-
-### Executor (`app/controllers/ai_task.py`)
-
-A `kopf.on.create`/`on.resume` handler (timeout 1h) runs each new AITask:
-
-1. It skips the task if it is already `Running`/`Succeeded`/`Failed`, so a task is never run twice
-   after an operator restart.
-2. It sets `phase=Running` and resolves the task's Rancher token (see
-   [Task credentials](#task-credentials)). It resolves `spec.agents` against the enabled
-   `AIAgentConfig`s (with `RBAC_ENABLED=true`, only the ones the token's user may access) and skips
-   `OAUTH2` agents, which need an interactive login.
-3. It builds the graph with the new `build_agent_from_configs()` (`factory.py`): a single agent for
-   one config, otherwise a supervisor. The planner is always disabled (`allow_planner=False`). No
-   websocket is needed.
-4. It invokes the graph with `configurable.aitask=True`. This switches the prompts through
-   `aitask_prompt_middleware`:
-   - The supervisor prompt is replaced by `AITASK_SUPERVISOR_PROMPT`: unattended, never ask
-     questions, prefer read-only actions, write a structured final report, and end with
-     `RESULT: Healthy|Warning|Critical`.
-   - Child agents get `AITASK_CHILD_INSTRUCTIONS` appended to their prompt.
-   - `aitask` is forwarded from the supervisor to child agents (`_FORWARDED_CONFIG_KEYS`).
-5. If the graph ends in a human-validation **interrupt**, the run is paused: the task gets
-   `status.pendingValidation=true` (phase stays `Running`) and the confirmation prompt is stored.
-   See [Human validation in tasks](#human-validation-in-tasks).
-6. The verdict is parsed from the last line of the output (`parse_result`). The record
-   (prompt, agents, phase, result, output, error, times) is written to the LangGraph **store** under
-   namespace `("aitasks",)`, keyed by the AITask uid. Status is patched with the phase, the
-   completion time and the result.
-
-The checkpointer used for task runs is an in-memory `InMemorySaver` (see TODO in the code). It is
-process-wide (`app/services/aitask_runner.py`), so a paused run can be resumed from the kopf loop or
-the FastAPI loop.
-
-### Task credentials
-
-A task runs with the Rancher token of a dedicated user, stored in a Secret that the definition
-references with `spec.credentialsRef`. The token is passed to the MCP servers of `RANCHER` agents
-(`R_token`), so the task can only see and do what that user can. Code: `resolve_task_token` in
-`app/services/aitask_runner.py`.
-
-- The Secret must be in `cattle-ai-agent-system` and have the label
-  `ai.cattle.io/task-credentials=true`. Only labelled Secrets are used, so a definition can't make
-  the agent use any other Secret it can read (LLM keys, OAuth stores, ...).
-- `credentialsRef` is copied into each AITask, so a run keeps the credentials it started with. The
-  token is read again from the Secret on every run and on every validation resume, so a rotated
-  token is picked up by the next run. It is never stored in the record or logged.
-- With `RBAC_ENABLED=true`, `spec.agents` is also limited to the `AIAgentConfig`s the token's user
-  may access (`accessible_agent_configs`, as in the chat).
-- The task fails with a clear error if the Secret is missing, not labelled, has no (or an empty)
-  key, or if there is no `credentialsRef`.
-- **Testing:** if the `RANCHER_API_TOKEN` env var is set, it is used instead and `credentialsRef`
-  is ignored, as everywhere else in the agent.
-- Runs still use `user_id="aitask"` for their own thread. Only the Rancher token changes.
-- Non-Rancher agents keep their own auth (`BASIC`/`HEADER` Secrets from the `AIAgentConfig`).
-  `OAUTH2` agents are still skipped.
-
-### How to set the task credentials
-
-1. In Rancher, create a dedicated user (for example `liz-task-health`) and give it only the roles
-   the task needs, for example read-only on the clusters to check.
-2. Log in as that user and create an API token (**Account & API Keys** → **Create API Key**). Use
-   no scope, and an expiry that matches your rotation policy. Copy the bearer token
-   (`token-xxxxx:yyyy`).
-3. Create the Secret and label it:
-
-   ```sh
-   kubectl create secret generic liz-task-health-token -n cattle-ai-agent-system \
-     --from-literal=token='token-xxxxx:yyyy'
-   kubectl label secret liz-task-health-token -n cattle-ai-agent-system \
-     ai.cattle.io/task-credentials=true
-   ```
-
-4. Reference it from the definition (`key` is optional, `token` by default):
-
-   ```yaml
-   apiVersion: ai.cattle.io/v1alpha1
-   kind: AITaskDefinition
-   metadata:
-     name: daily-health
-     namespace: cattle-ai-agent-system
-   spec:
-     displayName: Daily cluster health
-     prompt: Check the health of all downstream clusters and report problems.
-     schedule: "@daily"
-     credentialsRef:
-       name: liz-task-health-token
-       key: token
-   ```
-
-   An existing definition can be patched too:
-   `kubectl patch aitd daily-health -n cattle-ai-agent-system --type merge -p '{"spec":{"credentialsRef":{"name":"liz-task-health-token"}}}'`.
-   Only AITasks created afterwards get it.
-5. Run it (`kubectl annotate aitd daily-health -n cattle-ai-agent-system --overwrite
-   ai.cattle.io/run-requested-at="$(date -u +%FT%TZ)"`) and check the result. If the credentials
-   can't be used, the task is `Failed` and `GET /v1/api/aitasks/<name>` shows the reason in
-   `error`.
-
-To rotate the token, update the Secret (`kubectl create secret generic … --dry-run=client -o yaml |
-kubectl apply -f -`). The next run uses the new token. Unset `RANCHER_API_TOKEN` in the deployment,
-otherwise it overrides every `credentialsRef`.
-
-### Human validation in tasks
-
-A tool listed in an agent's `humanValidationTools` pauses the run instead of failing it:
-
-1. The executor stores `pendingValidation: {id, interruptId, message, requestedAt}` in the task
-   record (`message` is the usual `<confirmation-response>` payload) and sets
-   `status.pendingValidation=true`. The phase stays `Running`, so no new run of the definition
-   starts while it waits.
-2. A user opens the follow-up chat (`/v1/ws/messages?aitask=<name>`), which is allowed while the
-   task waits. The confirmation prompt is sent on connect, like a live interrupt, and the user's
-   next message is the answer (`yes` approves, anything else cancels).
-3. The answer is written as the user through Steve, as the annotation
-   `ai.cattle.io/validation-response` on the AITask. Rancher only accepts it if the user may
-   **`patch` that AITask** (`resourceNames` works), so being able to read the task is not enough to
-   approve. A denied user gets an error and the task keeps waiting. The annotation is also the
-   audit record of who answered (Kubernetes audit log).
-4. The websocket then resumes the paused graph with `Command(resume=<answer>)`, with the **task's**
-   agents and identity (not the user's), and streams it to the user. Once it finishes, the record
-   and status are updated, and the chat continues as a normal follow-up whose seed contains the
-   prompt, each validation request and answer, and the output. A new interrupt asks again.
-5. Answers can also be given with kubectl:
-   `kubectl annotate ait <name> ai.cattle.io/validation-response='{"response":"yes"}' --overwrite`.
-   A kopf `on.field` handler resumes the run in the controller (no streaming). The value is JSON:
-   `response`, plus optional `validationId` (must match the pending one), `userId`, `answeredAt` and
-   `via`. Chat answers have `via: chat` and the controller ignores them, because the websocket is
-   already resuming them.
-
-Only one answer resumes a given validation: the pending `id` is checked against the store and
-claimed in-process (`claim_validation`). A later answer gets "already answered". A stream to a
-client that disconnects keeps running, so the task is never left waiting. If the agent restarts
-while a task waits, the paused state is lost and the task is marked `Failed`.
-
-Answered validations are listed in `GET /aitasks/{name}` (`validations`), with the pending prompt in
-`validationMessage` and its id in `validationId`.
-
-### How to answer a validation
-
-#### Prerequisites
-
-1. `AGENTIC_TASK_ENABLED=true` (Helm: `agenticTask.enabled`).
-2. An agent used by the task lists the tool in `humanValidationTools`, for example:
-
-   ```yaml
-   apiVersion: ai.cattle.io/v1alpha1
-   kind: AIAgentConfig
-   metadata:
-     name: rancher-core-agent
-     namespace: cattle-ai-agent-system
-   spec:
-     # ...
-     humanValidationTools:
-       - name: "patch_resource"
-         type: UPDATE
-   ```
-
-3. The user who answers needs `get` and `patch` on the AITask (or `aitasks` in general) in
-   `cattle-ai-agent-system`. Grant them through Rancher (a role template or a global role with
-   `namespacedRules`), since the chat checks the user's permissions through Steve. A plain
-   Kubernetes Role is enough for kubectl:
-
-   ```yaml
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: Role
-   metadata:
-     name: aitask-approver
-     namespace: cattle-ai-agent-system
-   rules:
-     - apiGroups: ["ai.cattle.io"]
-       resources: ["aitasks"]
-       verbs: ["get", "list", "watch", "patch"]
-   ```
-
-#### Find tasks waiting for validation
+## Try it
 
 ```sh
-kubectl get ait -n cattle-ai-agent-system
-# NAME             DEFINITION   PHASE     RESULT   VALIDATION   AGE
-# daily-29374512   daily        Running            true         3m
+# 1. Token of a dedicated Rancher user (e.g. read-only on the clusters), in a labelled Secret
+kubectl create secret generic liz-task-health-token -n cattle-ai-agent-system \
+  --from-literal=token='token-xxxxx:yyyy'
+kubectl label secret liz-task-health-token -n cattle-ai-agent-system ai.cattle.io/task-credentials=true
+
+# 2. Definition
+kubectl apply -f - <<EOF
+apiVersion: ai.cattle.io/v1alpha1
+kind: AITaskDefinition
+metadata:
+  name: daily-health
+  namespace: cattle-ai-agent-system
+spec:
+  displayName: Daily cluster health
+  prompt: Check the health of all downstream clusters and report problems.
+  schedule: "@daily"
+  credentialsRef:
+    name: liz-task-health-token
+EOF
+
+# 3. Run it now and follow it
+kubectl annotate aitd daily-health -n cattle-ai-agent-system --overwrite \
+  ai.cattle.io/run-requested-at="$(date -u +%FT%TZ)"
+kubectl get ait -n cattle-ai-agent-system -w
+
+# 4. If it waits for validation (VALIDATION=true), answer it
+kubectl annotate ait <task> -n cattle-ai-agent-system --overwrite \
+  ai.cattle.io/validation-response='{"response":"yes"}'
 ```
 
-The prompt itself is not in the CR. Read it with the API, as the user (`R_SESS` cookie):
-
-```sh
-curl -s -b "R_SESS=$TOKEN" https://<agent>/v1/api/aitasks/daily-29374512 | jq '{phase, pendingValidation, validationId, validationMessage}'
-```
-
-`validationMessage` is a `<confirmation-response>` with the action, for example
-`{"type": "update", "resource": {...}, "payload": {"original": ..., "patched": ...}}`.
-
-#### Option 1: answer in the follow-up chat (websocket)
-
-1. Open the follow-up chat of the task:
-   - Test UI: `/ui?aitask=<aitask name>`, or type the name in the AITask field and press Open.
-   - Any client: connect to `/v1/ws/messages?aitask=<aitask name>` with the user's `R_SESS` cookie.
-2. After `<chat-metadata>`, the server sends the confirmation prompt as a message:
-   `<message>`, `<confirmation-response>{...}</confirmation-response>`, `</message>`.
-3. Send the answer as the next message, as plain text or as `{"prompt": "yes"}`:
-   - `yes` approves and runs the action.
-   - Anything else (for example `no`) cancels it. The task then goes on without it.
-4. The resumed run is streamed in a new `<message>`. Then:
-   - If the task asks for another validation, its prompt is streamed too. Answer it the same way.
-   - If the task finished (`Succeeded` or `Failed`), the chat goes on as a normal follow-up. The
-     next message is the first question about the result, and the conversation history starts
-     with the prompt, the validation requests and answers, and the output.
-5. Possible replies instead of the resumed run:
-   - `<error>` "You are not allowed to validate AITask X." when the user lacks `patch`. The task
-     keeps waiting.
-   - "This validation was already answered." when someone else answered first (in another chat or
-     with kubectl). The chat then shows the new prompt, or says that the task is running again
-     and closes.
-
-#### Option 2: answer with kubectl
-
-1. Set the answer annotation on the AITask. `--overwrite` is needed for every new answer, since
-   the controller only reacts when the value changes:
-
-   ```sh
-   # Approve
-   kubectl annotate ait daily-29374512 -n cattle-ai-agent-system --overwrite \
-     ai.cattle.io/validation-response='{"response":"yes"}'
-
-   # Cancel
-   kubectl annotate ait daily-29374512 -n cattle-ai-agent-system --overwrite \
-     ai.cattle.io/validation-response='{"response":"no"}'
-   ```
-
-   The value is JSON. Only `response` is required. To make sure you answer the request you
-   reviewed, and not a newer one, add its id (`validationId` in the API response above):
-   `{"response":"yes","validationId":"<id>"}`. A mismatching id is ignored. Don't set
-   `"via":"chat"`: those answers are left to the websocket and are not resumed by the controller.
-
-2. The controller resumes the run in the background (no streaming). Follow it with:
-
-   ```sh
-   kubectl get ait daily-29374512 -n cattle-ai-agent-system -w
-   ```
-
-   `VALIDATION` goes back to `false` right away, and the phase ends `Succeeded`/`Failed`, or
-   `VALIDATION` is `true` again if the task asks for another validation.
-3. The output, and the answers with `"via": "kubectl"`, are in `GET /v1/api/aitasks/<name>`
-   (`output`, `validations`). The follow-up chat on the task can be opened as usual.
-
-An annotation set while the task is not waiting (or with invalid JSON) is ignored and logged by the
-controller.
-
-### Storage (`app/services/memory.py`)
-
-A LangGraph `BaseStore` is added next to the checkpointer to hold task outputs. The outputs can be
-large, so they are kept out of the CR status.
-
-| Backend | When | Notes |
-| :--- | :--- | :--- |
-| Postgres (`AsyncPostgresStore`) | `DB_ENABLED=true` | Takes precedence. |
-| SQLite (`AsyncSqliteStore`) | `SQLITE_ENABLED=true` | WAL mode plus `busy_timeout` so the FastAPI and kopf loops can share the file. `SQLITE_PATH` defaults to `/tmp/ai-agent-store.db`. |
-| In-memory | Otherwise | One process-wide instance shared by both loops. Lost on restart. |
-
-FastAPI and kopf run on **different event loops**, so each loop opens its own pool or connection.
-The kopf side does this in `on_startup`/`on_cleanup`.
-
-Helm: `storage.sqlite.{enabled,path}` and `storage.sqlite.pvc.{existingClaim,mountPath}`. When a PVC
-is set, it is mounted, the DB goes to `<mountPath>/ai-agent-store.db`, and the deployment uses the
-`Recreate` strategy (RWO volume, single writer).
-
-SQLite was added as a short-term option for the POC because of the open Postgres issues (see
-below).
-
-### REST API (`app/routers/ai_task.py`)
-
-| Endpoint | Description |
-| :--- | :--- |
-| `GET /v1/api/aitaskdefinitions` | Definitions the user can access, sorted by display name. |
-| `POST /v1/api/aitaskdefinitions/{name}/run` | Run now, see [Run now](#run-now). |
-| `GET /v1/api/aitasks?definition=<name>` | Tasks of a definition the user can access, newest first. The definition name is validated as a label value. |
-| `GET /v1/api/aitasks/{name}` | Task summary plus `prompt`, `agents`, `output`/`error` from the store, and `chatId` of the user's follow-up conversation (see [Follow-up conversation](#follow-up-conversation)). |
-
-Authorization is delegated to Rancher. Resources are read through Steve (`/v1/ai.cattle.io.aitask...`)
-with the caller's `R_SESS` token, so Rancher applies the user's and group roles, including
-`resourceNames`. `rbac.py` was refactored into generic `accessible_resources` /
-`accessible_resource` helpers with `AccessDenied` (403) and `NotFound` (404) errors. These
-checks are always on and do not depend on `RBAC_ENABLED`.
-
-### Follow-up conversation
-
-A user who can read an AITask can continue a conversation from its output, for example "why is
-cluster X critical?". There is **one private conversation per AITask run and per user**.
-
-- The client opens the normal chat websocket with the task:
-  `/v1/ws/messages?aitask=<aitask name>`. The task is read through Steve as the user (same check as
-  `GET /aitasks/{name}`). It must be `Succeeded` or `Failed`, or waiting for validation (see
-  [Human validation in tasks](#human-validation-in-tasks)). Otherwise a `<chat-error>` is sent and
-  the socket is closed. This also happens when `AGENTIC_TASK_ENABLED` is off.
-- The thread id is deterministic, `aitask-<task uid>-<sha256(user id)[:16]>`, so opening the same
-  task again continues the same conversation, and users never share one. A `thread_id` in the path
-  is ignored in this mode. The id is returned as `chatId` by `GET /aitasks/{name}`.
-- On the first turn of an empty thread, the user's message is preceded by two seed messages: the
-  task prompt (`HumanMessage`) and the task output, or `The task failed: <error>` (`AIMessage`).
-  The output is read from the store. The seed goes into `messages` (LLM context) and
-  `messages_history` (chat history), flagged with `additional_kwargs.aitask_seed`.
-- From then on it is a normal chat. The follow-up runs **as the user asking**: their agents, their
-  token and RBAC, the interactive prompts and human validation. It is listed in `GET /chats` (named
-  `Task <definition>: <task>` from the seed's `labels.summary`) and can be reopened with
-  `/v1/ws/messages/{chatId}`. It only shows up in the chat list after the first question.
-- Storage: the task output stays in the store. The conversation lives in the chat checkpointer
-  (`AsyncPostgresSaver` with `DB_ENABLED=true`, otherwise in memory). With SQLite only the store is
-  persistent, so follow-up chats are lost on restart, but the task output is not.
-
-Code: `app/services/aitask_chat.py`, websocket handling in `app/routers/websocket.py`.
-
-### Known limitations of the POC
-
-- Task identity is a long-lived user token in a Secret (see [Task credentials](#task-credentials)).
-  Anyone who can create or edit an AITaskDefinition can reference any labelled Secret.
-  `OAUTH2` agents are skipped.
-- Paused runs waiting for validation are lost on restart (in-memory checkpointer) and the task is
-  failed. Approvals don't expire, and nothing notifies users that a task is waiting.
-- There is no create/update API for definitions (only `kubectl`).
-- There is no retention/cleanup of old AITasks or stored outputs.
-- The in-memory checkpointer means a task interrupted by a pod restart can't be resumed. It is just
-  never re-run (`Running` is skipped on resume).
-- It only works with a single replica (the scheduler runs in every replica, SQLite is a single
-  writer, and paused runs and validation claims are kept in process memory).
-- The same LLM as interactive chat is used.
-- Follow-up conversations use the user's own agents, so they may see different data than the task
-  run did. Reopening one with `/v1/ws/messages/{chatId}` does not check access to the AITask again
-  (its content is already in the user's chat). Deleting the AITask does not delete them. Supervisor
-  child threads (`::child::`) don't get the seed; the supervisor passes the context it needs when it
-  delegates.
+The report is in `GET /v1/api/aitasks/<task>`. The follow-up chat (and validation from the chat) is
+at `/ui?aitask=<task>` in the test UI.
 
 ## Gaps against the v1 scope
 
-| v1 item | POC status |
+| v1 item | Status |
 | :--- | :--- |
-| Scheduled runs | Done. |
-| Run now | Done. See [Run now](#run-now). |
-| One service account per task | Partly. One Rancher user token per definition, from a labelled Secret, see [Task credentials](#task-credentials). |
-| Non-interactive MCP agents only | Partly. `OAUTH2` agents are skipped, but the reason is not shown. |
-| Action level (Report / Propose / Fix) | Partly. Tools that need validation pause the run until a user with `patch` on the AITask answers, see [Human validation in tasks](#human-validation-in-tasks). No per-definition action level. |
-| Mode (adaptive or single agent) | Partly. No `spec.mode`, planner always disabled. |
-| Conversation per task | Partly. One follow-up conversation per run and per user, see [Follow-up conversation](#follow-up-conversation). No shared conversation per definition, see [Task conversation](#task-conversation). |
-| Run summary (✅/⚠️/🔴, findings, actions, skipped checks) | Partly. Only `RESULT:` is parsed. |
-| Notifications | Missing. |
-| Actions recorded per task and service account | Missing. |
-| Slack, email, tickets | Missing. See [Delivery](#delivery-slack-email-tickets). |
-| Manage tasks (pause, edit, run now, delete) | Partly. Run now and read API, the rest via `kubectl`. |
-| Admin-only task creation | Missing. |
+| Scheduled runs | Done |
+| Run now | Done |
+| One identity per task | Partly: a user token per definition, from a Secret |
+| Non-interactive MCP agents only | Partly: `OAUTH2` agents skipped silently |
+| Action level (Report / Propose / Fix) | Partly: write actions pause for approval, no per-definition level |
+| Mode (adaptive or single agent) | Done |
+| Conversation per task | Partly: per run and per user, no shared conversation per definition |
+| Run summary (✅/⚠️/🔴, findings, actions, skipped checks) | Partly: only the verdict is parsed |
+| Manage tasks (pause, edit, run now, delete) | Partly: run now and read API, the rest via `kubectl` |
+| Notifications | Missing |
+| Actions recorded per task and identity | Missing |
+| Slack, email, tickets | Missing |
+| Admin-only task creation | Missing |
 
-## Open questions / next steps
+## Open questions
 
 ### Delivery (Slack, email, tickets)
 
-Slack and email don't need an MCP agent: the executor can send the report directly after the run,
-using a Slack webhook/bot token or SMTP credentials stored in a Secret. Tickets (Jira, ServiceNow,
-...) can use a third party agent. Questions:
+Slack and email can be sent by the executor after the run, with credentials in a Secret. Tickets
+(Jira, ServiceNow, ...) can use a third-party agent.
 
-- Add a `spec.delivery` field (target, channel/recipients, Secret ref) instead of relying on the
-  prompt, so delivery is guaranteed.
-- When to send: always, only on `Warning`/`Critical`, or only when the result changes.
-- A failed delivery should not fail the task, but must be recorded.
-- What is sent: full report, or a short summary with a link to Rancher (avoids leaking data and
-  message size limits).
-- Who may reference the delivery Secrets.
+- A `spec.delivery` field, so delivery doesn't depend on the prompt?
+- When to send: always, only on `Warning`/`Critical`, or only when the result changes?
+- What to send: the full report, or a summary with a link to Rancher (less data leaked, no size
+  limits)?
+- A failed delivery should be recorded, but not fail the task.
 
-### Task conversation
+### Shared conversation per definition
 
-A private follow-up conversation per run and per user is implemented (see
-[Follow-up conversation](#follow-up-conversation)). Still open:
-
-- A shared conversation per definition: created when the definition is saved, with its id in
-  `status`. Each run appends its summary, and admins of the task can read it. This needs a thread
-  owned by the definition instead of a user, which the chat endpoints and the checkpointer
-  `user_id` filter don't support today.
-- Approvals are given from the per-user follow-up conversation (see
-  [Human validation in tasks](#human-validation-in-tasks)). They don't survive a restart until a
-  persistent checkpointer is used.
-
-### RBAC: how to use permissions?
-
-A task must run with a well-defined identity, and that identity's permissions must limit what the
-agents can see and do in Rancher. We **can't use the agent service account**: it is too privileged,
-it is not a Rancher user, and it would let anyone who can create an AITaskDefinition act with the
-agent's permissions (privilege escalation).
-
-Options:
-
-1. **Dedicated user and token in a Secret.** Admins create a Rancher user, possibly one per task
-   or team, with the needed roles, generate an API token, and store it in a Secret in
-   `cattle-ai-agent-system`. The definition references it (`credentialsRef`, Secrets labelled
-   `ai.cattle.io/task-credentials=true`). **Implemented**, see [Task credentials](#task-credentials).
-   - Pros: works today, simple, the permissions are explicit.
-   - Cons: long-lived tokens to rotate and protect, manual setup, and the task does not run "as"
-     the user who created it. We would need to check that the user who creates a definition is
-     allowed to use that Secret, otherwise this is privilege escalation again.
-2. **Implement CIBA (Client-Initiated Backchannel Authentication) in the Rancher OIDC provider.**
-   The agent asks for a token on behalf of the user who owns the task. The user approves the
-   request out of band (notification or UI), and the agent gets a short-lived token with the user's
-   permissions.
-   - Pros: no stored long-lived credentials, the task runs as a real user, and there is a clear
-     audit trail.
-   - Cons: needs changes in Rancher's OIDC provider. Approval needs a user, which conflicts with
-     fully unattended schedules unless approval can be granted once per definition or a refresh
-     token is allowed.
-
-Still to decide: who "owns" a definition (creator vs. explicit identity), how to stop users from
-referencing labelled credentials they shouldn't use (today any user who can create or edit a
-definition can reference any labelled Secret; a validating webhook could check that the user may
-`get` that Secret), and how this works for non-Rancher MCP auth types
-(`BASIC`, `HEADER`, `OAUTH2`).
-
-### Postgres storage
-
-The store already supports `AsyncPostgresStore` when `DB_ENABLED=true`, but this path is not
-validated. The **existing Postgres issues must be fixed first**. After that:
-
-- Validate the Postgres store from both event loops (FastAPI and kopf), each with its own pool.
-- Use a persistent checkpointer for task runs, so interrupted runs (or runs waiting for human
-  validation) can be resumed.
-- Decide whether SQLite stays as an option or is removed once Postgres works.
-- Define retention for stored outputs and old AITask CRs (TTL, keep last N per definition).
+Today each user has a private conversation per run. A shared conversation per definition (each run
+appends its summary, task admins can read it) needs a thread owned by the definition instead of a
+user, which the chat doesn't support today.
 
 ### Human validation
 
-A tool that needs human validation pauses the run until a user answers (see
-[Human validation in tasks](#human-validation-in-tasks)). Still open:
+- Should tasks be **read-only** by default, with write tools disabled?
+- How are users notified that a task waits for approval? (CIBA could help, see below.)
+- **Stale approvals**: the cluster may change between the request and the approval. Options:
+  re-check the target resources before acting, expire approvals after a timeout, or re-run the
+  analysis after approval.
+- A persistent checkpointer is needed so paused runs survive restarts.
 
-- Should tasks be **read-only** by default, with write tools disabled instead of interrupted?
-- Notifying users that a task waits for approval. **CIBA could help** here: the backchannel authentication request could also be the approval step
-  (binding message: "Liz wants to scale deployment X, approve?").
-- **Stale approvals**: what happens if the cluster state changed between the request and the
-  approval, so the action no longer makes sense? Options:
-  - Re-validate before executing: re-read the target resources (resourceVersion / preconditions)
-    and abort, or re-plan, if they changed.
-  - Make the approval expire after a timeout, and fail or skip the task.
-  - Re-run the analysis after approval and only execute if it still reaches the same conclusion.
-- A persistent checkpointer (see Postgres) is needed to keep the interrupted run across restarts.
+### Postgres storage
 
-### Choose a different LLM for agentic tasks
+The existing Postgres issues must be fixed first. Then: validate the Postgres store, use it to keep
+paused runs across restarts, decide whether SQLite stays, and define retention for old tasks and
+reports (TTL or last N per definition).
 
-Unattended tasks may need a different model than interactive chat (cheaper for routine checks,
-or stronger for complex analysis, with no latency constraint). Options:
+### LLM for tasks
 
-- A global setting for agentic tasks (env or `llm-config`) that overrides the chat LLM.
-- A per-definition `spec.model` (or provider + model) field, validated against the configured
-  providers.
-
-`LLMManager` is a singleton today, so the executor would need a way to build a separate LLM
-instance.
+Tasks may need a different model than the chat (cheaper for routine checks, stronger for complex
+analysis). Options: a global setting for tasks, or a per-definition model field.
 
 ### Limits
 
-Unattended runs need guardrails against runaway cost and loops:
+Guardrails against runaway cost and loops: max execution time, max tool calls / agent steps, max
+concurrent tasks, minimum schedule interval, and max report size. To decide: global defaults vs.
+per-definition overrides, and how a hit limit is shown (for example `Failed` with reason
+`LimitExceeded` and the partial report).
 
-- **Max execution time** per task (today only kopf's 1h handler timeout applies, and it does not
-  set a clean `Failed` status).
-- **Max tool calls** / max agent steps (LangGraph recursion limit, or a middleware counter).
-- **Max concurrent tasks** globally and per definition (overlap is already prevented per
-  definition).
-- Minimum schedule interval, to avoid `* * * * *` definitions.
-- Output size limit for the stored report.
+## Task identity: token Secret vs CIBA
 
-Still to decide: global defaults vs. per-definition overrides (`spec.limits`), and what the task
-status shows when a limit is hit (for example `Failed` with reason `LimitExceeded` and partial
-output).
+A task must run with a well-defined identity whose Rancher permissions limit what it can see and
+do. The **agent's service account can't be used**: it is too privileged, it is not a Rancher user,
+and anyone who can create a definition would act with the agent's permissions.
+
+### Option 1: user token in a Secret (implemented)
+
+An admin creates a dedicated Rancher user with only the roles the task needs, creates an API token
+for it, and stores it in a labelled Secret. The definition references the Secret, and every run
+uses that token.
+
+**Pros**
+
+- Works today, with no changes in Rancher.
+- Simple to understand: the permissions of the task are the roles of that user.
+- Fully unattended: nobody has to approve anything for a run to start.
+
+**Cons**
+
+- Long-lived token, stored in the cluster. If the Secret leaks, the token has all the rights of
+  that user until it is revoked.
+- Manual setup and manual rotation.
+- Anyone who can create or edit a definition can reference any labelled Secret, which is privilege
+  escalation unless we add a check (for example a webhook that verifies the user may read that
+  Secret).
+- Approvals for write actions are given by anyone with `patch` on the AITask, but the action is
+  still executed with the task's token.
+
+### Option 2: CIBA (needs to be implemented in Rancher)
+
+CIBA (OpenID Connect Client-Initiated Backchannel Authentication) lets the agent ask a named user
+for a token; the user approves the request on their own device. **Rancher's OIDC provider doesn't
+support CIBA today, so it has to be implemented in Rancher first.** 
+
+The preferred way to use it: a user **approves once** when the definition is set up. The agent
+keeps a revocable refresh token (in a Secret it owns) and gets a short-lived token for each run, so
+scheduled runs stay unattended. Write actions ask the approver for a fresh confirmation on their
+device, which also solves the notification problem of human validation.
+
+**Pros**
+
+- No long-lived token copied by hand: the stored refresh token is bound to a real user, revocable,
+  and possibly read-only.
+- Runs use short-lived tokens, and rotation can be automatic.
+- The task runs as a real person, with a clear audit trail of who authorized it and who approved
+  each action.
+- Approvals go to a named approver, who is notified on their device, instead of waiting for someone
+  to open the chat.
+- No privilege escalation through Secret references: the user who grants access is the one whose
+  permissions are used.
+
+**Cons**
+
+- CIBA needs to be implemented in Rancher's OIDC provider
+- More moving parts: OIDC client registration, refresh tokens, revocation, polling the token endpoint.
+- The task stops working if the refresh token expires (for example after a long idle time), the
+  user leaves, or the grant is revoked, and someone has to approve again.
+- Write approvals need the approver to be available, so fixes can wait for a long time.
+
+### Comparison
+
+| | Token in a Secret | CIBA |
+| :--- | :--- | :--- |
+| Available | Yes, implemented in the POC | No, needs to be implemented in Rancher |
+| Setup | Admin creates a user, a token and a Secret by hand | A user approves once on their device |
+| Credential stored | Long-lived Rancher token | Revocable refresh token, short-lived tokens per run |
+| Rotation | Manual | Automatic (if the provider rotates refresh tokens) |
+| If the Secret leaks | Full rights of the user until revoked | Limited to the grant (read-only if scopes are supported), revocable |
+| Task runs as | A dedicated technical user | The user who approved |
+| Approving write actions | Anyone with `patch` on the AITask, via chat or `kubectl` | A named approver, notified on their device |
+| Unattended scheduled runs | Yes | Yes, while the grant is valid |
+

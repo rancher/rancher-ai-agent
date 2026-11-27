@@ -9,7 +9,7 @@ dependencies = [
     "langchain[mcp]==1.5.2",
     "langchain-google-genai==4.5.2",
     "fastapi[standard]==0.165.0",
-    "langchain-ollama==1.1.0",
+    "langchain-ollama==1.2.0",
     "langchain-openai==1.8.5",
     "langchain-text-splitters==1.1.3",
     "langchain-community==0.4.2",

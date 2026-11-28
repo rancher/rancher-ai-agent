@@ -17,7 +17,7 @@ dependencies = [
     "langgraph==1.2.24",
     "langgraph-checkpoint-postgres==3.2.1",
     "mcp==2.3.0",
-    "httpx2==2.12.0",
+    "httpx2==2.16.2",
     "numpy==2.5.5",
     "fastmcp==4.2.6",
     "kubernetes==37.0.3",
